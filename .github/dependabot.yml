@@ -31,6 +31,9 @@ updates:
       - dependency-name: "org.slf4j:slf4j-api" # will update in https://dhis2.atlassian.net/browse/DHIS2-16504
         versions:
           - ">= 2.0"
+      - dependency-name: "ca.uhn.hapi.fhir:*"
+        versions:
+          - ">= 7.5"
   - package-ecosystem: "maven"
     directory: "/dhis-2/dhis-test-e2e"
     schedule:

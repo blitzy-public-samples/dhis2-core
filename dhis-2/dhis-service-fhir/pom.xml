@@ -144,6 +144,10 @@
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
     </dependency>
+    <dependency>
+      <groupId>com.google.code.findbugs</groupId>
+      <artifactId>jsr305</artifactId>
+    </dependency>
 
     <dependency>
       <groupId>jakarta.servlet</groupId>
@@ -206,15 +210,44 @@
 
   <profiles>
     <profile>
-      <id>fhir-sources-absent</id>
+      <id>fhir-sources-incomplete</id>
       <activation>
         <file>
-          <missing>${basedir}/src/main/java</missing>
+          <missing>${basedir}/../dhis-test-web-api/src/test/java/org/hisp/dhis/fhir</missing>
         </file>
       </activation>
-      <properties>
-        <mdep.analyze.skip>true</mdep.analyze.skip>
-      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <configuration>
+              <ignoredUnusedDeclaredDependencies combine.children="append">
+                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-support-external</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-core</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-schema</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-acl</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.springframework:spring-core</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.springframework:spring-jdbc</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.springframework:spring-tx</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.springframework:spring-webmvc</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.springframework.security:spring-security-web</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>jakarta.persistence:jakarta.persistence-api</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>jakarta.annotation:jakarta.annotation-api</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>com.fasterxml.jackson.core:jackson-annotations</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>com.fasterxml.jackson.core:jackson-databind</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.slf4j:slf4j-api</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.projectlombok:lombok</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.mockito:mockito-core</ignoredUnusedDeclaredDependency>
+                <ignoredUnusedDeclaredDependency>org.mockito:mockito-junit-jupiter</ignoredUnusedDeclaredDependency>
+              </ignoredUnusedDeclaredDependencies>
+              <ignoredNonTestScopedDependencies combine.children="append">
+                <ignoredNonTestScopedDependency>ca.uhn.hapi.fhir:hapi-fhir-base</ignoredNonTestScopedDependency>
+              </ignoredNonTestScopedDependencies>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
   </profiles>
 </project>

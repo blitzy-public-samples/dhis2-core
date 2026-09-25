@@ -1,0 +1,65 @@
+/*
+ * Copyright (c) 2004-2026, University of Oslo
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors 
+ * may be used to endorse or promote products derived from this software without
+ * specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package org.hisp.dhis.fhir.mapping;
+
+import org.hl7.fhir.r4.model.ResourceType;
+
+/** The FHIR R4 resource type that a {@link FhirResourceMapping} produces. */
+public enum FhirResourceType {
+  PATIENT(ResourceType.Patient.name()),
+  ENCOUNTER(ResourceType.Encounter.name()),
+  IMMUNIZATION(ResourceType.Immunization.name()),
+  OBSERVATION(ResourceType.Observation.name());
+
+  private final String fhirType;
+
+  FhirResourceType(String fhirType) {
+    this.fhirType = fhirType;
+  }
+
+  /**
+   * Returns the FHIR R4 resource type name, for example {@code Patient}.
+   *
+   * @return the FHIR resource type name
+   */
+  public String fhirType() {
+    return fhirType;
+  }
+
+  /**
+   * Returns whether resources of this type are built from Tracker events rather than tracked
+   * entities.
+   *
+   * @return {@code true} for every type except {@link #PATIENT}
+   */
+  public boolean isEventDerived() {
+    return this != PATIENT;
+  }
+}
