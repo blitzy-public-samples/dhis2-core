@@ -194,6 +194,11 @@
       <artifactId>mockito-junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-test</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -217,7 +222,7 @@
       <id>fhir-sources-incomplete</id>
       <activation>
         <file>
-          <missing>${basedir}/../dhis-test-web-api/src/test/java/org/hisp/dhis/fhir</missing>
+          <missing>${basedir}/../dhis-test-web-api/src/test/java/org/hisp/dhis/fhir/FhirRequestLifecycleTest.java</missing>
         </file>
       </activation>
       <build>
