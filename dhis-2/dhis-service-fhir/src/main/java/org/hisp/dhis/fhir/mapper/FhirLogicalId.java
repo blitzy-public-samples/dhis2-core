@@ -38,9 +38,9 @@ import javax.annotation.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 
 /**
- * Logical id of an event-derived FHIR resource: DHIS2 UIDs joined by {@code -}, {@code
- * {enrollmentUid}-{eventUid}} for {@code Encounter} and {@code
- * {enrollmentUid}-{eventUid}-{dataElementUid}} for {@code Immunization} and {@code Observation}.
+ * Segments of an event-derived resource id. {@code parse} accepts only two UID segments for {@code
+ * Encounter} and three for {@code Immunization} and {@code Observation}; {@code compose} joins the
+ * present segments in order with {@code -}.
  */
 public record FhirLogicalId(
     @Nonnull String enrollment, @CheckForNull String event, @CheckForNull String dataElement) {

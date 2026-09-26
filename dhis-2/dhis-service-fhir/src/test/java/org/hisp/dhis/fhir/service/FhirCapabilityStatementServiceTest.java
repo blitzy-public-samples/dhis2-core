@@ -41,6 +41,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.hisp.dhis.common.QueryOperator;
+import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.fhir.FhirR4Validation;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
@@ -68,8 +69,16 @@ class FhirCapabilityStatementServiceTest {
   private static final String TEA_GIVEN = uid();
   private static final String TEA_BIRTH_DATE = uid();
   private static final String TEA_GENDER = uid();
+  private static final Entry[] PATIENT_ENTRIES = {
+    Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
+    Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
+    Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
+    Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH_DATE),
+    Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER).valueMap(Map.of("M", "male"))
+  };
   @Mock private FhirResourceMappingService mappingService;
   @Mock private SystemSettingsProvider settingsProvider;
+  @Mock private DhisConfigurationProvider config;
   private FhirCapabilityStatementService service;
 
   @BeforeEach
@@ -77,7 +86,7 @@ class FhirCapabilityStatementServiceTest {
     lenient().when(settingsProvider.getCurrentSettings()).thenReturn(SystemSettings.of(Map.of()));
     service =
         new FhirCapabilityStatementService(
-            mappingService, new FhirSearchParameters(settingsProvider));
+            mappingService, new FhirSearchParameters(settingsProvider), config);
   }
 
   @Test
@@ -120,9 +129,7 @@ class FhirCapabilityStatementServiceTest {
     var operations = resource(statement, "Patient").getOperation().stream();
     assertEquals(
         List.of("everything http://hl7.org/fhir/OperationDefinition/Patient-everything"),
-        operations
-            .map(operation -> operation.getName() + " " + operation.getDefinition())
-            .toList());
+        operations.map(o -> o.getName() + " " + o.getDefinition()).toList());
     for (String type : List.of("Encounter", "Immunization", "Observation")) {
       assertTrue(resource(statement, type).getOperation().isEmpty(), type);
     }
@@ -139,6 +146,13 @@ class FhirCapabilityStatementServiceTest {
     assertEquals(BASE + "/api/fhir", statement.getImplementation().getUrl());
     assertEquals(1, statement.getRest().size());
     assertEquals(RestfulCapabilityMode.SERVER, rest(statement).getMode());
+  }
+
+  @Test
+  void configuredServerBaseUrlReplacesRequestHost() {
+    when(config.getServerBaseUrl()).thenReturn("https://dhis.example.org/dhis/");
+    String url = statementFor(List.of()).getImplementation().getUrl();
+    assertEquals("https://dhis.example.org/dhis/api/fhir", url);
   }
 
   @Test
@@ -188,25 +202,12 @@ class FhirCapabilityStatementServiceTest {
   }
 
   private static ResolvedMapping patient(Instant lastUpdated) {
-    return mapping(
-        PATIENT,
-        lastUpdated,
-        Map.of(TEA_GIVEN, Set.of(QueryOperator.SW)),
-        Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
-        Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-        Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN));
+    var blocked = Map.of(TEA_GIVEN, Set.of(QueryOperator.SW));
+    return mapping(PATIENT, lastUpdated, blocked, Arrays.copyOf(PATIENT_ENTRIES, 3));
   }
 
   private static ResolvedMapping configuredPatient(Map<String, Set<QueryOperator>> blocked) {
-    return mapping(
-        PATIENT,
-        T1,
-        blocked,
-        Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
-        Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-        Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
-        Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH_DATE),
-        Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER).valueMap(Map.of("M", "male")));
+    return mapping(PATIENT, T1, blocked, PATIENT_ENTRIES);
   }
 
   private static ResolvedMapping encounter(Instant lastUpdated) {

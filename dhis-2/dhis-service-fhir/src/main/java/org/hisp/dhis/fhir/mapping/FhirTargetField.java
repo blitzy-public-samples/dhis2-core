@@ -38,7 +38,7 @@ import org.hisp.dhis.common.ValueType;
 
 /** The closed catalog of FHIR R4 elements a {@link FhirFieldMapping} may target. */
 public enum FhirTargetField {
-  /** One {@code Patient.identifier} per entry: the attribute value under its {@code system}. */
+  /** A {@code Patient.identifier} under the entry's {@code system} per readable, nonblank value. */
   PATIENT_IDENTIFIER(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.IDENTIFIER),
   /** {@code Patient.name[0].family}: the attribute value. */
   PATIENT_FAMILY_NAME(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
@@ -48,9 +48,9 @@ public enum FhirTargetField {
   PATIENT_GENDER(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
   /** {@code Patient.birthDate}: the attribute's date or age value. */
   PATIENT_BIRTH_DATE(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.BIRTH_DATE),
-  /** One {@code Patient.telecom} with system {@code phone} per entry: the attribute value. */
+  /** A {@code Patient.telecom} with system {@code phone} per readable, nonblank attribute value. */
   PATIENT_PHONE(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.PHONE),
-  /** One {@code Patient.telecom} with system {@code email} per entry: the attribute value. */
+  /** A {@code Patient.telecom} with system {@code email} per readable, nonblank attribute value. */
   PATIENT_EMAIL(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.EMAIL),
   /** {@code Patient.address[0].text}: the attribute value. */
   PATIENT_ADDRESS_TEXT(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
@@ -58,7 +58,7 @@ public enum FhirTargetField {
   ENCOUNTER_CLASS(ENCOUNTER, EnumSet.of(CONSTANT), ONE, true, ValueTypes.NONE),
   /** {@code Encounter.type}: the constant coding, or the value as a code under {@code system}. */
   ENCOUNTER_TYPE(ENCOUNTER, EnumSet.of(DATA_ELEMENT, CONSTANT), MANY, false, ValueTypes.TEXT),
-  /** One {@code Encounter.reasonCode.text} per entry: the data element value. */
+  /** An {@code Encounter.reasonCode.text} per readable, nonblank data element value of an entry. */
   ENCOUNTER_REASON(ENCOUNTER, EnumSet.of(DATA_ELEMENT), MANY, false, ValueTypes.TEXT),
   /** {@code Immunization.status}: not-done when the value is false, otherwise completed. */
   IMMUNIZATION_ADMINISTERED(
@@ -70,7 +70,7 @@ public enum FhirTargetField {
   /** {@code Immunization.protocolApplied[0].doseNumber[x]}: the data element value. */
   IMMUNIZATION_DOSE_NUMBER(
       IMMUNIZATION, EnumSet.of(DATA_ELEMENT), ONE, false, ValueTypes.DOSE_NUMBER),
-  /** {@code Observation.value[x]}: one Observation per entry, coded by the entry's coding. */
+  /** An entry-coded Observation per readable, nonblank value; {@code value[x]} if it converts. */
   OBSERVATION_VALUE(OBSERVATION, EnumSet.of(DATA_ELEMENT), MANY, true, ValueTypes.OBSERVATION);
 
   /** How many entries of one target a single mapping may contain. */

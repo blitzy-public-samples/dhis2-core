@@ -123,11 +123,12 @@ class FhirImmunizationMapperTest {
         mapFull(administered("true"), dataValue(DE_LOT, LOT), dataValue(DE_DOSE, "2"));
     assertEquals(LOT, immunization.getLotNumber());
     assertEquals(1, immunization.getProtocolApplied().size());
-    for (var e : Map.of("00000000002", 2, "2147483647", 2147483647, " 7 ", 7).entrySet()) {
+    for (var e : Map.of("2147483647", 2147483647, " 7 ", 7).entrySet()) {
       Type value = doseNumber(mapFull(administered("true"), dataValue(DE_DOSE, e.getKey())));
       assertEquals(e.getValue(), assertInstanceOf(PositiveIntType.class, value).getValue());
     }
-    for (String dose : List.of("0", "\u0662", "second", "2147483648", "99999999999999999999")) {
+    for (String dose :
+        List.of("0", "00000000002", "\u0662", "second", "2147483648", "99999999999999999999")) {
       Type value = doseNumber(mapFull(administered("true"), dataValue(DE_DOSE, dose)));
       assertEquals(dose, assertInstanceOf(StringType.class, value, dose).getValue(), dose);
     }

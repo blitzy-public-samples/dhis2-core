@@ -45,6 +45,7 @@ import org.hisp.dhis.common.UID;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.event.EventStatus;
+import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.feedback.ForbiddenException;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.FhirR4Validation;
@@ -96,6 +97,7 @@ class FhirEventResourceServiceTest {
   @Mock private TrackerExportTimeout timeout;
   @Mock private SystemSettingsProvider settingsProvider;
   @Mock private FhirResourceMappingService mappingService;
+  @Mock private DhisConfigurationProvider config;
   private final List<Deadline> seen = new ArrayList<>();
   private long nanos = TimeUnit.SECONDS.toNanos(1_000);
   private final ResolvedMapping m1 = encounterMapping(TET, P1, S1);
@@ -123,7 +125,8 @@ class FhirEventResourceServiceTest {
             reader,
             encounterMapper,
             new FhirImmunizationMapper(converter),
-            new FhirObservationMapper(converter));
+            new FhirObservationMapper(converter),
+            config);
     FhirPatientMapper mapper = new FhirPatientMapper(converter);
     patientService =
         new FhirPatientService(mappingService, parameters, translator, reader, mapper, service);
@@ -280,7 +283,9 @@ class FhirEventResourceServiceTest {
     assertNotNull(empty.getLink(Bundle.LINK_SELF));
     verifyNoInteractions(teAdapter, enrollmentAdapter);
     Attribute male = attribute(GENDER_TEA, ValueType.TEXT, "M");
-    when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED, male)));
+    var other = trackedEntity(uid(), TET, UPDATED, attribute(GENDER_TEA, ValueType.TEXT, "\u0130"));
+    when(teAdapter.find(any(), any()))
+        .thenReturn(page(trackedEntity(TE, TET, UPDATED, male), other));
     Bundle found = patientService.search(request(FhirSearchParameters.GENDER, "male"));
     assertEquals(List.of("Patient/" + TE), references(found));
     verify(teAdapter)
@@ -300,18 +305,48 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void observationCodeSelectsEntriesAndUnmatchedCodeMakesNoExportCall() throws Exception {
+  void configuredServerBaseUrlReplacesForgedHostInBundleUrls() throws Exception {
+    stubObservationSearch();
+    when(mappingService.resolveAll()).thenReturn(List.of(patientMapping(), observationMapping()));
+    when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED)));
+    when(config.getServerBaseUrl()).thenReturn("https://dhis.example.org/dhis/");
+    MockHttpServletRequest search = request("patient", TE, "_count", "1", "_page", "2");
+    MockHttpServletRequest everything = request();
+    Stream.of(search, everything).forEach(forged -> forged.addHeader("Host", "evil.example"));
+    List<String> urls = new ArrayList<>();
+    for (Bundle bundle :
+        List.of(service.search(OBSERVATION, search), patientService.everything(TE, everything))) {
+      bundle.getEntry().forEach(entry -> urls.add(entry.getFullUrl()));
+      bundle.getLink().forEach(link -> urls.add(link.getUrl()));
+    }
+    assertEquals(12, urls.size(), urls::toString);
+    urls.forEach(url -> assertTrue(url.startsWith("https://dhis.example.org/dhis/api/fhir/"), url));
+    assertFalse(urls.toString().contains("evil"), urls::toString);
+  }
+
+  @Test
+  void observationCodeSelectsEntriesAndProgramAccessAloneDecidesForbidden() throws Exception {
     stubObservationSearch();
     String height = LOINC_SYSTEM + "|" + LOINC_BODY_HEIGHT_CODE;
-    Bundle matched = service.search(OBSERVATION, request("patient", TE, "code", height));
-    String[] events = {ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3};
-    assertEntries(
-        matched,
-        Stream.of(events).map(e -> "Observation/" + e + "-" + DE_A).toArray(String[]::new));
-    reset(enrollmentAdapter);
     String unknown = LOINC_SYSTEM + "|unknown";
+    String[] heights = {ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3};
+    Arrays.setAll(heights, i -> "Observation/" + heights[i] + "-" + DE_A);
+    assertEntries(service.search(OBSERVATION, request("patient", TE, "code", height)), heights);
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
-    verifyNoInteractions(enrollmentAdapter);
+    verify(enrollmentAdapter, times(2)).find(forProgram(P1), any());
+    var p2 = resolved(OBSERVATION, TET, P2, S2, observationMapping().entries(), Map.of());
+    when(mappingService.resolve(OBSERVATION)).thenReturn(List.of(observationMapping(), p2));
+    forbid(P2);
+    assertEntries(service.search(OBSERVATION, request("patient", TE, "code", height)), heights);
+    assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
+    verify(enrollmentAdapter, times(2)).find(forProgram(P2), any());
+    forbid(P1);
+    for (String code : List.of(height, unknown)) {
+      Executable search = () -> service.search(OBSERVATION, request("patient", TE, "code", code));
+      FhirApiException forbidden = assertThrows(FhirApiException.class, search, code);
+      assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, forbidden);
+      assertEquals(FhirApiException.forbidden().getDiagnostics(), forbidden.getDiagnostics());
+    }
   }
 
   @Test

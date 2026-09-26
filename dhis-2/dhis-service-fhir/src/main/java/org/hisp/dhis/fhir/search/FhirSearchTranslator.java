@@ -65,7 +65,7 @@ public class FhirSearchTranslator {
 
   /**
    * Translates a Patient search, filtering on the {@link FhirResourceMappingValidator#genderFold}
-   * of each mapped gender value, and throwing {@link FhirApiException} for a rejected filter.
+   * of each mapped gender value; a rejected or unusable filter throws {@link FhirApiException}.
    */
   @Nonnull
   public TranslatedSearch toTrackedEntityParams(
@@ -125,13 +125,9 @@ public class FhirSearchTranslator {
   /** Translates an event search into the enrollment request parameters of one program. */
   @Nonnull
   public TranslatedSearch toEnrollmentParams(
-      @Nonnull ParsedSearch parsed,
-      @Nonnull List<ResolvedMapping> mappings,
-      @Nonnull String program) {
+      @Nonnull ParsedSearch parsed, @Nonnull String program) {
     Objects.requireNonNull(parsed, "parsed");
-    Objects.requireNonNull(mappings, "mappings");
     Objects.requireNonNull(program, "program");
-    mappings.forEach(mapping -> Objects.requireNonNull(mapping, "mapping"));
     FhirResourceType type = parsed.operation().resourceType();
     if (type == null || !type.isEventDerived()) {
       throw new IllegalArgumentException("An event search is required, not " + parsed.operation());
@@ -145,22 +141,14 @@ public class FhirSearchTranslator {
           UID.of(parsed.logicalIds().stream().map(FhirLogicalId::enrollment).distinct().toList()));
     }
     applyEventSelection(params, program);
-    Set<String> logicalIds = new LinkedHashSet<>();
-    parsed.logicalIds().forEach(id -> logicalIds.add(id.compose()));
-    boolean empty =
-        parsed.operation() == Operation.OBSERVATION_SEARCH
-            && !parsed.codes().isEmpty()
-            && mappings.stream()
-                .flatMap(mapping -> mapping.entries(FhirTargetField.OBSERVATION_VALUE).stream())
-                .noneMatch(entry -> matchesAnyToken(parsed.codes(), entry));
     return new TranslatedSearch(
         params,
         FhirSearchOrigin.empty(),
-        logicalIds,
+        Set.copyOf(parsed.logicalIds().stream().map(FhirLogicalId::compose).toList()),
         parsed.codes(),
         parsed.count(),
         parsed.page(),
-        empty);
+        false);
   }
 
   @Nonnull
@@ -275,9 +263,8 @@ public class FhirSearchTranslator {
       return new AttributeFilter(teaUid, QueryOperator.EQ, values.iterator().next());
     }
     if (values.stream().anyMatch(value -> value.contains(QueryFilter.OPTION_SEP))) {
-      throw FhirApiException.invalidParameter(
-          PatientParameter.GENDER.parameter(),
-          "matches attribute values that cannot be searched together");
+      throw FhirApiException.notSupported(
+          "The configured mapping for " + FhirResourceType.PATIENT.fhirType() + " cannot be used");
     }
     return new AttributeFilter(
         teaUid, QueryOperator.IN, String.join(QueryFilter.OPTION_SEP, values));
@@ -335,7 +322,7 @@ public class FhirSearchTranslator {
     }
   }
 
-  /** The Tracker request of one FHIR search; {@code empty} when it cannot match anything. */
+  /** The Tracker request of one FHIR search; {@code empty} when a Patient search cannot match. */
   public record TranslatedSearch(
       Object params,
       FhirSearchOrigin origin,
@@ -347,10 +334,7 @@ public class FhirSearchTranslator {
     public TranslatedSearch {
       Objects.requireNonNull(params, "params");
       origin = origin == null ? FhirSearchOrigin.empty() : origin;
-      logicalIds =
-          logicalIds == null || logicalIds.isEmpty()
-              ? Set.of()
-              : Collections.unmodifiableSet(new LinkedHashSet<>(requireElements(logicalIds)));
+      logicalIds = logicalIds == null ? Set.of() : Set.copyOf(logicalIds);
       codes = codes == null ? List.of() : List.copyOf(codes);
     }
 
@@ -378,11 +362,6 @@ public class FhirSearchTranslator {
     /** Returns whether no {@code code} was requested or a token matches the entry's coding. */
     public boolean matchesCode(@CheckForNull FhirFieldMapping entry) {
       return codes.isEmpty() || matchesAnyToken(codes, entry);
-    }
-
-    private static <T> Collection<T> requireElements(Collection<T> values) {
-      values.forEach(value -> Objects.requireNonNull(value, "logicalId"));
-      return values;
     }
   }
 }

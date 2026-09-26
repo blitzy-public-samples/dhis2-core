@@ -29,25 +29,32 @@
  */
 package org.hisp.dhis.fhir.config;
 
+import static org.hisp.dhis.webapi.filter.CspFilter.*;
+
 import jakarta.servlet.Filter;
 import jakarta.servlet.http.*;
-import java.io.IOException;
+import java.util.*;
 import java.util.regex.Pattern;
 import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.user.CurrentUserUtil;
+import org.hisp.dhis.webapi.security.Http401LoginUrlAuthenticationEntryPoint;
 import org.springframework.context.annotation.*;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.web.*;
+import org.springframework.security.web.header.HeaderWriterFilter;
+import org.springframework.security.web.header.writers.*;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.UrlPathHelper;
 
 /**
- * Answers FHIR requests with 404 while {@code fhir.api.enabled} is off, before authentication and
- * again at the handler, where a request without an authenticated user gets the same answer.
+ * Answers FHIR requests with 404, the platform security headers and a same-origin frame policy
+ * while {@code fhir.api.enabled} is off, before authentication. At the handler, answers 404 while
+ * off, and with the platform authentication entry point's response while on without a user.
  */
 @Configuration
 public class FhirApiDisabledSecurityConfig {
@@ -60,27 +67,48 @@ public class FhirApiDisabledSecurityConfig {
       DhisConfigurationProvider config, FhirResourceSerializer serializer) {
     RequestMatcher matcher =
         request -> !config.isEnabled(ConfigurationKey.FHIR_API_ENABLED) && isFhirPath(request);
-    Filter filter =
+    StaticHeadersWriter frame =
+        config.isEnabled(ConfigurationKey.CSP_ENABLED)
+            ? new StaticHeadersWriter(
+                CONTENT_SECURITY_POLICY_HEADER_NAME, FRAME_ANCESTORS_DEFAULT_CSP + ";")
+            : new StaticHeadersWriter("X-Frame-Options", "SAMEORIGIN");
+    HeaderWriterFilter headers =
+        new HeaderWriterFilter(
+            List.of(
+                frame,
+                new XContentTypeOptionsHeaderWriter(),
+                new XXssProtectionHeaderWriter(),
+                new HstsHeaderWriter()));
+    Filter notFound =
         (request, response, chain) ->
             serializer.writeError((HttpServletResponse) response, FhirApiException.notFound());
-    return new DefaultSecurityFilterChain(matcher, filter);
+    return new DefaultSecurityFilterChain(matcher, headers, notFound);
   }
 
-  /** Answers requests reaching a FHIR handler with 404 unless the API is on and a user is set. */
+  /** Guards FHIR handlers: 404 while off, the entry point's response while on without a user. */
   @Bean
   public MappedInterceptor fhirApiRequestGuard(
-      DhisConfigurationProvider config, FhirResourceSerializer serializer) {
+      DhisConfigurationProvider config,
+      FhirResourceSerializer serializer,
+      Http401LoginUrlAuthenticationEntryPoint entryPoint) {
     HandlerInterceptor guard =
         new HandlerInterceptor() {
           @Override
           public boolean preHandle(
               HttpServletRequest request, HttpServletResponse response, Object handler)
-              throws IOException {
-            if (config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)
-                && CurrentUserUtil.hasCurrentUser()) {
+              throws Exception {
+            if (!config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)) {
+              serializer.writeError(response, FhirApiException.notFound());
+              return false;
+            }
+            if (CurrentUserUtil.hasCurrentUser()) {
               return true;
             }
-            serializer.writeError(response, FhirApiException.notFound());
+            entryPoint.commence(
+                request,
+                response,
+                new InsufficientAuthenticationException(
+                    "Full authentication is required to access this resource"));
             return false;
           }
         };
@@ -88,30 +116,20 @@ public class FhirApiDisabledSecurityConfig {
   }
 
   private static boolean isFhirPath(HttpServletRequest request) {
-    String requestUri = request.getRequestURI();
-    if (requestUri == null) {
+    String uri = request.getRequestURI();
+    if (uri == null) {
       return false;
     }
-    String rawPath = rawPathWithinApplication(requestUri, request.getContextPath());
-    if (rawPath != null && FHIR_PATH.matcher(rawPath).matches()) {
+    String context = Objects.toString(request.getContextPath(), "");
+    if (uri.startsWith(context) && FHIR_PATH.matcher(uri.substring(context.length())).matches()) {
       return true;
     }
-    String decodedPath = decodedPathWithinApplication(request);
-    return decodedPath != null && FHIR_PATH.matcher(decodedPath).matches();
-  }
-
-  private static String rawPathWithinApplication(String requestUri, String contextPath) {
-    if (contextPath == null || contextPath.isEmpty()) {
-      return requestUri;
-    }
-    return requestUri.startsWith(contextPath) ? requestUri.substring(contextPath.length()) : null;
-  }
-
-  private static String decodedPathWithinApplication(HttpServletRequest request) {
     try {
-      return UrlPathHelper.defaultInstance.getPathWithinApplication(request);
+      return FHIR_PATH
+          .matcher(UrlPathHelper.defaultInstance.getPathWithinApplication(request))
+          .matches();
     } catch (IllegalArgumentException ex) {
-      return null;
+      return false;
     }
   }
 }

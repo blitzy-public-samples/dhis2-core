@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.Objects;
 import java.util.function.*;
+import java.util.regex.Pattern;
 import java.util.stream.*;
 import javax.annotation.CheckForNull;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +53,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class FhirResourceMappingService {
+  private static final Pattern CONTROL = Pattern.compile("[\\p{Cc}\\p{Zl}\\p{Zp}]");
   private final FhirResourceMappingStore store;
   private final FhirResourceMappingValidator validator;
   private final SchemaService schemaService;
@@ -95,14 +97,13 @@ public class FhirResourceMappingService {
         byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(mapping);
       }
     }
-    byKey.forEach(
-        (key, mappings) -> {
-          if (mappings.size() == 1) {
-            usable.add(mappings.get(0));
-          } else {
-            logIgnored(escapedUids(mappings), List.of(ErrorCode.E5003));
-          }
-        });
+    for (List<FhirResourceMapping> mappings : byKey.values()) {
+      if (mappings.size() == 1) {
+        usable.add(mappings.get(0));
+      } else {
+        logIgnored(escapedUids(mappings), List.of(ErrorCode.E5003));
+      }
+    }
     return usable.stream()
         .map(mapping -> toResolved(mapping, metadata))
         .sorted(
@@ -129,22 +130,9 @@ public class FhirResourceMappingService {
 
   @CheckForNull
   static String escapeControlCharacters(@CheckForNull String value) {
-    if (value == null) {
-      return null;
-    }
-    StringBuilder escaped = new StringBuilder(value.length());
-    for (int i = 0; i < value.length(); i++) {
-      char c = value.charAt(i);
-      int type = Character.getType(c);
-      if (type == Character.CONTROL
-          || type == Character.LINE_SEPARATOR
-          || type == Character.PARAGRAPH_SEPARATOR) {
-        escaped.append(String.format("\\u%04X", (int) c));
-      } else {
-        escaped.append(c);
-      }
-    }
-    return escaped.toString();
+    return value == null
+        ? null
+        : CONTROL.matcher(value).replaceAll(c -> "\\\\u%04X".formatted((int) c.group().charAt(0)));
   }
 
   /**
@@ -155,30 +143,9 @@ public class FhirResourceMappingService {
       List<FhirResourceMapping> mappings) {
     Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded =
         new HashMap<>();
-    load(
-        loaded,
-        TrackedEntityType.class,
-        TrackedEntityType::getUid,
-        mappings.stream()
-            .map(FhirResourceMapping::getTrackedEntityType)
-            .filter(Objects::nonNull)
-            .map(TrackedEntityType::getUid));
-    load(
-        loaded,
-        Program.class,
-        Program::getUid,
-        mappings.stream()
-            .map(FhirResourceMapping::getProgram)
-            .filter(Objects::nonNull)
-            .map(Program::getUid));
-    load(
-        loaded,
-        ProgramStage.class,
-        ProgramStage::getUid,
-        mappings.stream()
-            .map(FhirResourceMapping::getProgramStage)
-            .filter(Objects::nonNull)
-            .map(ProgramStage::getUid));
+    load(loaded, TrackedEntityType.class, mappings, FhirResourceMapping::getTrackedEntityType);
+    load(loaded, Program.class, mappings, FhirResourceMapping::getProgram);
+    load(loaded, ProgramStage.class, mappings, FhirResourceMapping::getProgramStage);
     Map<String, IdentifiableObject> attributes = new HashMap<>();
     Map<String, IdentifiableObject> dataElements = new HashMap<>();
     for (Map<String, IdentifiableObject> owners : loaded.values()) {
@@ -206,9 +173,14 @@ public class FhirResourceMappingService {
   private <T extends IdentifiableObject> void load(
       Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded,
       Class<T> klass,
-      Function<T, String> uidOf,
-      Stream<String> uids) {
-    Set<String> requested = uids.filter(CodeGenerator::isValidUid).collect(Collectors.toSet());
+      List<FhirResourceMapping> mappings,
+      Function<FhirResourceMapping, T> reference) {
+    Set<String> requested =
+        mappings.stream()
+            .map(reference)
+            .map(FhirResourceMappingValidator::uid)
+            .filter(CodeGenerator::isValidUid)
+            .collect(Collectors.toSet());
     if (requested.isEmpty()) {
       return;
     }
@@ -216,7 +188,7 @@ public class FhirResourceMappingService {
     requested.forEach(uid -> byUid.put(uid, null));
     for (T object : manager.getNoAcl(klass, requested)) {
       if (object != null) {
-        byUid.put(uidOf.apply(object), object);
+        byUid.put(FhirResourceMappingValidator.uid(object), object);
       }
     }
     loaded.put(klass, byUid);
@@ -278,7 +250,7 @@ public class FhirResourceMappingService {
     }
   }
 
-  /** A validated, unmodifiable mapping detached from persistence, with UID references. */
+  /** An unmodifiable snapshot with UID references; only resolve and resolveAll validate it. */
   public record ResolvedMapping(
       String uid,
       FhirResourceType resourceType,

@@ -32,17 +32,15 @@ package org.hisp.dhis.fhir;
 import static org.hisp.dhis.fhir.FhirApiException.*;
 import static org.hisp.dhis.fhir.FhirResourceSerializer.FHIR_JSON_CONTENT_TYPE;
 import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hl7.fhir.r4.model.Bundle.SearchEntryMode.MATCH;
 import static org.hl7.fhir.r4.model.OperationOutcome.IssueType.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.IOException;
 import java.lang.reflect.*;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Predicate;
 import java.util.stream.IntStream;
-import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.OperationOutcome.*;
 import org.junit.jupiter.api.Test;
@@ -54,12 +52,12 @@ class FhirResourceSerializerTest {
   private final FhirResourceSerializer serializer = new FhirResourceSerializer();
 
   @Test
-  void everyFactoryProducesSpecifiedStatusAndCode() throws IOException {
-    assertErrorResponse(notFound(), 404, NOTFOUND, d -> !d.isBlank());
+  void everyFactoryProducesSpecifiedStatusAndCode() throws Exception {
+    assertError(notFound(), 404, NOTFOUND, d -> !d.isBlank());
     String forbidden = "Access to the requested resource is not permitted";
-    assertErrorResponse(forbidden(), 403, FORBIDDEN, forbidden::equals);
-    assertErrorResponse(invalidParameter("name", "empty"), 400, INVALID, d -> d.contains("name"));
-    assertErrorResponse(notSupported("read-only"), 501, NOTSUPPORTED, "read-only"::equals);
+    assertError(forbidden(), 403, FORBIDDEN, forbidden::equals);
+    assertError(invalidParameter("name", "empty"), 400, INVALID, d -> d.contains("name"));
+    assertError(notSupported("read-only"), 501, NOTSUPPORTED, "read-only"::equals);
     List<String> factories =
         Arrays.stream(FhirApiException.class.getDeclaredMethods())
             .filter(m -> Modifier.isPublic(m.getModifiers()) && Modifier.isStatic(m.getModifiers()))
@@ -68,18 +66,26 @@ class FhirResourceSerializerTest {
             .toList();
     assertEquals(List.of("forbidden", "invalidParameter", "notFound", "notSupported"), factories);
     assertEquals(0, FhirApiException.class.getConstructors().length);
+    ResponseEntity<String> ok = serializer.ok(patient("patient-ok", "Okafor", "Chidi"));
+    assertEquals(200, ok.getStatusCode().value());
+    assertEquals(FHIR_JSON_CONTENT_TYPE, ok.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
+    assertEquals("no-store, private", ok.getHeaders().getCacheControl());
+    assertEquals(FhirR4Validation.encode(patient("patient-ok", "Okafor", "Chidi")), ok.getBody());
+    FhirR4Validation.assertValid(FhirR4Validation.parseStrict(ok.getBody(), Patient.class));
+    assertEquals("4.0.1", serializer.context().getVersion().getVersion().getFhirVersionString());
   }
 
   @Test
   void concurrentSerialisationProducesIdenticalOutput() throws Exception {
-    List<IBaseResource> resources = resources();
-    List<String> baselines = resources.stream().map(r -> serializer.ok(r).getBody()).toList();
-    assertEquals(resources.size(), new HashSet<>(baselines).size());
+    List<Resource> inputs = resources();
+    List<String> baselines = inputs.stream().map(r -> serializer.ok(r).getBody()).toList();
+    assertEquals(List.of(THREADS, THREADS), List.of(inputs.size(), Set.copyOf(baselines).size()));
     CyclicBarrier start = new CyclicBarrier(THREADS);
     List<Callable<Long>> tasks = new ArrayList<>();
     for (int i = 0; i < THREADS; i++) {
-      IBaseResource resource = resources.get(i % resources.size());
-      String baseline = baselines.get(i % resources.size());
+      Resource resource = inputs.get(i);
+      String baseline = baselines.get(i);
+      FhirR4Validation.assertValid(FhirR4Validation.parseStrict(baseline, resource.getClass()));
       tasks.add(
           () -> {
             start.await(30, TimeUnit.SECONDS);
@@ -99,34 +105,33 @@ class FhirResourceSerializerTest {
     }
   }
 
-  private void assertErrorResponse(
-      FhirApiException exception, int status, IssueType code, Predicate<String> diagnosticsCheck)
-      throws IOException {
-    ResponseEntity<String> response = serializer.error(exception);
+  private void assertError(FhirApiException e, int status, IssueType code, Predicate<String> check)
+      throws Exception {
+    ResponseEntity<String> response = serializer.error(e);
     assertEquals(status, response.getStatusCode().value());
     assertEquals(FHIR_JSON_CONTENT_TYPE, response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
-    OperationOutcome outcome =
-        FhirR4Validation.parseStrict(response.getBody(), OperationOutcome.class);
+    var outcome = FhirR4Validation.parseStrict(response.getBody(), OperationOutcome.class);
     assertEquals(1, outcome.getIssue().size());
     OperationOutcomeIssueComponent issue = outcome.getIssueFirstRep();
-    assertEquals(IssueSeverity.ERROR, issue.getSeverity());
-    assertEquals(code, issue.getCode());
-    assertEquals(exception.getDiagnostics(), issue.getDiagnostics());
-    assertTrue(diagnosticsCheck.test(issue.getDiagnostics()), issue.getDiagnostics());
+    assertEquals(List.of(IssueSeverity.ERROR, code), List.of(issue.getSeverity(), issue.getCode()));
+    assertEquals(e.getDiagnostics(), issue.getDiagnostics());
+    assertTrue(check.test(issue.getDiagnostics()), issue.getDiagnostics());
     FhirR4Validation.assertValid(outcome);
     MockHttpServletResponse servletResponse = new MockHttpServletResponse();
-    serializer.writeError(servletResponse, exception);
+    serializer.writeError(servletResponse, e);
     assertEquals(status, servletResponse.getStatus());
     assertEquals(FHIR_JSON_CONTENT_TYPE, servletResponse.getContentType());
-    assertEquals(response.getBody(), servletResponse.getContentAsString(StandardCharsets.UTF_8));
+    assertEquals(response.getBody(), servletResponse.getContentAsString());
   }
 
-  private static List<IBaseResource> resources() {
+  private static List<Resource> resources() {
     Reference subject = new Reference("Patient/patient-1");
     Patient first = patient("patient-1", "Nakamura", "Aiko");
     first.getMeta().setLastUpdated(Date.from(UPDATED));
-    first.setGender(Enumerations.AdministrativeGender.FEMALE).setBirthDate(Date.from(OCCURRED));
-    first.addIdentifier().setSystem(IDENTIFIER_SYSTEM).setValue("12345678");
+    Patient second = patient("patient-2", "Okafor", "Chidi");
+    second.setGender(Enumerations.AdministrativeGender.FEMALE).setBirthDate(Date.from(OCCURRED));
+    Patient third = patient("patient-3", "Haugen", "Ingrid");
+    third.addIdentifier().setSystem(IDENTIFIER_SYSTEM).setValue("12345678");
     Encounter encounter = new Encounter().setStatus(Encounter.EncounterStatus.FINISHED);
     encounter.setClass_(new Coding(ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null));
     encounter.setSubject(subject).setId("enrollment1-event1");
@@ -134,30 +139,24 @@ class FhirResourceSerializerTest {
     weight.setSubject(subject).setEffective(new DateTimeType(Date.from(OCCURRED)));
     Immunization immunization = new Immunization().setPatient(subject).setLotNumber("LOT-2024");
     immunization.setStatus(Immunization.ImmunizationStatus.COMPLETED).setId("vaccine");
-    immunization.setVaccineCode(concept(CVX_SYSTEM, CVX_CODE, CVX_DISPLAY));
+    immunization.setVaccineCode(new CodeableConcept(new Coding(CVX_SYSTEM, CVX_CODE, CVX_DISPLAY)));
+    immunization.setOccurrence(new DateTimeType(Date.from(OCCURRED)));
     Bundle bundle = new Bundle().setType(Bundle.BundleType.SEARCHSET).setTotal(1);
-    bundle.addEntry().setResource(patient("patient-4", "Silva", "Ana")).setFullUrl("Patient/4");
+    var entry = bundle.addEntry().setFullUrl("http://localhost/api/fhir/Patient/patient-4");
+    entry.setResource(patient("patient-4", "Silva", "Ana")).getSearch().setMode(MATCH);
     Observation height = observation("height", LOINC_BODY_HEIGHT_CODE, 172.0, BODY_HEIGHT_UNIT);
     height.setSubject(new Reference("#p1")).addContained(patient("p1", "Mensah", "Kofi"));
-    return List.of(first, encounter, weight, immunization, bundle, height);
+    return List.of(first, second, third, encounter, weight, immunization, bundle, height);
   }
 
   private static Observation observation(String id, String code, double value, String unit) {
     Observation observation = new Observation().setStatus(Observation.ObservationStatus.FINAL);
-    observation.setCode(concept(LOINC_SYSTEM, code, null)).setId(id);
-    Quantity quantity = new Quantity().setValue(value).setUnit(unit).setCode(unit);
-    observation.setValue(quantity.setSystem("http://unitsofmeasure.org"));
-    return observation;
+    observation.setCode(new CodeableConcept(new Coding(LOINC_SYSTEM, code, null))).setId(id);
+    return observation.setValue(new Quantity(null, value, "http://unitsofmeasure.org", unit, unit));
   }
 
   private static Patient patient(String id, String family, String given) {
-    Patient patient = new Patient();
-    patient.setId(id);
-    patient.addName().setFamily(family).addGiven(given);
-    return patient;
-  }
-
-  private static CodeableConcept concept(String system, String code, String display) {
-    return new CodeableConcept(new Coding(system, code, display));
+    Patient patient = (Patient) new Patient().setId(id);
+    return patient.addName(new HumanName().setFamily(family).addGiven(given));
   }
 }

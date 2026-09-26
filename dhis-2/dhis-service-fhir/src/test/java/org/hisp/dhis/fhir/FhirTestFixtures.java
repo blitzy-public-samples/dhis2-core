@@ -43,10 +43,10 @@ import org.hisp.dhis.trackedentity.*;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
 
 /**
- * FHIR unit-test builders of a fixed data shape with timestamps {@link #UPDATED}; {@link #uid()}
- * and {@code resolved(...)} without {@code uid} use a new random UID. Builders other than {@code
- * resolved(...)} store new mutable collections and {@code null} scalars as given, and reject a
- * {@code null} varargs array.
+ * Enrollment, metadata and uid-less {@code resolved} builders use timestamps {@link #UPDATED};
+ * tracked entity, event and {@code resolved(uid, ...)} keep the given ones. {@link #uid()} and
+ * uid-less {@code resolved} use a new random UID. Builders other than {@code resolved} store new
+ * mutable collections and {@code null} scalars as given, and reject a {@code null} varargs array.
  */
 public final class FhirTestFixtures {
   public static final Instant UPDATED = Instant.parse("2024-03-15T10:15:30Z");

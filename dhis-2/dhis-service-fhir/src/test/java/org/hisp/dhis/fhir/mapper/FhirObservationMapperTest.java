@@ -67,7 +67,9 @@ class FhirObservationMapperTest {
   private static final String DE_WEIGHT = "DeWeight001";
   private static final String DE_MISSING = "DeMissing01";
   private static final String DE_NUMBER = "DeNumber001";
+  private static final String DE_INTEGER = "DeInteger01";
   private static final String DE_BOOLEAN = "DeBoolean01";
+  private static final String DE_DATE = "DeDate00001";
   private static final String DE_DATETIME = "DeDateTime1";
   private static final String DE_TIME = "DeTime00001";
   private static final String DE_TEXT = "DeText00001";
@@ -115,15 +117,18 @@ class FhirObservationMapperTest {
         observationMapping(
             entries(
                 coded(DE_NUMBER, "number").unit("mmHg"), coded(DE_BOOLEAN, "boolean"),
+                coded(DE_INTEGER, "integer"), coded(DE_DATE, "date"),
                 coded(DE_DATETIME, "datetime"), coded(DE_TIME, "time"),
                 coded(DE_TEXT, "text"), coded(DE_BAD_NUMBER, "bad-number")),
             Map.ofEntries(
                 Map.entry(DE_NUMBER, NUMBER), Map.entry(DE_BOOLEAN, BOOLEAN),
+                Map.entry(DE_INTEGER, INTEGER), Map.entry(DE_DATE, DATE),
                 Map.entry(DE_DATETIME, DATETIME), Map.entry(DE_TIME, TIME),
                 Map.entry(DE_TEXT, TEXT), Map.entry(DE_BAD_NUMBER, NUMBER)));
     String note = "Blood pressure within normal range";
     DataValue[] values = {
       dataValue(DE_NUMBER, "120.5"), dataValue(DE_TEXT, note),
+      dataValue(DE_INTEGER, "42"), dataValue(DE_DATE, "2024-03-01"),
       dataValue(DE_BOOLEAN, "true"), dataValue(DE_DATETIME, "2024-03-01T10:15:30.123Z"),
       dataValue(DE_TIME, "08:30:15"), dataValue(DE_BAD_NUMBER, "abc")
     };
@@ -133,7 +138,11 @@ class FhirObservationMapperTest {
             .collect(toMap(o -> o.getIdPart().substring(24), o -> o));
     Function<String, Type> value = dataElement -> byDataElement.get(dataElement).getValue();
     assertQuantity(value.apply(DE_NUMBER), "120.5", "mmHg");
+    assertQuantity(value.apply(DE_INTEGER), "42", null);
     assertTrue(assertInstanceOf(BooleanType.class, value.apply(DE_BOOLEAN)).booleanValue());
+    var date = assertInstanceOf(DateTimeType.class, value.apply(DE_DATE));
+    assertEquals("2024-03-01", date.getValueAsString());
+    assertEquals(TemporalPrecisionEnum.DAY, date.getPrecision());
     var dateTime = assertInstanceOf(DateTimeType.class, value.apply(DE_DATETIME));
     assertEquals(Instant.parse("2024-03-01T10:15:30.123Z"), dateTime.getValue().toInstant());
     assertEquals(TemporalPrecisionEnum.MILLI, dateTime.getPrecision());

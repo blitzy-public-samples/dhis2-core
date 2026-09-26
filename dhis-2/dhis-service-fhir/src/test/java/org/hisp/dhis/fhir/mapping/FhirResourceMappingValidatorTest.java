@@ -134,22 +134,17 @@ class FhirResourceMappingValidatorTest {
     "PATIENT_FAMILY_NAME, resourceType",
     "ENCOUNTER_CLASS, resourceType",
     "PATIENT_FAMILY_NAME, trackedEntityType",
-    "ENCOUNTER_CLASS, trackedEntityType"
+    "ENCOUNTER_CLASS, trackedEntityType",
+    "ENCOUNTER_CLASS, program",
+    "IMMUNIZATION_VACCINE_CODE, program",
+    "OBSERVATION_VALUE, program",
+    "ENCOUNTER_CLASS, programStage",
+    "IMMUNIZATION_VACCINE_CODE, programStage",
+    "OBSERVATION_VALUE, programStage"
   })
   void entryWithoutPropertyIsMissingRequiredProperty(FhirTargetField target, String property) {
     String blank = property.equals("system") ? " " : null;
     assertOnly(validate(withValue(target, property, blank)), E4000, property);
-  }
-
-  @ParameterizedTest
-  @EnumSource(value = FhirResourceType.class, names = "PATIENT", mode = EnumSource.Mode.EXCLUDE)
-  void eventMappingWithoutProgramOrStageIsMissingRequiredProperty(FhirResourceType type) {
-    FhirResourceMapping withoutProgram = validMapping(type);
-    withoutProgram.setProgram(null);
-    assertOnly(validate(withoutProgram), E4000, "program");
-    FhirResourceMapping withoutStage = validMapping(type);
-    withoutStage.setProgramStage(null);
-    assertOnly(validate(withoutStage), E4000, "programStage");
   }
 
   @ParameterizedTest
@@ -226,29 +221,20 @@ class FhirResourceMappingValidatorTest {
   }
 
   @ParameterizedTest
-  @MethodSource("acceptedValueTypes")
-  void acceptedValueTypeHasNoValueTypeReport(FhirTargetField target, ValueType valueType) {
-    assertEquals(List.of(), validate(withEntries(target, sourceOfValueType(target, valueType))));
+  @MethodSource("valueTypes")
+  void valueTypeOutsideTargetsAcceptedTypesIsInvalid(FhirTargetField target, ValueType valueType) {
+    FhirSourceType sourceType = target.resourceType() == PATIENT ? ATTRIBUTE : DATA_ELEMENT;
+    var reports = validate(withEntries(target, sourceOf(target, sourceType, valueType)));
+    if (ACCEPTED.get(target).contains(valueType)) {
+      assertEquals(List.of(), reports);
+    } else {
+      assertOnly(reports, E4027, valueType.name(), target.name());
+    }
   }
 
-  @ParameterizedTest
-  @MethodSource("rejectedValueTypes")
-  void rejectedValueTypeIsInvalid(FhirTargetField target, ValueType valueType) {
-    FhirResourceMapping mapping = withEntries(target, sourceOfValueType(target, valueType));
-    assertOnly(validate(mapping), E4027, valueType.name(), target.name());
-  }
-
-  static Stream<Arguments> acceptedValueTypes() {
-    return ACCEPTED.entrySet().stream()
-        .flatMap(e -> e.getValue().stream().map(type -> Arguments.of(e.getKey(), type)));
-  }
-
-  static Stream<Arguments> rejectedValueTypes() {
-    return ACCEPTED.entrySet().stream()
-        .flatMap(
-            e ->
-                EnumSet.complementOf(EnumSet.copyOf(e.getValue())).stream()
-                    .map(type -> Arguments.of(e.getKey(), type)));
+  static Stream<Arguments> valueTypes() {
+    return ACCEPTED.keySet().stream()
+        .flatMap(target -> Stream.of(ValueType.values()).map(type -> Arguments.of(target, type)));
   }
 
   static Stream<String> requiredTargets() {
@@ -401,14 +387,22 @@ class FhirResourceMappingValidatorTest {
     }
   }
 
-  @Test
-  void entryCountAndTextLengthAreNotValidated() {
-    FhirResourceMapping mapping = validMapping(ENCOUNTER);
-    entryOf(mapping, ENCOUNTER_CLASS).setDisplay("d".repeat(5000));
-    List<FhirFieldMapping> entries = mapping.getFieldMappings();
-    IntStream.range(0, 600)
-        .forEach(i -> entries.add(Entry.constant(ENCOUNTER_TYPE, SYSTEM, "t" + i, null).build()));
-    assertEquals(List.of(), validate(mapping));
+  @ParameterizedTest
+  @CsvSource({
+    "entries, fieldMappings, size 501 > 500",
+    "pairs, valueMap, size 101 > 100",
+    "total, fieldMappings, length 100001 > 100000",
+    "text, source system code display unit valueMap.key valueMap.value, length 1025 > 1024"
+  })
+  void mappingOverASizeBoundGetsOnlyThatReport(String bound, String properties, String value) {
+    for (String property : properties.split(" ")) {
+      assertEquals(List.of(), validate(sized(bound, property, 0)), property);
+      FhirResourceMapping mapping = sized(bound, property, 1);
+      assertOnly(validate(mapping), E4027, value, property);
+      assertOnly(validator.validateStructure(mapping), E4027, value, property);
+      assertOnly(validator.validate(mapping, List.of()), E4027, value, property);
+    }
+    verifyNoInteractions(manager);
   }
 
   @Test
@@ -489,6 +483,7 @@ class FhirResourceMappingValidatorTest {
       case "sourceType" -> entry.setSourceType(null);
       case "resourceType" -> mapping.setResourceType(null);
       case "trackedEntityType" -> mapping.setTrackedEntityType(null);
+      case "program" -> mapping.setProgram(null);
       case "programStage" -> mapping.setProgramStage(null);
       case "source" -> entry.setSource(value);
       case "system" -> entry.setSystem(value);
@@ -498,6 +493,28 @@ class FhirResourceMappingValidatorTest {
       case "valueMap.key" -> entry.setValueMap(Map.of(value, "v"));
       case "valueMap.value" -> entry.setValueMap(Map.of("k", value));
       default -> throw new IllegalArgumentException(property);
+    }
+    return mapping;
+  }
+
+  private FhirResourceMapping sized(String bound, String property, int excess) {
+    if (bound.equals("text")) {
+      return withValue(ENCOUNTER_CLASS, property, "urn:" + "a".repeat(1020) + " ".repeat(excess));
+    }
+    FhirResourceMapping mapping = validMapping(ENCOUNTER);
+    List<FhirFieldMapping> fields = mapping.getFieldMappings();
+    switch (bound) {
+      case "entries" -> fields.addAll(Collections.nCopies(498 + excess, fields.get(1)));
+      case "pairs" -> {
+        Map<String, String> pairs = new HashMap<>();
+        IntStream.range(0, 100 + excess).forEach(i -> pairs.put("k" + i, "v"));
+        fields.get(0).setValueMap(pairs);
+      }
+      default -> {
+        fields.set(0, Entry.constant(ENCOUNTER_CLASS, null, "c", "d".repeat(999 + excess)).build());
+        fields.set(1, Entry.constant(ENCOUNTER_TYPE, null, "c", "d".repeat(999)).build());
+        fields.addAll(Collections.nCopies(98, fields.get(1)));
+      }
     }
     return mapping;
   }
@@ -516,10 +533,6 @@ class FhirResourceMappingValidatorTest {
 
   private static Entry observation(DataElement source, String code, String display) {
     return entry(OBSERVATION_VALUE, source).system(LOINC_SYSTEM).code(code).display(display);
-  }
-
-  private Entry sourceOfValueType(FhirTargetField target, ValueType valueType) {
-    return sourceOf(target, target.resourceType() == PATIENT ? ATTRIBUTE : DATA_ELEMENT, valueType);
   }
 
   private Entry sourceOf(FhirTargetField target, FhirSourceType type, ValueType valueType) {

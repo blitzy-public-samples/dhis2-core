@@ -43,7 +43,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class FhirValueConverter {
   private static final int ISO_DATE_LENGTH = 10;
-  private static final int ISO_TIME_SECONDS_LENGTH = 8;
   private static final char DATE_TIME_SEPARATOR = 'T';
   private static final int MIN_YEAR = 1;
   private static final int MAX_YEAR = 9999;
@@ -53,8 +52,8 @@ public class FhirValueConverter {
   private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
   /**
-   * Converts a trimmed value to the FHIR datatype of its value type; empty for a {@code null} type
-   * or a {@code null}, blank or unparseable value.
+   * Converts a value to the FHIR datatype of its value type, trimming numeric, boolean and temporal
+   * input and keeping text verbatim; empty for a null type or a null, blank or unparseable value.
    */
   @Nonnull
   public Optional<Type> toFhir(
@@ -115,29 +114,20 @@ public class FhirValueConverter {
   }
 
   private static Optional<Type> booleanValue(String value) {
-    String trimmed = value.trim();
-    if (TRUE.equals(trimmed)) {
-      return Optional.of(new BooleanType(true));
-    }
-    if (FALSE.equals(trimmed)) {
-      return Optional.of(new BooleanType(false));
-    }
-    return Optional.empty();
+    return switch (value.trim()) {
+      case TRUE -> Optional.of(new BooleanType(true));
+      case FALSE -> Optional.of(new BooleanType(false));
+      default -> Optional.empty();
+    };
   }
 
   private static Optional<Type> timeValue(String value) {
-    String trimmed = value.trim();
-    LocalTime time;
     try {
-      time = LocalTime.parse(trimmed, DateTimeFormatter.ISO_LOCAL_TIME);
+      LocalTime time = LocalTime.parse(value.trim(), DateTimeFormatter.ISO_LOCAL_TIME);
+      return Optional.of(new TimeType(time.format(TIME_FORMAT)));
     } catch (DateTimeParseException ex) {
       return Optional.empty();
     }
-    String fraction =
-        trimmed.length() > ISO_TIME_SECONDS_LENGTH + 1
-            ? trimmed.substring(ISO_TIME_SECONDS_LENGTH)
-            : "";
-    return Optional.of(new TimeType(time.format(TIME_FORMAT) + fraction));
   }
 
   private static Optional<LocalDate> datePart(String value) {

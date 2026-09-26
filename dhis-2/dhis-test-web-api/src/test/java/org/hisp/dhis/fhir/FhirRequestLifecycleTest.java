@@ -43,6 +43,7 @@ import java.util.*;
 import javax.sql.DataSource;
 import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.external.conf.*;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.test.webapi.json.domain.JsonWebMessage;
 import org.hisp.dhis.webapi.filter.*;
@@ -56,10 +57,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
- * Tests FHIR R4 requests on the test thread behind the production {@link
- * ConditionalOpenEntityManagerInViewFilter}, each compared with the same request sent without that
- * filter. Each request unbinds the test thread's {@code EntityManager} and binds it again
- * afterwards.
+ * Tests FHIR R4 requests on the test thread: four successful requests sent with and without the
+ * production {@link ConditionalOpenEntityManagerInViewFilter}, and an expired-deadline and a
+ * disabled-route request sent behind it. Each request unbinds any test-thread {@code EntityManager}
+ * and rebinds it afterwards only when one was bound.
  */
 class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   private static final String PATIENT_READ = "/api/fhir/Patient/" + FRANK;

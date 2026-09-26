@@ -33,6 +33,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.*;
 import lombok.extern.slf4j.Slf4j;
+import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.fhir.search.FhirSearchParameters;
@@ -52,11 +53,15 @@ public class FhirCapabilityStatementService {
       "http://hl7.org/fhir/OperationDefinition/Patient-everything";
   private final FhirResourceMappingService mappingService;
   private final FhirSearchParameters parameters;
+  private final DhisConfigurationProvider config;
 
   public FhirCapabilityStatementService(
-      FhirResourceMappingService mappingService, FhirSearchParameters parameters) {
+      FhirResourceMappingService mappingService,
+      FhirSearchParameters parameters,
+      DhisConfigurationProvider config) {
     this.mappingService = Objects.requireNonNull(mappingService, "mappingService");
     this.parameters = Objects.requireNonNull(parameters, "parameters");
+    this.config = Objects.requireNonNull(config, "config");
   }
 
   /** Builds the statement from the usable mappings after accepting only a JSON {@code _format}. */
@@ -75,15 +80,10 @@ public class FhirCapabilityStatementService {
     statement
         .getImplementation()
         .setDescription(IMPLEMENTATION_DESCRIPTION)
-        .setUrl(FhirEventResourceService.fhirBase(request));
+        .setUrl(FhirEventResourceService.fhirBase(config, request).build().toUriString());
     CapabilityStatementRestComponent rest =
         statement.addRest().setMode(RestfulCapabilityMode.SERVER);
-    for (FhirResourceType type : FhirResourceType.values()) {
-      List<ResolvedMapping> mappingsOfType = mappingsByType.get(type);
-      if (mappingsOfType != null && !mappingsOfType.isEmpty()) {
-        addResource(rest, type, mappingsOfType);
-      }
-    }
+    mappingsByType.forEach((type, mappingsOfType) -> addResource(rest, type, mappingsOfType));
     log.debug(
         "Built FHIR CapabilityStatement with resource types {} from {} usable mappings",
         mappingsByType.keySet(),

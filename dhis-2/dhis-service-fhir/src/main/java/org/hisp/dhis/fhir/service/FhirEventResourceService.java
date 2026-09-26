@@ -32,10 +32,12 @@ package org.hisp.dhis.fhir.service;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import javax.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.UID;
+import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.*;
 import org.hisp.dhis.fhir.mapping.*;
@@ -44,8 +46,7 @@ import org.hisp.dhis.fhir.search.*;
 import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
 import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.EnrollmentResult;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Event;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
@@ -57,9 +58,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class FhirEventResourceService {
   private static final String FHIR_BASE_PATH = "/api/fhir";
   private static final String PATH_SEPARATOR = "/";
-  private static final String LINK_SELF = "self";
-  private static final String LINK_NEXT = "next";
-  private static final String LINK_PREVIOUS = "previous";
   private static final String NO_USABLE_MAPPING = "No usable mapping is configured for ";
   private static final List<FhirResourceType> EVENT_TYPES =
       List.of(
@@ -75,6 +73,7 @@ public class FhirEventResourceService {
   private final FhirEncounterMapper encounterMapper;
   private final FhirImmunizationMapper immunizationMapper;
   private final FhirObservationMapper observationMapper;
+  private final DhisConfigurationProvider config;
 
   public FhirEventResourceService(
       FhirResourceMappingService mappingService,
@@ -83,7 +82,8 @@ public class FhirEventResourceService {
       FhirTrackerReader reader,
       FhirEncounterMapper encounterMapper,
       FhirImmunizationMapper immunizationMapper,
-      FhirObservationMapper observationMapper) {
+      FhirObservationMapper observationMapper,
+      DhisConfigurationProvider config) {
     this.mappingService = Objects.requireNonNull(mappingService, "mappingService");
     this.parameters = Objects.requireNonNull(parameters, "parameters");
     this.translator = Objects.requireNonNull(translator, "translator");
@@ -91,9 +91,10 @@ public class FhirEventResourceService {
     this.encounterMapper = Objects.requireNonNull(encounterMapper, "encounterMapper");
     this.immunizationMapper = Objects.requireNonNull(immunizationMapper, "immunizationMapper");
     this.observationMapper = Objects.requireNonNull(observationMapper, "observationMapper");
+    this.config = Objects.requireNonNull(config, "config");
   }
 
-  /** Reads one event-derived resource by its logical id within one operation deadline. */
+  /** Reads one event-derived resource by logical id under the operation's deadline, if any. */
   @Nonnull
   public Resource read(
       @Nonnull FhirResourceType type,
@@ -104,7 +105,7 @@ public class FhirEventResourceService {
     return reader.withinDeadline(() -> readWithinDeadline(type, id, request));
   }
 
-  /** Searches one event-derived type within one operation deadline into a paged searchset. */
+  /** Searches one event-derived type into a paged searchset under one deadline, if any. */
   @Nonnull
   public Bundle search(@Nonnull FhirResourceType type, @Nonnull HttpServletRequest request) {
     requireEventDerived(type);
@@ -123,22 +124,15 @@ public class FhirEventResourceService {
     Objects.requireNonNull(trackedEntityType, "trackedEntityType");
     Objects.requireNonNull(mappings, "mappings");
     Objects.requireNonNull(request, "request");
-    Map<FhirResourceType, List<ResolvedMapping>> mappingsByType =
-        new EnumMap<>(FhirResourceType.class);
-    for (FhirResourceType type : EVENT_TYPES) {
-      mappingsByType.put(
-          type,
-          ofType(mappings, type).stream()
-              .filter(mapping -> trackedEntityType.equals(mapping.trackedEntityType()))
-              .toList());
-    }
+    Predicate<ResolvedMapping> sameType = m -> trackedEntityType.equals(m.trackedEntityType());
+    Map<FhirResourceType, List<ResolvedMapping>> mappingsByType = byType(mappings, sameType);
     Set<String> encounterStages = stagesOf(ofType(mappings, FhirResourceType.ENCOUNTER));
     SortedSet<String> programs = new TreeSet<>();
     mappingsByType.values().forEach(typed -> programs.addAll(candidatePrograms(typed)));
     List<Resource> resources = new ArrayList<>();
     for (String program : programs) {
       Map<FhirResourceType, List<ResolvedMapping>> programMappings =
-          restrictToProgram(mappingsByType, program);
+          byType(mappings, sameType.and(mapping -> program.equals(mapping.program())));
       FhirResourceType firstType =
           EVENT_TYPES.stream()
               .filter(type -> !programMappings.get(type).isEmpty())
@@ -157,23 +151,26 @@ public class FhirEventResourceService {
     return Collections.unmodifiableList(resources);
   }
 
-  static String fhirBase(HttpServletRequest request) {
-    return ServletUriComponentsBuilder.fromContextPath(request)
-        .path(FHIR_BASE_PATH)
-        .build()
-        .toUriString();
+  /** Builds {@code /api/fhir} under a configured {@code server.base.url}, else the request base. */
+  static UriComponentsBuilder fhirBase(
+      DhisConfigurationProvider config, HttpServletRequest request) {
+    String configured = config.getServerBaseUrl();
+    if (configured == null || configured.isBlank()) {
+      return ServletUriComponentsBuilder.fromContextPath(request).path(FHIR_BASE_PATH);
+    }
+    return UriComponentsBuilder.fromUriString(configured.strip()).path(FHIR_BASE_PATH);
   }
 
   static Bundle searchset() {
     return new Bundle().setType(Bundle.BundleType.SEARCHSET);
   }
 
-  static void addEntries(
+  void addEntries(
       Bundle bundle,
       HttpServletRequest request,
       List<? extends Resource> resources,
       Runnable checkpoint) {
-    String base = fhirBase(request) + PATH_SEPARATOR;
+    String base = fhirBase(config, request).build().toUriString() + PATH_SEPARATOR;
     for (Resource resource : resources) {
       bundle
           .addEntry()
@@ -186,23 +183,21 @@ public class FhirEventResourceService {
     }
   }
 
-  static UriComponentsBuilder addSelfLink(Bundle bundle, HttpServletRequest request, String path) {
+  UriComponentsBuilder addSelfLink(Bundle bundle, HttpServletRequest request, String path) {
     UriComponentsBuilder base =
-        ServletUriComponentsBuilder.fromContextPath(request)
-            .path(FHIR_BASE_PATH + PATH_SEPARATOR + path)
-            .query(request.getQueryString());
-    bundle.addLink().setRelation(LINK_SELF).setUrl(base.build().toUriString());
+        fhirBase(config, request).path(PATH_SEPARATOR + path).query(request.getQueryString());
+    bundle.addLink().setRelation(Bundle.LINK_SELF).setUrl(base.build().toUriString());
     return base;
   }
 
-  static void addPagingLinks(
+  void addPagingLinks(
       Bundle bundle, HttpServletRequest request, String resourceType, int page, boolean hasNext) {
     UriComponentsBuilder base = addSelfLink(bundle, request, resourceType);
     if (hasNext) {
-      bundle.addLink().setRelation(LINK_NEXT).setUrl(pageUrl(base, page + 1));
+      bundle.addLink().setRelation(Bundle.LINK_NEXT).setUrl(pageUrl(base, page + 1));
     }
     if (page > 1) {
-      bundle.addLink().setRelation(LINK_PREVIOUS).setUrl(pageUrl(base, page - 1));
+      bundle.addLink().setRelation(Bundle.LINK_PREV).setUrl(pageUrl(base, page - 1));
     }
   }
 
@@ -237,12 +232,10 @@ public class FhirEventResourceService {
                       enrollment != null
                           && logicalId.enrollment().equals(value(enrollment.getEnrollment())))
               .toList();
-      Map<FhirResourceType, List<ResolvedMapping>> programMappings =
-          Map.of(type, mappingsOfProgram(mappings, program));
       for (FlattenedResource flattened :
           flatten(
               enrollments,
-              programMappings,
+              Map.of(type, mappingsOfProgram(mappings, program)),
               encounterStages,
               event -> Objects.equals(logicalId.event(), value(event.getEvent())))) {
         if (id.equals(idOf(flattened.resource()))) {
@@ -266,18 +259,13 @@ public class FhirEventResourceService {
     Set<String> requestedEvents = new HashSet<>();
     parsed.logicalIds().forEach(logicalId -> requestedEvents.add(logicalId.event()));
     Predicate<Event> eventFilter =
-        requestedEvents.isEmpty()
-            ? event -> true
-            : event -> requestedEvents.contains(value(event.getEvent()));
+        event -> requestedEvents.isEmpty() || requestedEvents.contains(value(event.getEvent()));
     List<String> programs = candidatePrograms(mappings);
     List<Resource> resources = new ArrayList<>();
     int forbidden = 0;
     for (String program : programs) {
       List<ResolvedMapping> programMappings = mappingsOfProgram(mappings, program);
-      TranslatedSearch translated = translator.toEnrollmentParams(parsed, programMappings, program);
-      if (translated.empty()) {
-        continue;
-      }
+      TranslatedSearch translated = translator.toEnrollmentParams(parsed, program);
       EnrollmentResult result =
           reader.findEnrollments(translated.enrollmentParams(), request, type);
       if (result.forbidden()) {
@@ -297,14 +285,12 @@ public class FhirEventResourceService {
       throw FhirApiException.forbidden();
     }
     int size = resources.size();
-    int page = parsed.page();
-    long first = (long) (page - 1) * parsed.count();
+    long first = (long) (parsed.page() - 1) * parsed.count();
     int from = (int) Math.min(first, size);
     int to = (int) Math.min(first + parsed.count(), size);
-    Bundle bundle = searchset();
-    bundle.setTotal(size);
+    Bundle bundle = searchset().setTotal(size);
     addEntries(bundle, request, resources.subList(from, to), reader::checkpoint);
-    addPagingLinks(bundle, request, type.fhirType(), page, to < size);
+    addPagingLinks(bundle, request, type.fhirType(), parsed.page(), to < size);
     reader.checkpoint();
     return bundle;
   }
@@ -323,16 +309,13 @@ public class FhirEventResourceService {
 
   @CheckForNull
   private static FhirFieldMapping observationEntry(ResolvedMapping mapping, String id) {
-    String dataElement =
-        FhirLogicalId.parse(FhirResourceType.OBSERVATION, id)
-            .map(FhirLogicalId::dataElement)
-            .orElse(null);
-    if (dataElement == null) {
-      return null;
-    }
-    return mapping.entries(FhirTargetField.OBSERVATION_VALUE).stream()
-        .filter(entry -> dataElement.equals(entry.getSource()))
-        .findFirst()
+    return FhirLogicalId.parse(FhirResourceType.OBSERVATION, id)
+        .map(FhirLogicalId::dataElement)
+        .flatMap(
+            dataElement ->
+                mapping.entries(FhirTargetField.OBSERVATION_VALUE).stream()
+                    .filter(entry -> dataElement.equals(entry.getSource()))
+                    .findFirst())
         .orElse(null);
   }
 
@@ -423,8 +406,7 @@ public class FhirEventResourceService {
   }
 
   private List<ResolvedMapping> resolve(FhirResourceType type) {
-    List<ResolvedMapping> mappings = mappingService.resolve(type);
-    return mappings == null ? List.of() : mappings;
+    return Objects.requireNonNullElse(mappingService.resolve(type), List.of());
   }
 
   private Set<String> encounterStages(FhirResourceType type) {
@@ -434,20 +416,17 @@ public class FhirEventResourceService {
   }
 
   private static List<String> candidatePrograms(List<ResolvedMapping> mappings) {
-    Set<String> programs = new LinkedHashSet<>();
-    for (ResolvedMapping mapping : mappings) {
-      if (mapping.program() != null) {
-        programs.add(mapping.program());
-      }
-    }
-    return List.copyOf(programs);
+    return distinctValues(mappings, ResolvedMapping::program);
+  }
+
+  private static List<String> distinctValues(
+      List<ResolvedMapping> mappings, Function<ResolvedMapping, String> key) {
+    return mappings.stream().map(key).filter(Objects::nonNull).distinct().toList();
   }
 
   private static List<ResolvedMapping> ofType(
       List<ResolvedMapping> mappings, FhirResourceType type) {
-    return mappings.stream()
-        .filter(mapping -> mapping != null && mapping.resourceType() == type)
-        .toList();
+    return mappings.stream().filter(m -> m != null && m.resourceType() == type).toList();
   }
 
   private static List<ResolvedMapping> mappingsOfProgram(
@@ -455,24 +434,17 @@ public class FhirEventResourceService {
     return mappings.stream().filter(mapping -> program.equals(mapping.program())).toList();
   }
 
-  private static Map<FhirResourceType, List<ResolvedMapping>> restrictToProgram(
-      Map<FhirResourceType, List<ResolvedMapping>> mappingsByType, String program) {
-    Map<FhirResourceType, List<ResolvedMapping>> restricted = new EnumMap<>(FhirResourceType.class);
+  private static Map<FhirResourceType, List<ResolvedMapping>> byType(
+      List<ResolvedMapping> mappings, Predicate<ResolvedMapping> filter) {
+    Map<FhirResourceType, List<ResolvedMapping>> byType = new EnumMap<>(FhirResourceType.class);
     for (FhirResourceType type : EVENT_TYPES) {
-      restricted.put(
-          type, mappingsOfProgram(mappingsByType.getOrDefault(type, List.of()), program));
+      byType.put(type, ofType(mappings, type).stream().filter(filter).toList());
     }
-    return restricted;
+    return byType;
   }
 
   private static Set<String> stagesOf(List<ResolvedMapping> mappings) {
-    Set<String> stages = new LinkedHashSet<>();
-    for (ResolvedMapping mapping : mappings) {
-      if (mapping.programStage() != null) {
-        stages.add(mapping.programStage());
-      }
-    }
-    return stages;
+    return new LinkedHashSet<>(distinctValues(mappings, ResolvedMapping::programStage));
   }
 
   private static void requireEventDerived(FhirResourceType type) {

@@ -53,15 +53,15 @@ import org.springframework.stereotype.Component;
  * Patient/{trackedEntityUid}}, {@code encounter} {@code Encounter/{enrollmentUid}-{eventUid}} when
  * an {@code ENCOUNTER} mapping exists, {@code occurrenceDateTime} from {@code occurredAt}, and
  * {@code lotNumber} and {@code protocolApplied[0].doseNumber[x]} from their data elements, the dose
- * as {@code positiveInt} when it is a positive {@code int}, leading zeros allowed, and as {@code
- * string} otherwise.
+ * as {@code positiveInt} when its trimmed value is a positive {@code int} without leading zeros,
+ * and as {@code string} otherwise.
  */
 @Component
 public class FhirImmunizationMapper {
   private static final String PATIENT_REFERENCE_PREFIX = "Patient/";
   private static final String ENCOUNTER_REFERENCE_PREFIX = "Encounter/";
   private static final String NOT_ADMINISTERED = "false";
-  private static final Pattern POSITIVE_INTEGER = Pattern.compile("0*([1-9][0-9]*)");
+  private static final Pattern POSITIVE_INTEGER = Pattern.compile("^[1-9][0-9]*$");
   private static final int MAX_INT_DIGITS = String.valueOf(Integer.MAX_VALUE).length();
   private final FhirValueConverter converter;
 
@@ -158,12 +158,11 @@ public class FhirImmunizationMapper {
   }
 
   private static Type doseNumberType(String value) {
-    Matcher positive = POSITIVE_INTEGER.matcher(value.trim());
-    if (positive.matches() && positive.group(1).length() <= MAX_INT_DIGITS) {
-      long number = Long.parseLong(positive.group(1));
-      if (number <= Integer.MAX_VALUE) {
-        return new PositiveIntType((int) number);
-      }
+    String trimmed = value.trim();
+    if (POSITIVE_INTEGER.matcher(trimmed).matches()
+        && trimmed.length() <= MAX_INT_DIGITS
+        && Long.parseLong(trimmed) <= Integer.MAX_VALUE) {
+      return new PositiveIntType(Integer.parseInt(trimmed));
     }
     return new StringType(value);
   }

@@ -4,9 +4,7 @@
       "id": "FhirMapPat1",
       "name": "FHIR test Patient",
       "resourceType": "PATIENT",
-      "trackedEntityType": {
-        "id": "ja8NY4PW7Xm"
-      },
+      "trackedEntityType": { "id": "ja8NY4PW7Xm" },
       "fieldMappings": [
         {
           "target": "PATIENT_IDENTIFIER",
@@ -30,15 +28,9 @@
       "id": "FhirMapEnc1",
       "name": "FHIR test Encounter BFcipDERJnf",
       "resourceType": "ENCOUNTER",
-      "trackedEntityType": {
-        "id": "ja8NY4PW7Xm"
-      },
-      "program": {
-        "id": "BFcipDERJnf"
-      },
-      "programStage": {
-        "id": "NpsdDv6kKSO"
-      },
+      "trackedEntityType": { "id": "ja8NY4PW7Xm" },
+      "program": { "id": "BFcipDERJnf" },
+      "programStage": { "id": "NpsdDv6kKSO" },
       "fieldMappings": [
         {
           "target": "ENCOUNTER_CLASS",
@@ -59,15 +51,9 @@
       "id": "FhirMapEnc2",
       "name": "FHIR test Encounter shPjYNifvMK",
       "resourceType": "ENCOUNTER",
-      "trackedEntityType": {
-        "id": "ja8NY4PW7Xm"
-      },
-      "program": {
-        "id": "shPjYNifvMK"
-      },
-      "programStage": {
-        "id": "SKNvpoLioON"
-      },
+      "trackedEntityType": { "id": "ja8NY4PW7Xm" },
+      "program": { "id": "shPjYNifvMK" },
+      "programStage": { "id": "SKNvpoLioON" },
       "fieldMappings": [
         {
           "target": "ENCOUNTER_CLASS",
@@ -82,15 +68,9 @@
       "id": "FhirMapImm1",
       "name": "FHIR test Immunization",
       "resourceType": "IMMUNIZATION",
-      "trackedEntityType": {
-        "id": "ja8NY4PW7Xm"
-      },
-      "program": {
-        "id": "BFcipDERJnf"
-      },
-      "programStage": {
-        "id": "NpsdDv6kKSO"
-      },
+      "trackedEntityType": { "id": "ja8NY4PW7Xm" },
+      "program": { "id": "BFcipDERJnf" },
+      "programStage": { "id": "NpsdDv6kKSO" },
       "fieldMappings": [
         {
           "target": "IMMUNIZATION_ADMINISTERED",
@@ -115,15 +95,9 @@
       "id": "FhirMapObs1",
       "name": "FHIR test Observation",
       "resourceType": "OBSERVATION",
-      "trackedEntityType": {
-        "id": "ja8NY4PW7Xm"
-      },
-      "program": {
-        "id": "BFcipDERJnf"
-      },
-      "programStage": {
-        "id": "NpsdDv6kKSO"
-      },
+      "trackedEntityType": { "id": "ja8NY4PW7Xm" },
+      "program": { "id": "BFcipDERJnf" },
+      "programStage": { "id": "NpsdDv6kKSO" },
       "fieldMappings": [
         {
           "target": "OBSERVATION_VALUE",

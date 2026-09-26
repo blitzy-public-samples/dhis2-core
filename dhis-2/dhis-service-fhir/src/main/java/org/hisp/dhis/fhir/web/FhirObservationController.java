@@ -29,7 +29,7 @@
  */
 package org.hisp.dhis.fhir.web;
 
-import static org.hisp.dhis.fhir.web.FhirOpenApi.FHIR_JSON;
+import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenApi.FHIR_JSON;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Objects;
@@ -37,6 +37,7 @@ import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.hisp.dhis.fhir.service.FhirEventResourceService;
+import org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenApi;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 

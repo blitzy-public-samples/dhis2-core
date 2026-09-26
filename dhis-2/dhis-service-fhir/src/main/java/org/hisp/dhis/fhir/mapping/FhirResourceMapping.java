@@ -64,7 +64,7 @@ public class FhirResourceMapping extends BaseIdentifiableObject implements Metad
     return trackedEntityType;
   }
 
-  /** Returns the program whose enrollments are read, serialised as {@link IdentifiableObject}. */
+  /** Returns the optional program scoping Tracker exports, output as {@link IdentifiableObject}. */
   @JsonProperty
   @JsonSerialize(as = IdentifiableObject.class)
   @JacksonXmlProperty(namespace = DxfNamespaces.DXF_2_0)

@@ -30,14 +30,13 @@
 package org.hisp.dhis.fhir;
 
 import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.parser.IParser;
-import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.OperationOutcome;
+import org.hl7.fhir.r4.model.OperationOutcome.*;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 
@@ -45,17 +44,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class FhirResourceSerializer {
   public static final String FHIR_JSON_CONTENT_TYPE = "application/fhir+json;charset=UTF-8";
-  public static final MediaType FHIR_JSON_MEDIA_TYPE =
-      MediaType.parseMediaType(FHIR_JSON_CONTENT_TYPE);
+  public static final MediaType FHIR_JSON_MEDIA_TYPE = MediaType.valueOf(FHIR_JSON_CONTENT_TYPE);
+  private static final CacheControl NO_STORE = CacheControl.noStore().cachePrivate();
   private final FhirContext context = FhirContext.forR4Cached();
 
   public FhirContext context() {
     return context;
   }
 
+  /** Creates a {@code 200} response with the resource JSON, marked {@code no-store, private}. */
   public ResponseEntity<String> ok(IBaseResource resource) {
-    Objects.requireNonNull(resource, "resource");
-    return ResponseEntity.ok().contentType(FHIR_JSON_MEDIA_TYPE).body(encode(resource));
+    String body = encode(Objects.requireNonNull(resource, "resource"));
+    return ResponseEntity.ok().cacheControl(NO_STORE).contentType(FHIR_JSON_MEDIA_TYPE).body(body);
   }
 
   /** Creates the response with the exception's status and one-issue {@code OperationOutcome}. */
@@ -69,30 +69,22 @@ public class FhirResourceSerializer {
   /** Writes the {@link #error} response to the uncommitted servlet response and commits it. */
   public void writeError(HttpServletResponse response, FhirApiException exception)
       throws IOException {
-    Objects.requireNonNull(response, "response");
     Objects.requireNonNull(exception, "exception");
     byte[] body = encode(outcome(exception)).getBytes(StandardCharsets.UTF_8);
-    response.setStatus(exception.getStatus().value());
+    Objects.requireNonNull(response, "response").setStatus(exception.getStatus().value());
     response.setContentType(FHIR_JSON_CONTENT_TYPE);
     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-    ServletOutputStream output = response.getOutputStream();
-    output.write(body);
-    output.flush();
+    response.getOutputStream().write(body);
+    response.getOutputStream().flush();
   }
 
   private static OperationOutcome outcome(FhirApiException exception) {
-    OperationOutcome outcome = new OperationOutcome();
-    outcome
-        .addIssue()
-        .setSeverity(OperationOutcome.IssueSeverity.ERROR)
-        .setCode(exception.getIssueType())
-        .setDiagnostics(exception.getDiagnostics());
-    return outcome;
+    var issue = new OperationOutcomeIssueComponent().setSeverity(IssueSeverity.ERROR);
+    issue.setCode(exception.getIssueType()).setDiagnostics(exception.getDiagnostics());
+    return new OperationOutcome().addIssue(issue);
   }
 
   private String encode(IBaseResource resource) {
-    IParser parser = context.newJsonParser();
-    parser.setPrettyPrint(false);
-    return parser.encodeResourceToString(resource);
+    return context.newJsonParser().setPrettyPrint(false).encodeResourceToString(resource);
   }
 }

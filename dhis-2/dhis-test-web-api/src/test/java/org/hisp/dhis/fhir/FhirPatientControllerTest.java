@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
 import java.util.stream.Stream;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
 import org.hisp.dhis.user.User;
@@ -63,6 +64,7 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   @Test
   void readPatientReturnsValidMappedPatient() {
     assertFrankPatient(read(Patient.class, FRANK));
+    assertEquals("no-store, private", GET(PATIENT_PATH + "/" + FRANK).header("Cache-Control"));
   }
 
   @Test
@@ -300,17 +302,21 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     assertEquals("70", patient.getIdentifierFirstRep().getValue());
   }
 
-  /** Asserts a {@link #searchset} of Patients without a total. */
+  /** Asserts a no-store {@link #searchset} of Patients without a total. */
   private Bundle assertPatientSearchset(String url) {
-    Bundle bundle = searchset(url, fhirBody(GET(url), HttpStatus.OK));
+    HttpResponse response = GET(url);
+    Bundle bundle = searchset(url, fhirBody(response, HttpStatus.OK));
+    assertEquals("no-store, private", response.header("Cache-Control"), url);
     assertFalse(bundle.hasTotal(), url);
     return bundle;
   }
 
-  /** Asserts the {@code $everything} {@link #searchset} entries as {@code Type/id}, in order. */
+  /** Asserts the no-store {@code $everything} {@link #searchset} as {@code Type/id}s, in order. */
   private String assertEverything(String patientId, List<String> expected) {
     String url = PATIENT_PATH + "/" + patientId + "/$everything";
-    String body = fhirBody(GET(url), HttpStatus.OK);
+    HttpResponse response = GET(url);
+    String body = fhirBody(response, HttpStatus.OK);
+    assertEquals("no-store, private", response.header("Cache-Control"), url);
     Bundle bundle = searchset(url, body);
     List<String> actual =
         bundle.getEntry().stream()
@@ -331,7 +337,7 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     manager.clear();
   }
 
-  /** Runs {@code test} with an attribute property set to {@code json}, then restores it. */
+  /** Sets {@code json} for {@code test}, then writes the prior JSON, or [] if absent or null. */
   private void withAttributeSetting(String attribute, String property, String json, Runnable test) {
     String url = "/trackedEntityAttributes/" + attribute;
     String add = "[{'op':'add','path':'/" + property + "','value':%s}]";

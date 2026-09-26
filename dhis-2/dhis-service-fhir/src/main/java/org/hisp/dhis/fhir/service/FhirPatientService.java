@@ -41,8 +41,7 @@ import org.hisp.dhis.fhir.search.*;
 import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
 import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.FhirSearchOrigin;
-import org.hisp.dhis.webapi.controller.tracker.view.Page;
-import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.stereotype.Service;
 
@@ -75,7 +74,7 @@ public class FhirPatientService {
         Objects.requireNonNull(eventResourceService, "eventResourceService");
   }
 
-  /** Reads one {@code Patient} by its tracked entity UID within one operation deadline. */
+  /** Reads one {@code Patient} by its tracked entity UID under the operation's deadline, if any. */
   @Nonnull
   public Patient read(@CheckForNull String id, @Nonnull HttpServletRequest request) {
     Objects.requireNonNull(request, "request");
@@ -88,14 +87,14 @@ public class FhirPatientService {
                 request));
   }
 
-  /** Searches {@code Patient}s within one operation deadline into a paged searchset Bundle. */
+  /** Searches {@code Patient}s into a paged searchset under the operation's deadline, if any. */
   @Nonnull
   public Bundle search(@Nonnull HttpServletRequest request) {
     Objects.requireNonNull(request, "request");
     return reader.withinDeadline(() -> searchWithinDeadline(request));
   }
 
-  /** Returns a {@code Patient} and its event-derived resources within one operation deadline. */
+  /** Returns a {@code Patient} and its event-derived resources under one deadline, if any. */
   @Nonnull
   public Bundle everything(@CheckForNull String id, @Nonnull HttpServletRequest request) {
     Objects.requireNonNull(request, "request");
@@ -114,7 +113,11 @@ public class FhirPatientService {
               translated.trackedEntityParams(), request, translated.origin());
       for (TrackedEntity trackedEntity : itemsOf(page)) {
         if (trackedEntity != null) {
-          patients.add(patientMapper.map(trackedEntity, mapping));
+          Patient patient = patientMapper.map(trackedEntity, mapping);
+          if (parsed.genders().isEmpty()
+              || (patient.hasGender() && parsed.genders().contains(patient.getGender().toCode()))) {
+            patients.add(patient);
+          }
           reader.checkpoint();
         }
       }
@@ -122,8 +125,8 @@ public class FhirPatientService {
     }
     reader.checkpoint();
     Bundle bundle = FhirEventResourceService.searchset();
-    FhirEventResourceService.addEntries(bundle, request, patients, reader::checkpoint);
-    FhirEventResourceService.addPagingLinks(
+    eventResourceService.addEntries(bundle, request, patients, reader::checkpoint);
+    eventResourceService.addPagingLinks(
         bundle, request, FhirResourceType.PATIENT.fhirType(), translated.page(), hasNext);
     reader.checkpoint();
     return bundle;
@@ -138,9 +141,9 @@ public class FhirPatientService {
         eventResourceService.forPatient(id, mapping.trackedEntityType(), mappings, request));
     reader.checkpoint();
     Bundle bundle = FhirEventResourceService.searchset();
-    FhirEventResourceService.addEntries(bundle, request, resources, reader::checkpoint);
+    eventResourceService.addEntries(bundle, request, resources, reader::checkpoint);
     bundle.setTotal(bundle.getEntry().size());
-    FhirEventResourceService.addSelfLink(
+    eventResourceService.addSelfLink(
         bundle, request, FhirResourceType.PATIENT.fhirType() + PATH_SEPARATOR + id + EVERYTHING);
     reader.checkpoint();
     return bundle;
@@ -188,10 +191,7 @@ public class FhirPatientService {
   }
 
   private static List<TrackedEntity> itemsOf(@CheckForNull Page<TrackedEntity> page) {
-    if (page == null || page.getItems() == null) {
-      return List.of();
-    }
-    return page.getItems();
+    return page == null || page.getItems() == null ? List.of() : page.getItems();
   }
 
   private static boolean hasNextPage(@CheckForNull Page<TrackedEntity> page) {

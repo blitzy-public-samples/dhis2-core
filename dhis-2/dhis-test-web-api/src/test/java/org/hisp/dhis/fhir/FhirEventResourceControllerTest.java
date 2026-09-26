@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.stream.Stream;
 import org.hisp.dhis.common.CodeGenerator;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.util.DateUtils;
 import org.hl7.fhir.r4.model.*;
@@ -106,6 +107,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
             (id, type) -> {
               String url = "/api/fhir/" + type.getSimpleName() + "/" + id;
               read(type, id + "?_format=json");
+              assertEquals("no-store, private", GET(url).header("Cache-Control"), url);
               assertInvalid(url + "?_format=xml", "_format");
               assertInvalid(url + "?foo=1", "foo");
             });
@@ -231,6 +233,17 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
+  void searchForbiddenAlikeForConfiguredAndUnknownObservationCodes() {
+    String known = "patient=" + FRANK + "&code=integer-value";
+    String unknown = "patient=" + FRANK + "&code=urn:x|nope";
+    asRestrictedUser(List.of(), () -> assertSearch(OBSERVATION, unknown));
+    List<String> urls = List.of(OBSERVATION + "?" + known, OBSERVATION + "?" + unknown);
+    for (String denial : PROGRAM_DENIALS) {
+      asRestrictedUser(denied(denial, PROGRAM), () -> assertSameForbidden(urls, "integer-value"));
+    }
+  }
+
+  @Test
   void searchWithMixedProgramAccessReturnsAccessibleResources() {
     assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
     assertSearch(ENCOUNTER, "patient=" + FRANK, ENCOUNTER_B);
@@ -276,10 +289,12 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
         });
   }
 
-  /** Asserts the search matches exactly {@code ids}, in order and totalled; returns the body. */
+  /** Asserts a no-store search of exactly {@code ids}, in order and totalled; returns the body. */
   private String assertSearch(String path, String query, String... ids) {
     String url = path + "?" + query;
-    String body = fhirBody(GET(url), HttpStatus.OK);
+    HttpResponse response = GET(url);
+    String body = fhirBody(response, HttpStatus.OK);
+    assertEquals("no-store, private", response.header("Cache-Control"), url);
     Bundle bundle = searchset(url, body);
     assertEquals(List.of(ids), entryIds(bundle), url);
     assertTrue(bundle.hasTotal(), url);

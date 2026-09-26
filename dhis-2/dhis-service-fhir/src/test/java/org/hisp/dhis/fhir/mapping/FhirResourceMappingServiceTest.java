@@ -254,13 +254,17 @@ class FhirResourceMappingServiceTest {
     FhirResourceMapping broken = encounter(uid(), programStage(uid(), program));
     broken.getFieldMappings().get(0).setTarget(null);
     FhirResourceMapping stray = observation(uid(), stageA);
-    List<FhirFieldMapping> entries = stray.getFieldMappings();
+    FhirResourceMapping oversized = observation(uid(), stageB);
+    oversized.getFieldMappings().get(0).setDisplay("d".repeat(1025));
     Stream.generate(() -> Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, uid()).code("c").build())
-        .limit(1000)
-        .forEach(entries::add);
-    when(store.getAllNoAcl()).thenReturn(List.of(broken, stray));
+        .limit(499)
+        .forEach(stray.getFieldMappings()::add);
+    when(store.getAllNoAcl()).thenReturn(List.of(broken, stray, oversized));
+    when(store.getByResourceTypeNoAcl(OBSERVATION)).thenReturn(List.of(oversized));
     assertEquals(List.of(), service.resolveAll());
+    assertEquals(List.of(), service.resolve(OBSERVATION));
     verify(service).logIgnored(List.of(broken.getUid()), List.of(ErrorCode.E4000, ErrorCode.E4000));
+    verify(service, times(2)).logIgnored(List.of(oversized.getUid()), List.of(ErrorCode.E4027));
     verify(manager).getNoAcl(ProgramStage.class, Set.of(stageA.getUid()));
     verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
     verify(manager, never()).getNoAcl(any(), anyString());

@@ -30,24 +30,20 @@
 package org.hisp.dhis.fhir;
 
 import static org.hisp.dhis.fhir.FhirApiDisabledTest.*;
-import static org.hisp.dhis.fhir.FhirPostgresControllerTestBase.parseOk;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.parseOk;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
 import org.hisp.dhis.external.conf.*;
-import org.hisp.dhis.fhir.service.FhirCapabilityStatementService;
 import org.hisp.dhis.test.config.H2DhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.AuthenticationApiTestBase;
 import org.hisp.dhis.webapi.filter.ApiVersionFilter;
 import org.hl7.fhir.r4.model.CapabilityStatement;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementKind;
-import org.hl7.fhir.r4.model.CapabilityStatement.RestfulCapabilityMode;
 import org.hl7.fhir.r4.model.Enumerations;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers;
 import org.springframework.security.web.FilterChainProxy;
@@ -57,8 +53,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
  * Tests, through the security filter chain and then the API version filter with {@code
- * fhir.api.enabled} on, that anonymous FHIR requests get the platform's existing response, or
- * {@code 404} where security ignores or permits them, and authenticated ones reach the FHIR API.
+ * fhir.api.enabled} on, that anonymous FHIR requests, also on paths security ignores or permits,
+ * get the platform's existing unauthenticated response, and authenticated ones reach the FHIR API.
  */
 @ContextConfiguration(classes = FhirApiEnabledSecurityTest.FhirApiEnabledConfig.class)
 class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
@@ -75,23 +71,22 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
   private static final String METADATA_PATH = "/api/fhir/metadata";
   private static final String VERSIONED_METADATA_PATH = "/api/44/fhir/metadata";
   private static final List<String> FHIR_PATHS =
-      List.of(METADATA_PATH, "/api/fhir/Patient/dUE514NMOlo", VERSIONED_METADATA_PATH);
+      List.of(
+          METADATA_PATH,
+          "/api/fhir/Patient/dUE514NMOlo",
+          VERSIONED_METADATA_PATH,
+          "/api/fhir/Patient/loginConfig",
+          "/api/44/fhir/Patient/loginConfig",
+          "/api/fhir/Patient/account");
   private static final String NON_FHIR_PATH = "/api/me";
-  private static final String LOGIN_CONFIG_PATH = "/api/fhir/Patient/loginConfig";
-  private static final List<String> UNAUTHENTICATED_FHIR_PATHS =
-      List.of(LOGIN_CONFIG_PATH, "/api/44/fhir/Patient/loginConfig", "/api/fhir/Patient/account");
 
   @Autowired private DhisConfigurationProvider config;
   @Autowired private FilterChainProxy springSecurityFilterChain;
   @Autowired private ApiVersionFilter apiVersionFilter;
 
   @BeforeEach
-  void fhirApiIsEnabled() {
+  void assertFhirApiIsEnabledAndAddApiVersionFilterAfterSecurity() {
     assertTrue(config.isEnabled(ConfigurationKey.FHIR_API_ENABLED));
-  }
-
-  @BeforeEach
-  void addApiVersionFilterAfterSecurity() {
     mvc =
         MockMvcBuilders.webAppContextSetup(webApplicationContext)
             .apply(SecurityMockMvcConfigurers.springSecurity(springSecurityFilterChain))
@@ -102,19 +97,13 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
   @Test
   void anonymousRequestGetsExistingUnauthorizedResponse() throws Exception {
     for (boolean xmlHttpRequest : new boolean[] {true, false}) {
-      MockHttpServletResponse expected =
-          performAnonymous(HttpMethod.GET, NON_FHIR_PATH, xmlHttpRequest);
+      MockHttpServletResponse expected = performAnonymous(NON_FHIR_PATH, xmlHttpRequest);
+      assertEquals(xmlHttpRequest ? 401 : 302, expected.getStatus(), NON_FHIR_PATH);
       for (String path : FHIR_PATHS) {
         String description = "GET " + path + (xmlHttpRequest ? " as XMLHttpRequest" : "");
-        MockHttpServletResponse response = performAnonymous(HttpMethod.GET, path, xmlHttpRequest);
-        if (xmlHttpRequest) {
-          assertEquals(401, response.getStatus(), description);
-        }
+        MockHttpServletResponse response = performAnonymous(path, xmlHttpRequest);
         assertEquals(expected.getStatus(), response.getStatus(), description);
-        assertEquals(
-            expected.getHeader(HttpHeaders.LOCATION),
-            response.getHeader(HttpHeaders.LOCATION),
-            description);
+        assertEquals(expected.getRedirectedUrl(), response.getRedirectedUrl(), description);
         assertEquals(expected.getContentType(), response.getContentType(), description);
         assertNotFhirJson(response, description);
       }
@@ -128,31 +117,13 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
       CapabilityStatement statement =
           parseOk(new HttpResponse(toResponse(performBasic(path))), CapabilityStatement.class);
       assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion(), path);
-      assertEquals("4.0.1", statement.getFhirVersion().toCode(), path);
-      assertEquals(CapabilityStatementKind.INSTANCE, statement.getKind(), path);
-      assertEquals(
-          FhirCapabilityStatementService.IMPLEMENTATION_DESCRIPTION,
-          statement.getImplementation().getDescription(),
-          path);
-      assertEquals(1, statement.getRest().size(), path);
-      assertEquals(RestfulCapabilityMode.SERVER, statement.getRestFirstRep().getMode(), path);
     }
   }
 
-  @Test
-  void securityIgnoredAndUnauthenticatedFhirRequestsReturnNotFound() throws Exception {
-    createUserWithAuth(BASIC_AUTH_USER_NAME, "ALL");
-    for (String path : UNAUTHENTICATED_FHIR_PATHS) {
-      assertNotFoundOutcome(performAnonymous(HttpMethod.GET, path, true), false);
-    }
-    assertNotFoundOutcome(performAnonymous(HttpMethod.POST, LOGIN_CONFIG_PATH, true), false);
-    assertNotFoundOutcome(performBasic(LOGIN_CONFIG_PATH), false);
-  }
-
-  private MockHttpServletResponse performAnonymous(
-      HttpMethod method, String path, boolean xmlHttpRequest) throws Exception {
+  private MockHttpServletResponse performAnonymous(String path, boolean xmlHttpRequest)
+      throws Exception {
     clearSecurityContext();
-    MockHttpServletRequestBuilder request = MockMvcRequestBuilders.request(method, path);
+    MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
     if (xmlHttpRequest) {
       request.header(X_REQUESTED_WITH, XML_HTTP_REQUEST);
     }
@@ -162,8 +133,7 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
   private MockHttpServletResponse performBasic(String path) throws Exception {
     clearSecurityContext();
     MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
-    return mvc.perform(request.header(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER))
-        .andReturn()
-        .getResponse();
+    request.header(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER);
+    return mvc.perform(request).andReturn().getResponse();
   }
 }

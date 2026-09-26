@@ -29,7 +29,7 @@
  */
 package org.hisp.dhis.fhir;
 
-import static org.hisp.dhis.fhir.FhirPostgresControllerTestBase.parseOk;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.parseOk;
 import static org.hisp.dhis.http.HttpClientAdapter.Body;
 import static org.hisp.dhis.http.HttpMethod.*;
 import static org.hisp.dhis.http.HttpStatus.*;
@@ -37,6 +37,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.*;
+import org.hisp.dhis.external.conf.*;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
 import org.hisp.dhis.http.HttpMethod;
 import org.hisp.dhis.http.HttpStatus;
@@ -74,6 +76,7 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
       """;
 
   @Autowired private TestSetup testSetup;
+  @Autowired private DhisConfigurationProvider config;
 
   @Test
   void capabilityStatementListsOnlyMappedResourcesAndParameters() throws IOException {
@@ -111,6 +114,21 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     assertOutcome(GET, METADATA_PATH + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
     assertOutcome(
         GET, METADATA_PATH + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
+  }
+
+  @Test
+  void configuredServerBaseUrlReplacesForgedHost() {
+    Header forged = new Header("Host", "evil.example");
+    var fallback = parseOk(GET(METADATA_PATH, forged), CapabilityStatement.class);
+    assertEquals("http://evil.example" + FHIR_BASE, fallback.getImplementation().getUrl());
+    String trusted = "https://dhis.example.org/dhis";
+    config.getProperties().put(ConfigurationKey.SERVER_BASE_URL.getKey(), trusted);
+    try {
+      var statement = parseOk(GET(METADATA_PATH, forged), CapabilityStatement.class);
+      assertEquals(trusted + FHIR_BASE, statement.getImplementation().getUrl());
+    } finally {
+      config.getProperties().remove(ConfigurationKey.SERVER_BASE_URL.getKey());
+    }
   }
 
   @Test

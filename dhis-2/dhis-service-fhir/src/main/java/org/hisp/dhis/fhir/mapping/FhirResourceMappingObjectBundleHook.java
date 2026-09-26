@@ -29,97 +29,88 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
+import jakarta.annotation.Resource;
 import java.util.*;
 import java.util.function.*;
+import java.util.stream.*;
 import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.IdentifiableObject;
 import org.hisp.dhis.dxf2.metadata.objectbundle.ObjectBundle;
 import org.hisp.dhis.dxf2.metadata.objectbundle.hooks.AbstractObjectBundleHook;
 import org.hisp.dhis.feedback.ErrorReport;
 import org.hisp.dhis.preheat.*;
+import org.hisp.dhis.security.acl.AclService;
 import org.springframework.stereotype.Component;
 
-/** Validates FHIR resource mappings during metadata import. */
+/**
+ * Validates FHIR resource mappings during metadata import when the importing user may create the
+ * mapping or update its stored version; otherwise it reports nothing and skips no-ACL lookups.
+ */
 @Component
 @RequiredArgsConstructor
 public class FhirResourceMappingObjectBundleHook
     extends AbstractObjectBundleHook<FhirResourceMapping> {
-  private static final String UNIQUENESS_VIEW =
-      FhirResourceMappingObjectBundleHook.class.getName() + ".uniquenessView";
+  private static final String UNIQUENESS_VIEW = "fhirResourceMappingUniquenessView";
   private final FhirResourceMappingStore store;
   private final FhirResourceMappingValidator validator;
+  @Resource private AclService aclService;
 
-  /** Reports every violation against the stored and bundle mappings and the preheat metadata. */
+  /** For a user who may write the mapping, reports its violations against mappings and metadata. */
   @Override
   public void validate(
       FhirResourceMapping mapping, ObjectBundle bundle, Consumer<ErrorReport> addReports) {
-    validator.validate(mapping, others(mapping, bundle), lookup(bundle)).forEach(addReports);
+    if (mayWrite(mapping, bundle)) {
+      validator.validate(mapping, others(mapping, bundle), lookup(bundle)).forEach(addReports);
+    }
+  }
+
+  /** Whether the bundle user, when there is one, may update the stored mapping or create it. */
+  private boolean mayWrite(FhirResourceMapping mapping, ObjectBundle bundle) {
+    var user = bundle.getUserDetails();
+    Preheat preheat = bundle.getPreheat();
+    return user == null
+        || (bundle.isPersisted(mapping)
+            ? aclService.canUpdate(user, preheat.get(bundle.getPreheatIdentifier(), mapping))
+            : aclService.canCreate(user, FhirResourceMapping.class));
   }
 
   private List<FhirResourceMapping> others(FhirResourceMapping mapping, ObjectBundle bundle) {
     String key = FhirResourceMappingValidator.uniquenessKey(mapping);
-    if (key == null) {
-      return List.of();
-    }
     String uid = mapping.getUid();
-    return view(mapping, bundle).byKey().getOrDefault(key, List.of()).stream()
-        .filter(other -> other != mapping && (uid == null || !uid.equals(other.getUid())))
-        .toList();
+    return key == null
+        ? List.of()
+        : view(mapping, bundle).byKey().getOrDefault(key, List.of()).stream()
+            .filter(other -> other != mapping && (uid == null || !uid.equals(other.getUid())))
+            .toList();
   }
 
+  /** Groups the stored mappings, replaced by bundle mappings of equal UID, by uniqueness key. */
   private UniquenessView view(FhirResourceMapping mapping, ObjectBundle bundle) {
     if (bundle.getExtras(mapping, UNIQUENESS_VIEW) instanceof UniquenessView kept) {
       return kept;
     }
-    Map<String, FhirResourceMapping> byUid = new LinkedHashMap<>();
-    List<FhirResourceMapping> withoutUid = new ArrayList<>();
-    for (FhirResourceMapping stored : store.getAllNoAcl()) {
-      collect(stored, byUid, withoutUid);
-    }
     Iterable<FhirResourceMapping> imported = bundle.getObjects(FhirResourceMapping.class);
-    for (FhirResourceMapping candidate : imported) {
-      collect(candidate, byUid, withoutUid);
-    }
-    List<FhirResourceMapping> overlay = new ArrayList<>(byUid.values());
-    overlay.addAll(withoutUid);
-    Map<String, List<FhirResourceMapping>> byKey = new HashMap<>();
-    for (FhirResourceMapping candidate : overlay) {
-      String key = FhirResourceMappingValidator.uniquenessKey(candidate);
-      if (key != null) {
-        byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(candidate);
-      }
-    }
-    UniquenessView view = new UniquenessView(byKey);
-    for (FhirResourceMapping candidate : imported) {
-      bundle.putExtras(candidate, UNIQUENESS_VIEW, view);
-    }
+    Map<Object, FhirResourceMapping> byUid = new LinkedHashMap<>();
+    Stream.concat(store.getAllNoAcl().stream(), StreamSupport.stream(imported.spliterator(), false))
+        .filter(Objects::nonNull)
+        .forEach(m -> byUid.put(Objects.requireNonNullElseGet(m.getUid(), Object::new), m));
+    UniquenessView view =
+        new UniquenessView(
+            byUid.values().stream()
+                .filter(each -> FhirResourceMappingValidator.uniquenessKey(each) != null)
+                .collect(Collectors.groupingBy(FhirResourceMappingValidator::uniquenessKey)));
+    imported.forEach(candidate -> bundle.putExtras(candidate, UNIQUENESS_VIEW, view));
     return view;
   }
 
   private record UniquenessView(Map<String, List<FhirResourceMapping>> byKey) {}
 
-  private static void collect(
-      FhirResourceMapping mapping,
-      Map<String, FhirResourceMapping> byUid,
-      List<FhirResourceMapping> withoutUid) {
-    if (mapping == null) {
-      return;
-    }
-    if (mapping.getUid() == null) {
-      withoutUid.add(mapping);
-    } else {
-      byUid.put(mapping.getUid(), mapping);
-    }
-  }
-
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup(
       ObjectBundle bundle) {
     Preheat preheat = bundle.getPreheat();
     return (klass, uid) -> {
-      IdentifiableObject found = null;
-      if (preheat != null) {
-        found = preheat.get(PreheatIdentifier.UID, klass, uid);
-      }
+      IdentifiableObject found =
+          preheat == null ? null : preheat.get(PreheatIdentifier.UID, klass, uid);
       return found != null ? found : manager.getNoAcl(klass, uid);
     };
   }

@@ -70,17 +70,19 @@ public class FhirSearchParameters {
   public static final Set<String> FORMATS =
       Set.of("json", "application/json", "application/fhir+json");
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
+  public static final int MAX_OR_VALUES = 100;
+  public static final int MAX_OR_LENGTH = 4096;
   private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
   private static final String OR_SEPARATOR = ",";
+  private static final String OR_LIMIT =
+      "must not exceed " + MAX_OR_VALUES + " values or " + MAX_OR_LENGTH + " characters";
   private static final char TOKEN_SEPARATOR = '|';
   private static final String PATIENT_REFERENCE_PREFIX = FhirResourceType.PATIENT.fhirType() + "/";
   private static final Pattern POSITIVE_INTEGER = Pattern.compile("^[1-9][0-9]*$");
   private static final Pattern BIRTHDATE_VALUE =
       Pattern.compile("^(eq|ge|le|gt|lt)?([0-9]{4}-[0-9]{2}-[0-9]{2})$");
   private static final Pattern ISO_DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
-  private static final String TRUE = "true";
-  private static final String FALSE = "false";
   private final SystemSettingsProvider settingsProvider;
 
   /** A FHIR operation and the query parameters it accepts, in validation order. */
@@ -156,7 +158,7 @@ public class FhirSearchParameters {
       return target;
     }
 
-    /** Returns the Tracker filter operator; {@link #BIRTHDATE} uses the operator of its prefix. */
+    /** Returns the default Tracker operator; {@link DateCriterion} holds a birthdate prefix. */
     public QueryOperator defaultOperator() {
       return defaultOperator;
     }
@@ -185,7 +187,7 @@ public class FhirSearchParameters {
     }
   }
 
-  /** The validated query of one FHIR operation; absent parameters stay empty, null or default. */
+  /** A query as {@code parse} returns it: validated, with absent values empty, null or default. */
   public record ParsedSearch(
       Operation operation,
       List<String> trackedEntityIds,
@@ -353,7 +355,13 @@ public class FhirSearchParameters {
 
   private static List<String> elements(String name, String value) {
     if (OR_PARAMETERS.contains(name)) {
-      List<String> elements = List.of(value.split(OR_SEPARATOR, -1));
+      if (value.length() > MAX_OR_LENGTH) {
+        throw FhirApiException.invalidParameter(name, OR_LIMIT);
+      }
+      List<String> elements = List.of(value.split(OR_SEPARATOR, MAX_OR_VALUES + 1));
+      if (elements.size() > MAX_OR_VALUES) {
+        throw FhirApiException.invalidParameter(name, OR_LIMIT);
+      }
       if (elements.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");
       }
@@ -483,6 +491,7 @@ public class FhirSearchParameters {
     throw FhirApiException.invalidParameter(name, "must be a positive integer");
   }
 
+  /** Rejects a Patient {@code _count} above 2147483646 or a positive KeyTrackedEntityMaxLimit. */
   private void checkPatientPageSize(int count, boolean explicit) {
     SystemSettings settings = settingsProvider.getCurrentSettings();
     int limit = settings == null ? 0 : settings.getTrackedEntityMaxLimit();
@@ -645,7 +654,7 @@ public class FhirSearchParameters {
       return isIsoDate(value);
     }
     if (valueType.isBoolean()) {
-      return TRUE.equals(value) || FALSE.equals(value);
+      return "true".equals(value) || "false".equals(value);
     }
     return true;
   }

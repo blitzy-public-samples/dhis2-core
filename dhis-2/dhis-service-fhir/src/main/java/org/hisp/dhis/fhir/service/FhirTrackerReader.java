@@ -45,13 +45,9 @@ import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.hisp.dhis.fhir.search.FhirSearchParameters;
 import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
-import org.hisp.dhis.webapi.controller.tracker.export.enrollment.EnrollmentRequestParams;
-import org.hisp.dhis.webapi.controller.tracker.export.enrollment.FhirEnrollmentExportAdapter;
-import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.FhirTrackedEntityExportAdapter;
-import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.TrackedEntityRequestParams;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Page;
-import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
+import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
+import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.*;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.springframework.stereotype.Service;
 
 /** Reads Tracker data for the FHIR API and translates export-path errors into FHIR errors. */
@@ -80,7 +76,7 @@ public class FhirTrackerReader {
     this.timeout = timeout;
   }
 
-  /** Runs {@code operation} within the thread's deadline, setting a new one when none is held. */
+  /** Runs {@code operation} under the held or a configured new deadline, if any; clears its own. */
   public <T> T withinDeadline(@Nonnull Supplier<T> operation) {
     Objects.requireNonNull(operation, "operation");
     boolean owner = DeadlineHolder.get() == null;
@@ -159,15 +155,10 @@ public class FhirTrackerReader {
   }
 
   private static boolean hidesSelector(@CheckForNull String message, UID... selectors) {
-    if (message == null || !message.contains(SELECTOR_NOT_FOUND)) {
-      return false;
-    }
-    for (UID selector : selectors) {
-      if (selector != null && cites(message, selector.getValue())) {
-        return true;
-      }
-    }
-    return false;
+    return message != null
+        && message.contains(SELECTOR_NOT_FOUND)
+        && Arrays.stream(selectors)
+            .anyMatch(selector -> selector != null && cites(message, selector.getValue()));
   }
 
   private static FhirApiException translateBadRequest(
@@ -246,27 +237,21 @@ public class FhirTrackerReader {
 
   @CheckForNull
   private static String withoutFilter(@CheckForNull String message, @CheckForNull String filter) {
-    if (message == null || filter == null || filter.isEmpty()) {
-      return message;
-    }
-    return message.replace(filter, " ");
+    return message == null || filter == null || filter.isEmpty()
+        ? message
+        : message.replace(filter, " ");
   }
 
   private static boolean cites(@CheckForNull String message, String uid) {
     if (message == null || uid == null || uid.isEmpty()) {
       return false;
     }
-    int from = 0;
-    int index;
-    while ((index = message.indexOf(uid, from)) >= 0) {
+    for (int index = message.indexOf(uid); index >= 0; index = message.indexOf(uid, index + 1)) {
       int end = index + uid.length();
-      boolean startsToken = index == 0 || !Character.isLetterOrDigit(message.charAt(index - 1));
-      boolean endsToken =
-          end == message.length() || !Character.isLetterOrDigit(message.charAt(end));
-      if (startsToken && endsToken) {
+      if ((index == 0 || !Character.isLetterOrDigit(message.charAt(index - 1)))
+          && (end == message.length() || !Character.isLetterOrDigit(message.charAt(end)))) {
         return true;
       }
-      from = index + 1;
     }
     return false;
   }
@@ -279,14 +264,8 @@ public class FhirTrackerReader {
     /** Copies every component in order into an unmodifiable collection; null becomes empty. */
     public FhirSearchOrigin {
       attributeToParameter = copyOf(attributeToParameter);
-      suppliedAttributeParameters =
-          suppliedAttributeParameters == null
-              ? List.of()
-              : List.copyOf(suppliedAttributeParameters);
-      configuredAttributeParameters =
-          configuredAttributeParameters == null
-              ? List.of()
-              : List.copyOf(configuredAttributeParameters);
+      suppliedAttributeParameters = copyOf(suppliedAttributeParameters);
+      configuredAttributeParameters = copyOf(configuredAttributeParameters);
     }
 
     public static FhirSearchOrigin empty() {
@@ -304,6 +283,10 @@ public class FhirTrackerReader {
                   Objects.requireNonNull(uid, "attribute"),
                   Objects.requireNonNull(parameter, "parameter")));
       return Collections.unmodifiableMap(copy);
+    }
+
+    private static List<String> copyOf(@CheckForNull List<String> source) {
+      return source == null ? List.of() : List.copyOf(source);
     }
   }
 

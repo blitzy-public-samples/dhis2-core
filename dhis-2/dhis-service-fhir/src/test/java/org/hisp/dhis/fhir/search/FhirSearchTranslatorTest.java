@@ -74,7 +74,6 @@ import org.springframework.mock.web.MockHttpServletRequest;
 class FhirSearchTranslatorTest {
   private static final String TYPE = "TeType00001";
   private static final String PROGRAM = "Program0001";
-  private static final String STAGE = "Stage000001";
   private static final String TEA_IDENT = "TeaIdent001";
   private static final String TEA_IDENT_2 = "TeaIdent002";
   private static final String TEA_FAMILY = "TeaFamily01";
@@ -94,6 +93,10 @@ class FhirSearchTranslatorTest {
   private static final String LOINC = "http://loinc.org";
   private static final String HEIGHT = "8302-2";
   private static final String WEIGHT = "29463-7";
+  private static final List<FhirFieldMapping> OBSERVATION_VALUES =
+      entries(
+          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_1).system(LOINC).code(HEIGHT),
+          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_2).system(LOINC).code(WEIGHT));
   private static final List<FhirResourceType> EVENT_TYPES =
       List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION);
   private static final Map<String, ValueType> PATIENT_VALUE_TYPES =
@@ -142,23 +145,6 @@ class FhirSearchTranslatorTest {
     return patientWith(PATIENT_VALUE_TYPES, gender);
   }
 
-  private static ResolvedMapping eventMapping(FhirResourceType type) {
-    List<FhirFieldMapping> fields =
-        switch (type) {
-          case ENCOUNTER -> entries(Entry.constant(ENCOUNTER_CLASS, "urn:class", "AMB", "amb"));
-          case IMMUNIZATION ->
-              entries(
-                  Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_1),
-                  Entry.constant(IMMUNIZATION_VACCINE_CODE, "urn:cvx", "03", "MMR"));
-          case OBSERVATION ->
-              entries(
-                  Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_1).system(LOINC).code(HEIGHT),
-                  Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_2).system(LOINC).code(WEIGHT));
-          case PATIENT -> throw new IllegalArgumentException(type.name());
-        };
-    return resolved(type, TYPE, PROGRAM, STAGE, fields, Map.of(DE_1, INTEGER, DE_2, NUMBER));
-  }
-
   private static MockHttpServletRequest request(String query) {
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/fhir");
     for (String pair : query.isEmpty() ? new String[0] : query.split("&")) {
@@ -175,7 +161,7 @@ class FhirSearchTranslatorTest {
 
   private TranslatedSearch translateEvents(FhirResourceType type, String query) {
     var parsed = parameters.parse(Operation.search(type), request(query), null);
-    return translator.toEnrollmentParams(parsed, List.of(eventMapping(type)), PROGRAM);
+    return translator.toEnrollmentParams(parsed, PROGRAM);
   }
 
   private Map<UID, List<QueryFilter>> patientFilters(ResolvedMapping mapping, String query)
@@ -220,11 +206,10 @@ class FhirSearchTranslatorTest {
   }
 
   private void assertCodes(String query, boolean height, boolean weight) {
-    List<FhirFieldMapping> values = eventMapping(OBSERVATION).entries(OBSERVATION_VALUE);
     TranslatedSearch search = translateEvents(OBSERVATION, query);
-    assertEquals(height, search.matchesCode(values.get(0)), query);
-    assertEquals(weight, search.matchesCode(values.get(1)), query);
-    assertEquals(!height && !weight, search.empty(), query);
+    assertEquals(height, search.matchesCode(OBSERVATION_VALUES.get(0)), query);
+    assertEquals(weight, search.matchesCode(OBSERVATION_VALUES.get(1)), query);
+    assertFalse(search.empty(), query);
   }
 
   @Test
@@ -279,13 +264,18 @@ class FhirSearchTranslatorTest {
     ResolvedMapping blank = genderMapping(Map.of("", "male"));
     assertThrows(IllegalArgumentException.class, () -> translatePatient(blank, "gender=male"));
     ResolvedMapping shared = genderMapping(Map.of("A;B", "male", "C", "male", "F", "female"));
-    assertInvalid(
-        "gender", () -> translatePatient(shared, "gender=male"), TEA_GENDER, "A;B", "a;b");
     assertFilter(patientFilters(shared, "gender=female"), TEA_GENDER, EQ, "f");
     ResolvedMapping separator = genderMapping(Map.of("A;B", "male", "F", "female"));
     List<QueryFilter> single = patientFilters(separator, "gender=male").get(UID.of(TEA_GENDER));
     assertEquals(List.of(new QueryFilter(EQ, "a;b")), single);
-    assertInvalid("gender", () -> translatePatient(separator, "gender=male,female"), TEA_GENDER);
+    Executable sharedMale = () -> translatePatient(shared, "gender=male");
+    Executable separatorBoth = () -> translatePatient(separator, "gender=male,female");
+    for (Executable unusable : List.of(sharedMale, separatorBoth)) {
+      FhirApiException e = assertThrows(FhirApiException.class, unusable);
+      assertEquals(HttpStatus.NOT_IMPLEMENTED, e.getStatus(), e.getDiagnostics());
+      assertEquals(IssueType.NOTSUPPORTED, e.getIssueType(), e.getDiagnostics());
+      assertEquals("The configured mapping for Patient cannot be used", e.getDiagnostics());
+    }
   }
 
   @Test
@@ -441,18 +431,25 @@ class FhirSearchTranslatorTest {
   }
 
   @Test
-  void largeOrListsAreAccepted() throws BadRequestException {
-    List<String> ids = Stream.iterate(0, i -> i + 1).limit(500).map("Te%09d"::formatted).toList();
-    TranslatedSearch patients = translatePatient(FULL_MAPPING, "_id=" + String.join(",", ids));
-    assertEquals(UID.of(ids), patients.trackedEntityParams().getTrackedEntities());
-    List<String> encounters = ids.stream().limit(200).map(id -> id + "-" + EVT).toList();
-    TranslatedSearch events = translateEvents(ENCOUNTER, "_id=" + String.join(",", encounters));
-    assertEquals(200, events.enrollmentParams().getEnrollments().size());
-    assertEquals(Set.copyOf(encounters), events.logicalIds());
-    String genders = String.join(",", Collections.nCopies(150, "male,female"));
-    assertFilter(patientFilters(FULL_MAPPING, "gender=" + genders), TEA_GENDER, IN, "m", "f");
-    String codes = String.join(",", Collections.nCopies(200, LOINC + "|" + HEIGHT));
-    assertCodes("patient=" + TE_1 + "&code=" + codes, true, false);
+  void orListsAreBoundedInValuesAndLength() {
+    List<String> ids = Stream.iterate(0, i -> i + 1).limit(101).map("Te%09d"::formatted).toList();
+    List<String> obs = ids.stream().map(id -> id + "-" + EVT + "-" + DE_1).toList();
+    var patients = translatePatient(FULL_MAPPING, "_id=" + String.join(",", ids.subList(0, 100)));
+    assertEquals(UID.of(ids.subList(0, 100)), patients.trackedEntityParams().getTrackedEntities());
+    var events = translateEvents(OBSERVATION, "_id=" + String.join(",", obs.subList(0, 100)));
+    assertEquals(Set.copyOf(obs.subList(0, 100)), events.logicalIds());
+    String byPatient = "patient=" + TE_1 + "&code=";
+    assertCodes(byPatient + String.join(",", ids.subList(0, 99)) + "," + HEIGHT, true, false);
+    assertCodes(byPatient + "x".repeat(4096), false, false);
+    String tooMany = String.join(",", ids);
+    String males = String.join(",", Collections.nCopies(101, "male"));
+    assertAllInvalid(q -> translatePatient(FULL_MAPPING, q), "_id=" + tooMany + " gender=" + males);
+    Consumer<String> observation = q -> translateEvents(OBSERVATION, q + "&patient=" + TE_1);
+    assertAllInvalid(observation, "_id=" + String.join(",", obs) + " code=" + tooMany);
+    for (String code : List.of(tooMany, "x".repeat(4097))) {
+      var message = assertInvalid("code", () -> observation.accept("code=" + code), "Te0", "xx");
+      assertTrue(message.endsWith("must not exceed 100 values or 4096 characters"), message);
+    }
   }
 
   @Test

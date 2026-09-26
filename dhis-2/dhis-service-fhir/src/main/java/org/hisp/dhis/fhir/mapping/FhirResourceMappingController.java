@@ -32,19 +32,24 @@ package org.hisp.dhis.fhir.mapping;
 import static java.util.stream.Collectors.joining;
 import static org.hisp.dhis.dxf2.webmessage.WebMessageUtils.error;
 
-import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.*;
 import java.io.*;
 import java.util.List;
+import java.util.regex.*;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.hisp.dhis.common.OpenApi;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
+import org.hisp.dhis.gist.*;
 import org.hisp.dhis.query.GetObjectListParams;
 import org.hisp.dhis.webapi.controller.AbstractCrudController;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.*;
+import org.springframework.util.function.ThrowingConsumer;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /** CRUD API for {@link FhirResourceMapping} metadata and host of the FHIR mapping settings page. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:metadata"})
@@ -55,14 +60,15 @@ import org.springframework.web.bind.annotation.*;
 public class FhirResourceMappingController
     extends AbstractCrudController<FhirResourceMapping, GetObjectListParams> {
   static final String SETTINGS_PAGE = "org/hisp/dhis/fhir/settings/fhir-settings.html";
+  private static final Pattern FORMULA = Pattern.compile("^(\"?)(\\x{FEFF}*[=+\\-@\t\r])");
+  private static final String CELL = "\"(?:[^\"]|\"\")*\"|[^\"\\r\\n\\x{%x}]+";
   private final FhirResourceMappingValidator validator;
   private final FhirResourceMappingStore store;
 
   /** Serves the settings page as uncached UTF-8 HTML, or a 500 web message when it is missing. */
   @OpenApi.Ignore
   @GetMapping(value = "/settings", produces = MediaType.TEXT_HTML_VALUE)
-  public void getSettingsPage(HttpServletResponse response)
-      throws IOException, WebMessageException {
+  public void getSettingsPage(HttpServletResponse out) throws IOException, WebMessageException {
     InputStream page;
     try {
       page = new ClassPathResource(SETTINGS_PAGE).getInputStream();
@@ -71,10 +77,55 @@ public class FhirResourceMappingController
       throw new WebMessageException(error("The FHIR settings page is not available"));
     }
     try (page) {
-      response.setContentType("text/html;charset=UTF-8");
-      response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
-      page.transferTo(response.getOutputStream());
+      out.setContentType("text/html;charset=UTF-8");
+      out.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+      page.transferTo(out.getOutputStream());
     }
+  }
+
+  @Override
+  protected String applyCsvSteps(
+      String fields, List<FhirResourceMapping> list, char separator, String join, boolean noHeader)
+      throws IOException {
+    return neutralize(super.applyCsvSteps(fields, list, separator, join, noHeader), separator);
+  }
+
+  @Override
+  public void getObjectGistAsCsv(UID uid, GistObjectParams params, HttpServletResponse response) {
+    neutralize(response, csv -> super.getObjectGistAsCsv(uid, params, csv));
+  }
+
+  @Override
+  public void getObjectListGistAsCsv(
+      GistObjectListParams params, HttpServletRequest request, HttpServletResponse response) {
+    neutralize(response, csv -> super.getObjectListGistAsCsv(params, request, csv));
+  }
+
+  @Override
+  public void getObjectPropertyGistAsCsv(
+      UID uid,
+      String property,
+      GistObjectPropertyParams params,
+      HttpServletRequest request,
+      HttpServletResponse response) {
+    neutralize(response, r -> super.getObjectPropertyGistAsCsv(uid, property, params, request, r));
+  }
+
+  /** Buffers what {@code gist} writes and writes it neutralized, in the platform charset. */
+  @SneakyThrows
+  private static void neutralize(
+      HttpServletResponse response, ThrowingConsumer<HttpServletResponse> gist) {
+    var csv = new ContentCachingResponseWrapper(response);
+    gist.acceptWithException(csv);
+    String text = neutralize(new String(csv.getContentAsByteArray()), ',');
+    response.getOutputStream().write(text.getBytes());
+  }
+
+  /** Prefixes {@code '} to cell text that starts, after any BOM, with =, +, -, @, tab or CR. */
+  static String neutralize(String csv, char separator) {
+    Matcher cells = Pattern.compile(CELL.formatted((int) separator)).matcher(csv);
+    return cells.replaceAll(
+        c -> Matcher.quoteReplacement(FORMULA.matcher(c.group()).replaceFirst("$1'$2")));
   }
 
   @Override

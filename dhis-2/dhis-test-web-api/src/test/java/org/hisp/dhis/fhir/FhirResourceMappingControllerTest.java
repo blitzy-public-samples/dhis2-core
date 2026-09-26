@@ -29,11 +29,8 @@
  */
 package org.hisp.dhis.fhir;
 
-import static java.util.stream.Collectors.joining;
-import static java.util.stream.Collectors.toMap;
-import static java.util.stream.Collectors.toSet;
+import static java.util.stream.Collectors.*;
 import static org.hisp.dhis.feedback.ErrorCode.*;
-import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.OTHER_MAPPING;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
@@ -45,8 +42,7 @@ import jakarta.servlet.http.Cookie;
 import java.io.IOException;
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
+import java.util.stream.*;
 import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.mapping.*;
@@ -54,15 +50,13 @@ import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
 import org.hisp.dhis.test.config.H2DhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.H2ControllerIntegrationTestBase;
-import org.hisp.dhis.test.webapi.json.domain.JsonImportSummary;
-import org.hisp.dhis.test.webapi.json.domain.JsonWebMessage;
+import org.hisp.dhis.test.webapi.json.domain.*;
 import org.hisp.dhis.webapi.controller.tracker.TestSetup;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
-import org.springframework.http.MediaType;
 import org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.ContextConfiguration;
@@ -72,9 +66,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Tests {@code /api/fhirResourceMappings} on H2: CRUD, metadata round trip, {@code 409} for every
- * rule violation with or without bypass options, import error reports, write authorities and the
- * settings page behind CSRF protection.
+ * Tests {@code /api/fhirResourceMappings} on H2: CRUD, metadata round trip, {@code 409} for
+ * validator-rule cases and representative invalid mappings with bypass options, import reports,
+ * write authorities and sharing, CSV exports and the settings page behind CSRF protection.
  */
 @Transactional
 @ContextConfiguration(classes = FhirResourceMappingControllerTest.FhirApiEnabledConfig.class)
@@ -93,18 +87,15 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static final String ENDPOINT = FhirResourceMappingSchemaDescriptor.API_ENDPOINT;
   private static final String MAPPINGS = FhirResourceMappingSchemaDescriptor.PLURAL;
   private static final String PERSON = "ja8NY4PW7Xm";
-  private static final String TYPE_WITHOUT_PROGRAM = "Ip8NY4PW7Xm";
   private static final String PROGRAM = "BFcipDERJnf";
   private static final String STAGE = "NpsdDv6kKSO";
   private static final String EVENT_PROGRAM = "BFcipDERJne";
-  private static final String EVENT_PROGRAM_STAGE = "NpsdDv6kKSe";
   private static final String OTHER_PROGRAM_STAGE = "SKNvpoLioON";
   private static final String INTEGER_ATTRIBUTE = "integerAttr";
   private static final String FAMILY_ATTRIBUTE = "toUpdate000";
   private static final String GIVEN_ATTRIBUTE = "dIVt4l5vIOa";
   private static final String PROGRAM_ONLY_ATTRIBUTE = "fRGt4l6yIRb";
   private static final String INTEGER_ELEMENT = "DATAEL00006";
-  private static final String NUMBER_ELEMENT = "GieVkTxp4HH";
   private static final String OTHER_STAGE_ELEMENT = "FieVkTxp4HE";
   private static final String IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:integer-attr";
   private static final String CODING_SYSTEM = "urn:dhis2:fhir-test:coding";
@@ -113,13 +104,17 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static final String INVALID_NAME = "FHIR invalid mapping";
   private static final String STORED_ID = "FhirMapPat1";
   private static final String STORED_NAME = "FHIR stored Patient";
-  private static final String OBSERVATION_ID = "FhirMapObs1";
+  private static final String STORED_PATH = ENDPOINT + "/" + STORED_ID;
   private static final List<String> ENTRY_FIELDS =
       List.of("target", "sourceType", "source", "system", "code", "display", "unit", "valueMap");
   private static final ErrorMessage DUPLICATE =
-      errorMessage(E5003, "resourceType", PATIENT.name(), INVALID_ID, OTHER_MAPPING);
+      error(E5003, "resourceType", PATIENT, INVALID_ID, FhirResourceMappingValidator.OTHER_MAPPING);
+  private static final String RENAMED = "FHIR renamed Patient";
+  private static final String RENAME_PATCH =
+      "[{\"op\": \"replace\", \"path\": \"/name\", \"value\": \"" + RENAMED + "\"}]";
   private static final List<String> MAPPING_FIELDS =
-      List.of("name", "resourceType", "trackedEntityType.id", "program.id", "programStage.id");
+      List.of(
+          "name", "code", "resourceType", "trackedEntityType.id", "program.id", "programStage.id");
   private static final String STATUS_PATH = "fhir/metadata";
   private static final String LIST_PATH =
       "fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false";
@@ -148,36 +143,32 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static final Pattern SCRIPT = Pattern.compile("<script[^>]*>([\\s\\S]*?)</script>");
   private static final List<String> PATIENT_ENTRIES =
       List.of(
-          identifier(INTEGER_ATTRIBUTE, IDENTIFIER_SYSTEM),
+          entry(PATIENT_IDENTIFIER, ATTRIBUTE, INTEGER_ATTRIBUTE, IDENTIFIER_SYSTEM),
           attribute(PATIENT_FAMILY_NAME, FAMILY_ATTRIBUTE),
           attribute(PATIENT_GIVEN_NAME, GIVEN_ATTRIBUTE));
   private static final List<String> GENDER_ENTRIES =
-      replace(PATIENT_ENTRIES, 2, gender(GIVEN_ATTRIBUTE, "F", "female", "M", "male"));
+      put(PATIENT_ENTRIES, 2, gender(GIVEN_ATTRIBUTE, "F", "female", "M", "male"));
   private static final List<String> ENCOUNTER_ENTRIES =
-      List.of(constant(ENCOUNTER_CLASS, "AMB"), dataElement(ENCOUNTER_TYPE, "DATAEL00005"));
+      List.of(constant(ENCOUNTER_CLASS, "AMB"), entry(ENCOUNTER_TYPE, DATA_ELEMENT, "DATAEL00005"));
   private static final List<String> CLASS_ONLY = ENCOUNTER_ENTRIES.subList(0, 1);
-  private static final List<String> IMMUNIZATION_ENTRIES =
-      List.of(
-          dataElement(IMMUNIZATION_ADMINISTERED, "DATAEL00001"),
-          dataElement(IMMUNIZATION_LOT_NUMBER, "DATAEL00002"),
-          constant(IMMUNIZATION_VACCINE_CODE, "08"));
   private static final List<String> OBSERVATION_ENTRIES =
       List.of(
           observation(INTEGER_ELEMENT, "integer", "Integer value", "{count}"),
-          observation(NUMBER_ELEMENT, "number", "Number value", "kg"));
+          observation("GieVkTxp4HH", "number", "Number value", "kg"));
+  private static final String STORED_PATIENT =
+      withId(STORED_ID, mapping(STORED_NAME, PATIENT, PATIENT_ENTRIES));
   private static final String FULL_PATIENT =
       withId(STORED_ID, mapping(STORED_NAME, PATIENT, GENDER_ENTRIES));
   private static final String FULL_OBSERVATION =
-      withId(OBSERVATION_ID, mapping("FHIR stored Observation", OBSERVATION, OBSERVATION_ENTRIES));
+      withId("FhirMapObs1", mapping("FHIR stored Observation", OBSERVATION, OBSERVATION_ENTRIES));
 
   @Autowired private TestSetup testSetup;
-  @Autowired private FhirResourceMappingStore store;
   @Autowired private FilterChainProxy springSecurityFilterChain;
 
   @BeforeEach
   void importTrackerMetadata() throws IOException {
     testSetup.importMetadata();
-    store.getAllNoAcl().forEach(store::delete);
+    manager.getAllNoAcl(FhirResourceMapping.class).forEach(manager::delete);
     manager.flush();
     manager.clear();
   }
@@ -187,13 +178,11 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     String patient = mapping(STORED_NAME, PATIENT, GENDER_ENTRIES);
     String uid = assertStatus(HttpStatus.CREATED, POST(ENDPOINT, patient));
     assertStoredAsSent(withId(uid, patient));
-    String replacedName = "FHIR replaced Patient";
-    assertStatus(
-        HttpStatus.OK, PUT(ENDPOINT + "/" + uid, mapping(replacedName, PATIENT, PATIENT_ENTRIES)));
-    assertStored(uid, replacedName, PATIENT_ENTRIES);
-    String patch = "[{\"op\": \"replace\", \"path\": \"/name\", \"value\": \"FHIR patched\"}]";
-    assertStatus(HttpStatus.OK, PATCH(ENDPOINT + "/" + uid, patch));
-    assertStored(uid, "FHIR patched", PATIENT_ENTRIES);
+    String replaced = withId(uid, mapping("FHIR replaced Patient", PATIENT, PATIENT_ENTRIES));
+    assertStatus(HttpStatus.OK, PUT(ENDPOINT + "/" + uid, replaced));
+    assertStoredAsSent(replaced);
+    assertStatus(HttpStatus.OK, PATCH(ENDPOINT + "/" + uid, RENAME_PATCH));
+    assertStoredAsSent(replaced.replace("FHIR replaced Patient", RENAMED));
     assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + uid));
     assertStatus(HttpStatus.NOT_FOUND, GET(ENDPOINT + "/" + uid));
     assertEquals(0, mappingCount());
@@ -205,7 +194,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     mappings.forEach(mapping -> assertStatus(HttpStatus.CREATED, POST(ENDPOINT, mapping)));
     JsonObject export = GET("/metadata?" + MAPPINGS + "=true").content(HttpStatus.OK);
     assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + STORED_ID));
-    assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + OBSERVATION_ID));
+    assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/FhirMapObs1"));
     assertEquals(0, mappingCount());
     JsonWebMessage imported =
         POST("/metadata", export.toJson()).content(HttpStatus.OK).as(JsonWebMessage.class);
@@ -218,24 +207,18 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   @ParameterizedTest(name = "[{index}] {0}")
   @MethodSource("invalidMappings")
   void invalidMappingsAreRejectedWithConflictMessage(InvalidMapping invalid) {
-    if (invalid.withStoredPatient()) {
-      assertStatus(HttpStatus.CREATED, POST(ENDPOINT, storedPatientMapping()));
-    }
-    int stored = mappingCount();
     assertConflict(POST(ENDPOINT, invalid.body()), invalid.errors());
-    assertEquals(stored, mappingCount());
-    assertStatus(HttpStatus.NOT_FOUND, GET(ENDPOINT + "/" + INVALID_ID));
+    assertEquals(0, mappingCount());
   }
 
   @Test
   void metadataImportReportsValidatorErrorReports() {
-    List<InvalidMapping> rows = invalidMappings().filter(row -> !row.withStoredPatient()).toList();
-    String bundle =
+    List<InvalidMapping> rows = invalidMappings().toList();
+    String bodies =
         IntStream.range(0, rows.size())
             .mapToObj(i -> imported(i, rows.get(i).body()))
-            .collect(joining(", ", "{\"" + MAPPINGS + "\": [", "]}"));
-    JsonWebMessage message =
-        POST("/metadata", bundle).content(HttpStatus.CONFLICT).as(JsonWebMessage.class);
+            .collect(joining(", "));
+    JsonWebMessage message = JsonMixed.of(importConflict(bodies)).as(JsonWebMessage.class);
     assertEquals(409, message.getHttpStatusCode());
     JsonImportSummary report = message.getResponse().as(JsonImportSummary.class);
     assertEquals("ERROR", report.getStatus());
@@ -257,18 +240,23 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   }
 
   @Test
-  void duplicateReportsDoNotIdentifyHiddenMapping() {
-    String hidden =
-        "{\"sharing\": {\"public\": \"--------\"}, " + storedPatientMapping().substring(1);
-    assertStatus(HttpStatus.CREATED, POST(ENDPOINT, hidden));
+  void importReportsDoNotDiscloseHiddenMappingsOrReferences() {
+    String duplicate = withId(INVALID_ID, bad(PATIENT, PATIENT_ENTRIES));
+    String foreign =
+        withId(INVALID_ID, patient(1, attribute(PATIENT_FAMILY_NAME, PROGRAM_ONLY_ATTRIBUTE)));
+    var importer = switchToNewUser("fhir-importer");
+    String denied = importConflict(duplicate);
+    assertEquals(denied, importConflict(foreign));
+    switchToAdminUser();
+    assertStatus(HttpStatus.CREATED, POST(ENDPOINT, shared("--------")));
+    switchToNewUser(importer);
+    assertEquals(denied, importConflict(duplicate));
+    assertTrue(denied.contains("\"E3000\""), denied);
     switchToNewUser("fhir-creator", "F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD");
     assertEquals(0, mappingCount());
-    String duplicate = withId(INVALID_ID, mapping(INVALID_NAME, PATIENT, PATIENT_ENTRIES));
-    String expected = DUPLICATE.getMessage();
-    String bundle = "{\"%s\": [%s]}".formatted(MAPPINGS, duplicate);
-    for (HttpResponse response : List.of(POST(ENDPOINT, duplicate), POST("/metadata", bundle))) {
-      String json = response.content(HttpStatus.CONFLICT).toJson();
-      assertTrue(json.contains(expected), json);
+    String crud = POST(ENDPOINT, duplicate).content(HttpStatus.CONFLICT).toJson();
+    for (String json : List.of(crud, importConflict(duplicate))) {
+      assertTrue(json.contains(DUPLICATE.getMessage()), json);
       assertFalse(json.contains(STORED_ID) || json.contains(STORED_NAME), json);
     }
     switchToAdminUser();
@@ -276,51 +264,82 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   }
 
   @Test
+  void csvExportsPrefixFormulaCellsWithQuote() {
+    String mapping = STORED_PATIENT.replace(STORED_NAME, "=1+1,-2").substring(1);
+    assertStatus(HttpStatus.CREATED, POST(ENDPOINT, "{\"code\": \"\\uFEFF@A1\", " + mapping));
+    List<String> rows = List.of("'\uFEFF@A1,\"'=1+1,-2\"");
+    List<String> listed = csv(ENDPOINT + "?fields=code,name&skipHeader=true");
+    assertEquals(rows, listed.stream().map(row -> row.replace("'?", "'\uFEFF")).toList());
+    assertEquals(rows, csv(ENDPOINT + "/gist.csv?fields=code,name&headless=true"));
+    assertEquals(
+        List.of("name,code", "\"'=1+1,-2\"", "'\uFEFF@A1"),
+        csv(STORED_PATH + "/gist.csv?fields=name,code"));
+    assertEquals(List.of("name", "\"'=1+1,-2\""), csv(STORED_PATH + "/name/gist.csv"));
+  }
+
+  @Test
   void validationBypassOptionsCannotPersistInvalidMapping() {
-    String uid = assertStatus(HttpStatus.CREATED, POST(ENDPOINT, storedPatientMapping()));
+    String uid = assertStatus(HttpStatus.CREATED, POST(ENDPOINT, STORED_PATIENT));
     String invalid = patient(0, attribute(PATIENT_IDENTIFIER, INTEGER_ATTRIBUTE));
     String patch = "[{\"op\": \"remove\", \"path\": \"/fieldMappings/0/system\"}]";
-    List<ErrorMessage> expected = List.of(errorMessage(E4000, "system"));
+    List<ErrorMessage> expected = List.of(error(E4000, "system"));
     for (String option : List.of("skipValidation=true", "atomicMode=NONE")) {
       assertConflict(POST(ENDPOINT + "?" + option, invalid), expected);
       assertEquals(1, mappingCount(), option);
       assertConflict(PUT(ENDPOINT + "/" + uid + "?" + option, invalid), expected);
-      assertStored(uid, STORED_NAME, PATIENT_ENTRIES);
+      assertStoredAsSent(STORED_PATIENT);
       assertConflict(PATCH(ENDPOINT + "/" + uid + "?" + option, patch), expected);
-      assertStored(uid, STORED_NAME, PATIENT_ENTRIES);
+      assertStoredAsSent(STORED_PATIENT);
     }
   }
 
-  @Test
-  void mappingWriteRequiresAuthority() {
-    switchToNewUser("fhir-noauth");
-    JsonWebMessage denied =
-        POST(ENDPOINT, storedPatientMapping())
-            .content(HttpStatus.FORBIDDEN)
-            .as(JsonWebMessage.class);
-    assertEquals("ERROR", denied.getStatus());
-    assertEquals(403, denied.getHttpStatusCode());
-    switchToNewUser("fhir-admin", "F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD");
-    assertStatus(HttpStatus.CREATED, POST(ENDPOINT, storedPatientMapping()));
-    assertStatus(HttpStatus.FORBIDDEN, DELETE(ENDPOINT + "/" + STORED_ID));
+  /** As a user with the given authorities, creates or changes a mapping with the given access. */
+  @ParameterizedTest
+  @CsvSource({
+    "POST, , rw------, FORBIDDEN",
+    "POST, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, rw------, CREATED",
+    "POST, F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD, rw------, CONFLICT",
+    "POST, F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD, --------, CREATED",
+    "PUT, , rw------, FORBIDDEN",
+    "PATCH, , rw------, FORBIDDEN",
+    "PUT, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, r-------, FORBIDDEN",
+    "PATCH, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, r-------, FORBIDDEN",
+    "PATCH, F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD, rw------, FORBIDDEN",
+    "PUT, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, rw------, OK",
+    "PATCH, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, rw------, OK",
+    "DELETE, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD, rw------, FORBIDDEN",
+    "DELETE, F_FHIR_RESOURCE_MAPPING_DELETE, rw------, FORBIDDEN",
+    "DELETE, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD F_FHIR_RESOURCE_MAPPING_DELETE, r-------, FORBIDDEN",
+    "DELETE, F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD F_FHIR_RESOURCE_MAPPING_DELETE, rw------, OK"
+  })
+  void mappingWriteRequiresAuthority(String verb, String grant, String access, HttpStatus status) {
+    if (!verb.equals("POST")) assertStatus(HttpStatus.CREATED, POST(ENDPOINT, shared(access)));
+    switchToNewUser("fhir-writer", grant == null ? new String[0] : grant.split(" "));
+    HttpResponse response =
+        switch (verb) {
+          case "POST" -> POST(ENDPOINT, shared(access));
+          case "PUT" -> PUT(STORED_PATH, mapping(RENAMED, PATIENT, PATIENT_ENTRIES));
+          case "PATCH" -> PATCH(STORED_PATH, RENAME_PATCH);
+          default -> DELETE(STORED_PATH);
+        };
+    boolean written = status.series() == HttpStatus.Series.SUCCESSFUL;
+    if (!written) assertEquals("ERROR", response.content(status).getString("status").string());
+    assertEquals(status, response.status());
     switchToAdminUser();
-    assertEquals(1, mappingCount());
-    assertStored(STORED_ID, STORED_NAME, PATIENT_ENTRIES);
-    switchToNewUser(
-        "fhir-deleter", "F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD", "F_FHIR_RESOURCE_MAPPING_DELETE");
-    assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + STORED_ID));
-    switchToAdminUser();
-    assertEquals(0, mappingCount());
+    if (verb.equals(written ? "DELETE" : "POST")) assertEquals(0, mappingCount());
+    else if (written && !verb.equals("POST"))
+      assertStoredAsSent(STORED_PATIENT.replace(STORED_NAME, RENAMED));
+    else
+      assertEquals(access, assertStoredAsSent(shared(access)).getString("sharing.public").string());
   }
 
   @Test
   void settingsPageIsServedAsHtml() {
-    HttpResponse response = GET(ENDPOINT + "/settings", Accept(MediaType.TEXT_HTML_VALUE));
+    HttpResponse response = GET(ENDPOINT + "/settings", Accept("text/html"));
     assertEquals(HttpStatus.OK, response.status());
-    String html = response.content(MediaType.TEXT_HTML_VALUE);
+    String html = response.content("text/html");
     assertTrue(html.contains("id=\"fhir-mapping-form\""));
-    String cacheControl = response.header("Cache-Control");
-    assertTrue(cacheControl != null && cacheControl.contains("no-store"), cacheControl);
+    assertTrue(String.valueOf(response.header("Cache-Control")).contains("no-store"), "no-store");
     List<String> scripts = SCRIPT.matcher(html).results().map(script -> script.group(1)).toList();
     assertEquals(1, scripts.size(), "inline scripts");
     PAGE_CALLS.forEach(call -> assertTrue(scripts.get(0).contains(call), call));
@@ -332,12 +351,12 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     // The request thread's class loader no longer sees the application class path or the page.
     Thread.currentThread().setContextClassLoader(ClassLoader.getPlatformClassLoader());
     try {
-      HttpResponse response = GET(ENDPOINT + "/settings", Accept(MediaType.TEXT_HTML_VALUE));
+      HttpResponse response = GET(ENDPOINT + "/settings", Accept("text/html"));
       JsonObject error = response.content(HttpStatus.INTERNAL_SERVER_ERROR);
       String expected =
           "{\"httpStatus\": \"Internal Server Error\", \"httpStatusCode\": 500, \"status\": \"ERROR\", \"message\": \"The FHIR settings page is not available\"}";
       assertTrue(JsonMixed.of(expected).equivalentTo(error), error::toJson);
-      assertEquals(MediaType.APPLICATION_JSON_VALUE, response.getContentType());
+      assertEquals("application/json", response.getContentType());
       assertNull(response.header("Cache-Control"));
     } finally {
       Thread.currentThread().setContextClassLoader(original);
@@ -347,7 +366,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   @Test
   void settingsPageRequestsSucceedThroughCsrfProtectedSecurityChain() {
     mvc = settingsPageChain(null);
-    HttpResponse page = GET(ENDPOINT + "/settings", Accept(MediaType.TEXT_HTML_VALUE));
+    HttpResponse page = GET(ENDPOINT + "/settings", Accept("text/html"));
     assertEquals(HttpStatus.OK, page.status());
     String cookie = String.valueOf(page.header("Set-Cookie"));
     assertTrue(cookie.matches("XSRF-TOKEN=[^;]+(;.*)?"), cookie);
@@ -355,7 +374,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     mvc = settingsPageChain(new Cookie("XSRF-TOKEN", token));
     assertStatus(HttpStatus.OK, GET(STATUS_PATH));
     String gender = gender(GIVEN_ATTRIBUTE, "__proto__", "male", " F ", "female");
-    List<String> entries = with(PATIENT_ENTRIES.subList(0, 2), gender);
+    List<String> entries = put(PATIENT_ENTRIES, 2, gender);
     String patient = mapping(STORED_NAME, PATIENT, entries);
     assertStatus(HttpStatus.FORBIDDEN, POST(ENDPOINT, patient));
     assertEquals(0, mappingCount());
@@ -363,9 +382,9 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     String uid = assertStatus(HttpStatus.CREATED, POST(ENDPOINT, Body(patient), csrf));
     JsonObject edited = GET(ENDPOINT + "/" + uid + EDIT_FIELDS).content(HttpStatus.OK);
     assertEquals(summaries(entries), summaries(edited));
-    String renamed = mapping("FHIR renamed Patient", PATIENT, entries);
-    assertStatus(HttpStatus.OK, PUT(ENDPOINT + "/" + uid, Body(renamed), csrf));
-    assertTrue(GET(LIST_PATH).content(HttpStatus.OK).toJson().contains("FHIR renamed Patient"));
+    assertStatus(
+        HttpStatus.OK, PUT(ENDPOINT + "/" + uid, Body(mapping(RENAMED, PATIENT, entries)), csrf));
+    assertTrue(GET(LIST_PATH).content(HttpStatus.OK).toJson().contains(RENAMED));
     assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + uid, csrf));
     assertStatus(HttpStatus.NOT_FOUND, GET(ENDPOINT + "/" + uid + EDIT_FIELDS));
   }
@@ -378,8 +397,8 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         "V66aa7a2122:NUMBER,dIVt4l5vIOa:TEXT,integerAttr:INTEGER,toUpdate000:TEXT",
         targets(person, "trackedEntityTypeAttributes", "trackedEntityAttribute"));
     String keys = "displayName,id,programStages,programTrackedEntityAttributes";
-    JsonObject found = GET(PROGRAMS_FILTER + PERSON + PROGRAMS_FIELDS).content();
-    Map<String, JsonObject> programs = byId(found, "programs", keys);
+    Map<String, JsonObject> programs =
+        byId(GET(PROGRAMS_FILTER + PERSON + PROGRAMS_FIELDS).content(), "programs", keys);
     assertEquals(
         "BFcipDERJnf,SeeUNWLQmZk,UWRnoyBjvqi,YlUmbgnKWkd,pcxIanBWlSY,sLngICFQjvH,shPjYNifvMK",
         String.join(",", new TreeSet<>(programs.keySet())));
@@ -407,117 +426,75 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     }
   }
 
-  /** Mappings that together violate every validator rule, with the messages each must yield. */
+  /** Mappings that violate every rule within one mapping, with the messages each must yield. */
   private static Stream<InvalidMapping> invalidMappings() {
     return Stream.of(
-        invalid(
-            mapping(INVALID_NAME, PATIENT, with(PATIENT_ENTRIES, entry(null, null))),
-            errorMessage(E4000, "target"),
-            errorMessage(E4000, "sourceType")),
-        invalid(
-            mapping(INVALID_NAME, ENCOUNTER, PERSON, null, null, ENCOUNTER_ENTRIES),
-            errorMessage(E4000, "program"),
-            errorMessage(E4000, "programStage")),
-        invalid(
-            mapping(INVALID_NAME, ENCOUNTER, ENCOUNTER_ENTRIES.subList(1, 2)),
-            errorMessage(E4000, ENCOUNTER_CLASS.name())),
-        invalid(
-            mapping(INVALID_NAME, IMMUNIZATION, IMMUNIZATION_ENTRIES.subList(1, 2)),
-            errorMessage(E4000, IMMUNIZATION_ADMINISTERED.name()),
-            errorMessage(E4000, IMMUNIZATION_VACCINE_CODE.name())),
-        invalid(
-            mapping(INVALID_NAME, OBSERVATION, List.of()),
-            errorMessage(E4000, OBSERVATION_VALUE.name())),
-        invalid(
-            patient(0, attribute(PATIENT_IDENTIFIER, INTEGER_ATTRIBUTE)),
-            errorMessage(E4000, "system")),
-        invalid(
-            mapping(INVALID_NAME, ENCOUNTER, List.of(constant(ENCOUNTER_CLASS, null))),
-            errorMessage(E4000, "code")),
-        invalid(
-            mapping(INVALID_NAME, OBSERVATION, List.of(observation(INTEGER_ELEMENT, null))),
-            errorMessage(E4000, "code")),
-        invalid(patient(1, entry(PATIENT_FAMILY_NAME, ATTRIBUTE)), errorMessage(E4000, "source")),
-        invalid(
-            mapping(
-                INVALID_NAME, PATIENT, with(PATIENT_ENTRIES, observation(INTEGER_ELEMENT, "x"))),
-            errorMessage(E4010, OBSERVATION_VALUE.name(), PATIENT.name())),
-        invalid(
-            patient(1, constant(PATIENT_FAMILY_NAME, "family")),
-            errorMessage(E4010, CONSTANT.name(), PATIENT_FAMILY_NAME.name())),
-        invalid(
-            patient(1, attribute(PATIENT_FAMILY_NAME, NOT_A_UID)),
-            errorMessage(E4014, NOT_A_UID, "source")),
-        invalid(
-            patient(2, gender(GIVEN_ATTRIBUTE, "M", "man")),
-            errorMessage(E4027, "man", "valueMap")),
-        invalid(
-            patient(2, gender(GIVEN_ATTRIBUTE, "", "male")), errorMessage(E4027, "", "valueMap")),
-        invalid(
-            patient(2, attribute(PATIENT_BIRTH_DATE, GIVEN_ATTRIBUTE)),
-            errorMessage(E4027, "TEXT", PATIENT_BIRTH_DATE.name())),
-        invalid(
-            mapping(INVALID_NAME, OBSERVATION, List.of(observation(INTEGER_ELEMENT, "x "))),
-            errorMessage(E4027, "x ", "code")),
-        invalid(
-            patient(0, identifier(INTEGER_ATTRIBUTE, "urn:bad uri")),
-            errorMessage(E4027, "urn:bad uri", "system")),
-        invalid(
-            mapping(
-                INVALID_NAME, ENCOUNTER, PERSON, EVENT_PROGRAM, EVENT_PROGRAM_STAGE, CLASS_ONLY),
-            errorMessage(E5002, EVENT_PROGRAM, INVALID_ID, "program")),
-        invalid(
-            mapping(
-                INVALID_NAME, ENCOUNTER, TYPE_WITHOUT_PROGRAM, PROGRAM, STAGE, ENCOUNTER_ENTRIES),
-            errorMessage(E5002, PROGRAM, INVALID_ID, "trackedEntityType")),
-        invalid(
-            mapping(INVALID_NAME, ENCOUNTER, PERSON, PROGRAM, OTHER_PROGRAM_STAGE, CLASS_ONLY),
-            errorMessage(E5002, OTHER_PROGRAM_STAGE, INVALID_ID, "programStage")),
-        invalid(
-            mapping(INVALID_NAME, PATIENT, PERSON, null, STAGE, PATIENT_ENTRIES),
-            errorMessage(E5002, STAGE, INVALID_ID, "programStage")),
-        invalid(
-            patient(1, attribute(PATIENT_FAMILY_NAME, PROGRAM_ONLY_ATTRIBUTE)),
-            errorMessage(E5002, PROGRAM_ONLY_ATTRIBUTE, INVALID_ID, PATIENT_FAMILY_NAME.name())),
-        invalid(
-            mapping(INVALID_NAME, OBSERVATION, List.of(observation(OTHER_STAGE_ELEMENT, "x"))),
-            errorMessage(E5002, OTHER_STAGE_ELEMENT, INVALID_ID, OBSERVATION_VALUE.name())),
-        new InvalidMapping(
-            withId(INVALID_ID, mapping(INVALID_NAME, PATIENT, PATIENT_ENTRIES)),
-            true,
-            List.of(DUPLICATE)),
-        invalid(
-            patient(2, attribute(PATIENT_FAMILY_NAME, GIVEN_ATTRIBUTE)),
-            errorMessage(E5003, "target", PATIENT_FAMILY_NAME.name(), INVALID_ID, INVALID_ID)),
-        invalid(
-            patient(2, identifier(GIVEN_ATTRIBUTE, IDENTIFIER_SYSTEM)),
-            errorMessage(E5003, "system", IDENTIFIER_SYSTEM, INVALID_ID, INVALID_ID)),
-        invalid(
-            patient(2, attribute(PATIENT_GIVEN_NAME, FAMILY_ATTRIBUTE)),
-            errorMessage(E5003, "source", FAMILY_ATTRIBUTE, INVALID_ID, INVALID_ID)),
-        invalid(
-            mapping(
-                INVALID_NAME,
-                OBSERVATION,
-                replace(OBSERVATION_ENTRIES, 1, observation(INTEGER_ELEMENT, "y"))),
-            errorMessage(E5003, "source", INTEGER_ELEMENT, INVALID_ID, INVALID_ID)),
-        invalid(
-            patient(2, gender(GIVEN_ATTRIBUTE, "M", "male", "m", "female")),
-            errorMessage(E5003, "valueMap", "m", INVALID_ID, INVALID_ID)));
+        invalid(bad(PATIENT, put(PATIENT_ENTRIES, 3, entry(null, null))))
+            .and(E4000, "target")
+            .and(E4000, "sourceType"),
+        invalid(bad(ENCOUNTER, ENCOUNTER_ENTRIES, PERSON, null, null))
+            .and(E4000, "program")
+            .and(E4000, "programStage"),
+        invalid(bad(ENCOUNTER, ENCOUNTER_ENTRIES.subList(1, 2))).and(E4000, ENCOUNTER_CLASS),
+        invalid(bad(IMMUNIZATION, List.of()))
+            .and(E4000, IMMUNIZATION_ADMINISTERED)
+            .and(E4000, IMMUNIZATION_VACCINE_CODE),
+        invalid(bad(OBSERVATION, List.of())).and(E4000, OBSERVATION_VALUE),
+        invalid(patient(0, attribute(PATIENT_IDENTIFIER, INTEGER_ATTRIBUTE))).and(E4000, "system"),
+        invalid(bad(ENCOUNTER, List.of(constant(ENCOUNTER_CLASS, null)))).and(E4000, "code"),
+        invalid(bad(OBSERVATION, List.of(observation(INTEGER_ELEMENT, null)))).and(E4000, "code"),
+        invalid(patient(1, entry(PATIENT_FAMILY_NAME, ATTRIBUTE))).and(E4000, "source"),
+        invalid(bad(PATIENT, put(PATIENT_ENTRIES, 3, observation(INTEGER_ELEMENT, "x"))))
+            .and(E4010, OBSERVATION_VALUE, PATIENT),
+        invalid(patient(1, constant(PATIENT_FAMILY_NAME, "f")))
+            .and(E4010, CONSTANT, PATIENT_FAMILY_NAME),
+        invalid(patient(1, attribute(PATIENT_FAMILY_NAME, NOT_A_UID)))
+            .and(E4014, NOT_A_UID, "source"),
+        invalid(patient(2, gender(GIVEN_ATTRIBUTE, "M", "man"))).and(E4027, "man", "valueMap"),
+        invalid(patient(2, gender(GIVEN_ATTRIBUTE, "", "male"))).and(E4027, "", "valueMap"),
+        invalid(patient(2, attribute(PATIENT_BIRTH_DATE, GIVEN_ATTRIBUTE)))
+            .and(E4027, "TEXT", PATIENT_BIRTH_DATE),
+        invalid(bad(OBSERVATION, List.of(observation(INTEGER_ELEMENT, "x "))))
+            .and(E4027, "x ", "code"),
+        invalid(patient(0, entry(PATIENT_IDENTIFIER, ATTRIBUTE, INTEGER_ATTRIBUTE, "urn:bad uri")))
+            .and(E4027, "urn:bad uri", "system"),
+        invalid(bad(ENCOUNTER, CLASS_ONLY, PERSON, EVENT_PROGRAM, "NpsdDv6kKSe"))
+            .and(E5002, EVENT_PROGRAM, INVALID_ID, "program"),
+        invalid(bad(ENCOUNTER, ENCOUNTER_ENTRIES, "Ip8NY4PW7Xm", PROGRAM, STAGE))
+            .and(E5002, PROGRAM, INVALID_ID, "trackedEntityType"),
+        invalid(bad(ENCOUNTER, CLASS_ONLY, PERSON, PROGRAM, OTHER_PROGRAM_STAGE))
+            .and(E5002, OTHER_PROGRAM_STAGE, INVALID_ID, "programStage"),
+        invalid(bad(PATIENT, PATIENT_ENTRIES, PERSON, null, STAGE))
+            .and(E5002, STAGE, INVALID_ID, "programStage"),
+        invalid(patient(1, attribute(PATIENT_FAMILY_NAME, PROGRAM_ONLY_ATTRIBUTE)))
+            .and(E5002, PROGRAM_ONLY_ATTRIBUTE, INVALID_ID, PATIENT_FAMILY_NAME),
+        invalid(bad(OBSERVATION, List.of(observation(OTHER_STAGE_ELEMENT, "x"))))
+            .and(E5002, OTHER_STAGE_ELEMENT, INVALID_ID, OBSERVATION_VALUE),
+        invalid(patient(2, attribute(PATIENT_FAMILY_NAME, GIVEN_ATTRIBUTE)))
+            .and(E5003, "target", PATIENT_FAMILY_NAME, INVALID_ID, INVALID_ID),
+        invalid(patient(2, PATIENT_ENTRIES.get(0)))
+            .and(E5003, "system", IDENTIFIER_SYSTEM, INVALID_ID, INVALID_ID)
+            .and(E5003, "source", INTEGER_ATTRIBUTE, INVALID_ID, INVALID_ID),
+        invalid(patient(2, attribute(PATIENT_GIVEN_NAME, FAMILY_ATTRIBUTE)))
+            .and(E5003, "source", FAMILY_ATTRIBUTE, INVALID_ID, INVALID_ID),
+        invalid(bad(OBSERVATION, put(OBSERVATION_ENTRIES, 1, observation(INTEGER_ELEMENT, "y"))))
+            .and(E5003, "source", INTEGER_ELEMENT, INVALID_ID, INVALID_ID),
+        invalid(patient(2, gender(GIVEN_ATTRIBUTE, "M", "male", "m", "female")))
+            .and(E5003, "valueMap", "m", INVALID_ID, INVALID_ID));
   }
 
-  private record InvalidMapping(String body, boolean withStoredPatient, List<ErrorMessage> errors) {
-    @Override
-    public String toString() {
-      return errors.stream().map(ErrorMessage::getMessage).collect(joining(", "));
+  private record InvalidMapping(String body, List<ErrorMessage> errors) {
+    /** Returns this mapping, also expecting the message of {@code code} with {@code args}. */
+    InvalidMapping and(ErrorCode code, Object... args) {
+      return new InvalidMapping(body, put(errors, errors.size(), error(code, args)));
     }
   }
 
-  private static InvalidMapping invalid(String mapping, ErrorMessage... errors) {
-    return new InvalidMapping(withId(INVALID_ID, mapping), false, List.of(errors));
+  private static InvalidMapping invalid(String mapping) {
+    return new InvalidMapping(withId(INVALID_ID, mapping), List.of());
   }
 
-  /** Gives the text of row {@code index} its own import id and mapping name. */
+  /** Replaces any placeholder ID or name in {@code text} with the values of row {@code index}. */
   private static String imported(int index, String text) {
     return text.replace(INVALID_ID, "FhirImp%04d".formatted(index))
         .replace(INVALID_NAME, "FHIR import " + index);
@@ -525,10 +502,10 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
 
   /** Returns the base Patient mapping with the entry at {@code index} replaced by {@code entry}. */
   private static String patient(int index, String entry) {
-    return mapping(INVALID_NAME, PATIENT, replace(PATIENT_ENTRIES, index, entry));
+    return bad(PATIENT, put(PATIENT_ENTRIES, index, entry));
   }
 
-  private static ErrorMessage errorMessage(ErrorCode code, Object... args) {
+  private static ErrorMessage error(ErrorCode code, Object... args) {
     return new ErrorMessage(code, args);
   }
 
@@ -538,36 +515,35 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertEquals("ERROR", conflict.getStatus());
     assertEquals(409, conflict.getHttpStatusCode());
     String actual = conflict.getMessage();
-    assertNotNull(actual);
-    for (ErrorMessage error : expected) {
-      String text = error.getMessage();
-      assertTrue(actual.contains(text), () -> "expected <" + text + "> in <" + actual + ">");
-    }
+    expected.forEach(error -> assertTrue(actual.contains(error.getMessage()), actual));
     assertTrue(conflict.get("response.errorReports").isUndefined(), conflict::toJson);
   }
 
-  private void assertStored(String uid, String name, List<String> entries) {
-    JsonObject stored = GET(ENDPOINT + "/" + uid).content(HttpStatus.OK);
-    assertEquals(name, stored.getString("name").string());
-    assertEquals(summaries(entries), summaries(stored));
-  }
-
   /** Asserts that the mapping stored under the body's UID has the body's properties and entries. */
-  private void assertStoredAsSent(String body) {
+  private JsonObject assertStoredAsSent(String body) {
     JsonObject sent = JsonMixed.of(body);
     JsonObject stored = GET(ENDPOINT + "/" + sent.getString("id").string()).content(HttpStatus.OK);
     assertEquals(summary(sent, MAPPING_FIELDS), summary(stored, MAPPING_FIELDS));
     assertEquals(summaries(sent), summaries(stored));
+    return stored;
   }
 
   private int mappingCount() {
     return GET(ENDPOINT + "?fields=id&paging=false").content().getArray(MAPPINGS).size();
   }
 
-  /** Routes requests through the security chain with the settings page script's headers. */
+  private String importConflict(String mapping) {
+    String bundle = "{\"%s\": [%s]}".formatted(MAPPINGS, mapping);
+    return POST("/metadata", bundle).content(HttpStatus.CONFLICT).toJson();
+  }
+
+  private List<String> csv(String path) {
+    return GET(path, Accept("text/csv")).content("text/csv").lines().toList();
+  }
+
+  /** Sets X-Requested-With and an optional CSRF cookie on security-chain requests. */
   private MockMvc settingsPageChain(Cookie xsrf) {
-    MockHttpServletRequestBuilder page =
-        MockMvcRequestBuilders.get("/").header("X-Requested-With", "XMLHttpRequest");
+    var page = MockMvcRequestBuilders.get("/").header("X-Requested-With", "XMLHttpRequest");
     return MockMvcBuilders.webAppContextSetup(webApplicationContext)
         .apply(SecurityMockMvcConfigurers.springSecurity(springSecurityFilterChain))
         .defaultRequest(xsrf == null ? page : page.cookie(xsrf))
@@ -579,9 +555,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   }
 
   private static List<String> summaries(JsonObject mapping) {
-    return mapping.getList("fieldMappings", JsonObject.class).stream()
-        .map(entry -> summary(entry, ENTRY_FIELDS))
-        .toList();
+    return mapping.getList("fieldMappings", JsonObject.class).toList(e -> summary(e, ENTRY_FIELDS));
   }
 
   /** Returns each property as {@code name=minimized JSON}, empty when the object lacks it. */
@@ -611,34 +585,30 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         .collect(joining(","));
   }
 
-  private static String storedPatientMapping() {
-    return withId(STORED_ID, mapping(STORED_NAME, PATIENT, PATIENT_ENTRIES));
+  private static String shared(String publicAccess) {
+    return "{\"sharing\": {\"public\": \"%s\"}, ".formatted(publicAccess)
+        + STORED_PATIENT.substring(1);
   }
 
-  /** Returns a mapping on PERSON, and on PROGRAM and STAGE unless the type is PATIENT. */
-  private static String mapping(String name, FhirResourceType type, List<String> entries) {
-    boolean patient = type == PATIENT;
-    return mapping(name, type, PERSON, patient ? null : PROGRAM, patient ? null : STAGE, entries);
+  private static String bad(FhirResourceType type, List<String> entries, String... references) {
+    return mapping(INVALID_NAME, type, entries, references);
   }
 
-  /** Returns a mapping JSON object; a {@code null} program or program stage is left out. */
+  /**
+   * Returns a mapping JSON object on the given tracked entity type, program and program stage,
+   * leaving out nulls; without references, on PERSON, and on PROGRAM and STAGE unless a PATIENT.
+   */
   private static String mapping(
-      String name,
-      FhirResourceType type,
-      String trackedEntityType,
-      String program,
-      String stage,
-      List<String> entries) {
-    String references =
-        reference("trackedEntityType", trackedEntityType)
-            + reference("program", program)
-            + reference("programStage", stage);
+      String name, FhirResourceType type, List<String> entries, String... references) {
+    String[] ids = references.length > 0 ? references : new String[] {PERSON, PROGRAM, STAGE};
+    String[] names = {"trackedEntityType", "program", "programStage"};
+    String refs =
+        IntStream.range(0, type == PATIENT && references.length == 0 ? 1 : 3)
+            .filter(i -> ids[i] != null)
+            .mapToObj(i -> ", \"%s\": {\"id\": \"%s\"}".formatted(names[i], ids[i]))
+            .collect(joining());
     return "{\"name\": \"%s\", \"resourceType\": \"%s\"%s, \"fieldMappings\": [%s]}"
-        .formatted(name, type.name(), references, String.join(", ", entries));
-  }
-
-  private static String reference(String property, String uid) {
-    return uid == null ? "" : ", \"%s\": {\"id\": \"%s\"}".formatted(property, uid);
+        .formatted(name, type.name(), refs, String.join(", ", entries));
   }
 
   private static String withId(String id, String mapping) {
@@ -649,20 +619,12 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     return entry(target, ATTRIBUTE, source);
   }
 
-  private static String identifier(String source, String system) {
-    return entry(PATIENT_IDENTIFIER, ATTRIBUTE, source, system);
-  }
-
   /** Returns a PATIENT_GENDER entry whose value map maps each value to the code following it. */
   private static String gender(String source, String... pairs) {
     String entry = attribute(PATIENT_GENDER, source);
     return IntStream.range(0, pairs.length / 2)
         .mapToObj(i -> "\"%s\": \"%s\"".formatted(pairs[2 * i], pairs[2 * i + 1]))
         .collect(joining(", ", entry.substring(0, entry.length() - 1) + ", \"valueMap\": {", "}}"));
-  }
-
-  private static String dataElement(FhirTargetField target, String source) {
-    return entry(target, DATA_ELEMENT, source);
   }
 
   private static String constant(FhirTargetField target, String code) {
@@ -685,13 +647,9 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         .collect(joining(", ", "{", "}"));
   }
 
-  private static List<String> with(List<String> entries, String entry) {
-    return Stream.concat(entries.stream(), Stream.of(entry)).toList();
-  }
-
-  private static List<String> replace(List<String> entries, int index, String entry) {
-    return IntStream.range(0, entries.size())
-        .mapToObj(i -> i == index ? entry : entries.get(i))
-        .toList();
+  /** Returns {@code entries} with {@code entry} at {@code index}, replacing or appending. */
+  private static <T> List<T> put(List<T> entries, int index, T entry) {
+    Stream<T> rest = Stream.concat(Stream.of(entry), entries.stream().skip(index + 1));
+    return Stream.concat(entries.stream().limit(index), rest).toList();
   }
 }
