@@ -1,0 +1,148 @@
+{
+  "fhirResourceMappings": [
+    {
+      "id": "FhirMapPat1",
+      "name": "FHIR test Patient",
+      "resourceType": "PATIENT",
+      "trackedEntityType": {
+        "id": "ja8NY4PW7Xm"
+      },
+      "fieldMappings": [
+        {
+          "target": "PATIENT_IDENTIFIER",
+          "sourceType": "ATTRIBUTE",
+          "source": "integerAttr",
+          "system": "urn:dhis2:fhir-test:integer-attr"
+        },
+        {
+          "target": "PATIENT_FAMILY_NAME",
+          "sourceType": "ATTRIBUTE",
+          "source": "toUpdate000"
+        },
+        {
+          "target": "PATIENT_GIVEN_NAME",
+          "sourceType": "ATTRIBUTE",
+          "source": "dIVt4l5vIOa"
+        }
+      ]
+    },
+    {
+      "id": "FhirMapEnc1",
+      "name": "FHIR test Encounter BFcipDERJnf",
+      "resourceType": "ENCOUNTER",
+      "trackedEntityType": {
+        "id": "ja8NY4PW7Xm"
+      },
+      "program": {
+        "id": "BFcipDERJnf"
+      },
+      "programStage": {
+        "id": "NpsdDv6kKSO"
+      },
+      "fieldMappings": [
+        {
+          "target": "ENCOUNTER_CLASS",
+          "sourceType": "CONSTANT",
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "AMB",
+          "display": "ambulatory"
+        },
+        {
+          "target": "ENCOUNTER_TYPE",
+          "sourceType": "DATA_ELEMENT",
+          "source": "DATAEL00005",
+          "system": "urn:dhis2:fhir-test:encounter-type"
+        }
+      ]
+    },
+    {
+      "id": "FhirMapEnc2",
+      "name": "FHIR test Encounter shPjYNifvMK",
+      "resourceType": "ENCOUNTER",
+      "trackedEntityType": {
+        "id": "ja8NY4PW7Xm"
+      },
+      "program": {
+        "id": "shPjYNifvMK"
+      },
+      "programStage": {
+        "id": "SKNvpoLioON"
+      },
+      "fieldMappings": [
+        {
+          "target": "ENCOUNTER_CLASS",
+          "sourceType": "CONSTANT",
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "AMB",
+          "display": "ambulatory"
+        }
+      ]
+    },
+    {
+      "id": "FhirMapImm1",
+      "name": "FHIR test Immunization",
+      "resourceType": "IMMUNIZATION",
+      "trackedEntityType": {
+        "id": "ja8NY4PW7Xm"
+      },
+      "program": {
+        "id": "BFcipDERJnf"
+      },
+      "programStage": {
+        "id": "NpsdDv6kKSO"
+      },
+      "fieldMappings": [
+        {
+          "target": "IMMUNIZATION_ADMINISTERED",
+          "sourceType": "DATA_ELEMENT",
+          "source": "DATAEL00001"
+        },
+        {
+          "target": "IMMUNIZATION_LOT_NUMBER",
+          "sourceType": "DATA_ELEMENT",
+          "source": "DATAEL00002"
+        },
+        {
+          "target": "IMMUNIZATION_VACCINE_CODE",
+          "sourceType": "CONSTANT",
+          "system": "http://hl7.org/fhir/sid/cvx",
+          "code": "08",
+          "display": "Hep B, adolescent or pediatric"
+        }
+      ]
+    },
+    {
+      "id": "FhirMapObs1",
+      "name": "FHIR test Observation",
+      "resourceType": "OBSERVATION",
+      "trackedEntityType": {
+        "id": "ja8NY4PW7Xm"
+      },
+      "program": {
+        "id": "BFcipDERJnf"
+      },
+      "programStage": {
+        "id": "NpsdDv6kKSO"
+      },
+      "fieldMappings": [
+        {
+          "target": "OBSERVATION_VALUE",
+          "sourceType": "DATA_ELEMENT",
+          "source": "DATAEL00006",
+          "system": "urn:dhis2:fhir-test:observation",
+          "code": "integer-value",
+          "display": "Integer value"
+        },
+        {
+          "target": "OBSERVATION_VALUE",
+          "sourceType": "DATA_ELEMENT",
+          "source": "GieVkTxp4HH",
+          "system": "urn:dhis2:fhir-test:observation",
+          "code": "number-value",
+          "display": "Number value",
+          "unit": "kg"
+        }
+      ]
+    }
+  ]
+}
