@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FHIR resource mappings</title>
+    <style>
+      :root { --fhir-text: #212934; --fhir-border: #6c7a89; --fhir-surface: #f3f5f7; --fhir-accent: #0d5ea6; --fhir-gap: 0.5rem; }
+      *, *::before, *::after { box-sizing: border-box; }
+      body { margin: 0; padding: 1.5rem; color: var(--fhir-text); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+      main { max-width: 80rem; margin: 0 auto; }
+      h1 { font-size: 1.5rem; }
+      h2, h3 { font-size: 1.125rem; }
+      .notice:not(:empty) { padding: var(--fhir-gap); margin-block-end: 1rem; border: 1px solid var(--fhir-border); background: var(--fhir-surface); overflow-wrap: break-word; }
+      .table-wrap { overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; }
+      caption { text-align: start; font-weight: 600; padding-block-end: var(--fhir-gap); }
+      th, td { border: 1px solid var(--fhir-border); padding: 0.25rem var(--fhir-gap); text-align: start; vertical-align: top; overflow-wrap: break-word; }
+      .editor { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+      .editor > form { flex: 3 1 28rem; min-width: 0; }
+      .editor > .notice { flex: 2 1 16rem; min-width: 0; position: sticky; inset-block-start: 1rem; }
+      .field { display: flex; flex-direction: column; gap: 0.25rem; margin-block-end: 0.75rem; }
+      fieldset { border: 1px solid var(--fhir-border); margin: 0 0 0.75rem; min-width: 0; }
+      .mapping-row, .pair, .actions { display: flex; flex-wrap: wrap; gap: var(--fhir-gap) 1rem; align-items: flex-end; }
+      .mapping-row > .field, .pair > .field { flex: 1 1 12rem; margin: 0; }
+      .mapping-row > .value-map { flex: 1 1 100%; margin: 0; }
+      .pairs { display: flex; flex-direction: column; gap: var(--fhir-gap); margin-block-end: var(--fhir-gap); }
+      input, select, button { font: inherit; min-height: 2rem; max-width: 100%; padding: 0.25rem var(--fhir-gap); border: 1px solid var(--fhir-border); }
+      button { background: var(--fhir-surface); color: var(--fhir-text); cursor: pointer; }
+      button[type="submit"] { background: var(--fhir-accent); color: #ffffff; }
+      :focus-visible { outline: 3px solid var(--fhir-accent); outline-offset: 2px; }
+      [hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>FHIR resource mappings</h1>
+      <p id="fhir-status" class="notice" aria-live="polite">Checking FHIR API status</p>
+      <div id="fhir-messages" class="notice" aria-live="polite"></div>
+      <section aria-labelledby="fhir-mappings-heading">
+        <h2 id="fhir-mappings-heading">Mappings</h2>
+        <div class="table-wrap" role="region" aria-labelledby="fhir-mappings-caption" tabindex="0">
+          <table>
+            <caption id="fhir-mappings-caption">Stored FHIR resource mappings</caption>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Resource type</th>
+                <th scope="col">Tracked entity type</th>
+                <th scope="col">Program</th>
+                <th scope="col">Program stage</th>
+                <th scope="col">Field mappings</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="fhir-mapping-rows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section aria-labelledby="fhir-editor-heading">
+        <h2 id="fhir-editor-heading">Editor</h2>
+        <p id="fhir-editing">New mapping</p>
+        <div class="editor">
+          <form id="fhir-mapping-form">
+            <div class="field">
+              <label for="fhir-name">Name (required)</label>
+              <input type="text" id="fhir-name" required>
+            </div>
+            <div class="field">
+              <label for="fhir-resource-type">Resource type</label>
+              <select id="fhir-resource-type">
+                <option value="PATIENT" selected>PATIENT</option>
+                <option value="ENCOUNTER">ENCOUNTER</option>
+                <option value="IMMUNIZATION">IMMUNIZATION</option>
+                <option value="OBSERVATION">OBSERVATION</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="fhir-tracked-entity-type">Tracked entity type (required)</label>
+              <select id="fhir-tracked-entity-type" required>
+                <option value="">Select a tracked entity type</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="fhir-program">Program<span id="fhir-program-required"></span></label>
+              <select id="fhir-program">
+                <option value="">(none)</option>
+              </select>
+            </div>
+            <div class="field" id="fhir-program-stage-field" hidden>
+              <label for="fhir-program-stage">Program stage (required)</label>
+              <select id="fhir-program-stage">
+                <option value="">Select a program stage</option>
+              </select>
+            </div>
+            <h3>Field mappings</h3>
+            <div id="fhir-field-mappings"></div>
+            <div class="actions">
+              <button type="button" id="fhir-add-row">Add field mapping</button>
+              <button type="submit">Save</button>
+              <button type="button" id="fhir-cancel-edit" hidden>Cancel edit</button>
+            </div>
+          </form>
+          <div id="fhir-form-errors" class="notice" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+    <script>
+      const API = location.pathname.replace(/fhirResourceMappings\/settings\/?$/, '');
+      const TEXTUAL = ['TEXT', 'LONG_TEXT', 'LETTER'];
+      const INTEGERS = ['INTEGER', 'INTEGER_POSITIVE', 'INTEGER_NEGATIVE', 'INTEGER_ZERO_OR_POSITIVE'];
+      const CODING = ['system', 'code', 'display'];
+      const TARGETS = {
+        PATIENT_IDENTIFIER: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {ATTRIBUTE: ['system']}, requiredInputs: ['system'],
+          valueTypes: [...TEXTUAL, 'USERNAME', 'EMAIL', 'PHONE_NUMBER', 'URL', ...INTEGERS]},
+        PATIENT_FAMILY_NAME: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_GIVEN_NAME: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_GENDER: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {ATTRIBUTE: ['valueMap']}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_BIRTH_DATE: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['DATE', 'AGE']},
+        PATIENT_PHONE: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['PHONE_NUMBER', 'TEXT']},
+        PATIENT_EMAIL: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['EMAIL', 'TEXT']},
+        PATIENT_ADDRESS_TEXT: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        ENCOUNTER_CLASS: {resource: 'ENCOUNTER', sources: ['CONSTANT'], required: true, inputs: {CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: []},
+        ENCOUNTER_TYPE: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT', 'CONSTANT'], required: false,
+          inputs: {DATA_ELEMENT: ['system'], CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: TEXTUAL},
+        ENCOUNTER_REASON: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        IMMUNIZATION_ADMINISTERED: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: true, inputs: {}, requiredInputs: [],
+          valueTypes: ['BOOLEAN', 'TRUE_ONLY', 'TEXT']},
+        IMMUNIZATION_VACCINE_CODE: {resource: 'IMMUNIZATION', sources: ['CONSTANT'], required: true, inputs: {CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: []},
+        IMMUNIZATION_LOT_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        IMMUNIZATION_DOSE_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: [...INTEGERS, 'TEXT']},
+        OBSERVATION_VALUE: {resource: 'OBSERVATION', sources: ['DATA_ELEMENT'], required: true, inputs: {DATA_ELEMENT: ['system', 'code', 'display', 'unit']},
+          requiredInputs: ['code'], valueTypes: ['TEXT', 'LONG_TEXT', 'MULTI_TEXT', 'LETTER', 'PHONE_NUMBER', 'EMAIL', 'BOOLEAN', 'TRUE_ONLY', 'DATE',
+            'DATETIME', 'TIME', 'NUMBER', 'UNIT_INTERVAL', 'PERCENTAGE', ...INTEGERS, 'USERNAME', 'AGE', 'URL']}
+      };
+      const RESOURCE_TYPES = ['PATIENT', 'ENCOUNTER', 'IMMUNIZATION', 'OBSERVATION'];
+      const TEXT_INPUTS = {system: 'System', code: 'Code', display: 'Display', unit: 'Unit'};
+      const WITH_SOURCE = ['ATTRIBUTE', 'DATA_ELEMENT'];
+      const GENDERS = ['male', 'female', 'other', 'unknown'];
+
+      const byId = (id) => document.getElementById(id);
+      const form = byId('fhir-mapping-form');
+      const nameInput = byId('fhir-name');
+      const resourceSelect = byId('fhir-resource-type');
+      const typeSelect = byId('fhir-tracked-entity-type');
+      const programSelect = byId('fhir-program');
+      const stageField = byId('fhir-program-stage-field');
+      const stageSelect = byId('fhir-program-stage');
+      const rowsBox = byId('fhir-field-mappings');
+      const cancelButton = byId('fhir-cancel-edit');
+      const messages = byId('fhir-messages');
+      const formErrors = byId('fhir-form-errors');
+      const state = {editing: null, types: new Map(), programs: [], programsFor: '', programLoad: 0, editLoad: 0, rows: [], rowCount: 0, pairCount: 0};
+
+      function text(value) {
+        return value === null || value === undefined ? '' : String(value);
+      }
+
+      function el(tag, attributes, content) {
+        const node = document.createElement(tag);
+        Object.entries(attributes || {}).forEach(([name, value]) => node.setAttribute(name, value));
+        if (content !== undefined) node.textContent = content;
+        return node;
+      }
+
+      function field(id, labelText, control) {
+        const wrapper = el('div', {class: 'field'});
+        const label = wrapper.appendChild(el('label', {for: id}, labelText));
+        wrapper.appendChild(control);
+        return {wrapper, label};
+      }
+
+      function fillSelect(select, placeholder, items) {
+        const options = items.map(([value, label]) => el('option', {value}, label));
+        if (placeholder !== null) options.unshift(el('option', {value: ''}, placeholder));
+        select.replaceChildren(...options);
+      }
+
+      function setValue(select, value) {
+        const wanted = text(value);
+        select.value = Array.from(select.options).some((option) => option.value === wanted) ? wanted : '';
+      }
+
+      async function api(method, path, body) {
+        const headers = {Accept: 'application/json'};
+        const init = {method, credentials: 'same-origin', headers};
+        if (body !== undefined) {
+          headers['Content-Type'] = 'application/json';
+          init.body = JSON.stringify(body);
+        }
+        let response;
+        let json = null;
+        try {
+          response = await fetch(API + path, init);
+        } catch (error) {
+          return {status: 0, ok: false, json: null};
+        }
+        if ((response.headers.get('Content-Type') || '').includes('json')) {
+          try {
+            const raw = await response.text();
+            json = raw ? JSON.parse(raw) : null;
+          } catch (error) {
+            json = null;
+          }
+        }
+        return {status: response.status, ok: response.ok, json};
+      }
+
+      function succeeded(result) {
+        return result.ok && !(result.json && result.json.status === 'ERROR');
+      }
+
+      function errorText(result) {
+        const json = result.json;
+        const reports = json && json.response && json.response.errorReports;
+        if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
+        if (json && json.message) return [text(json.message)];
+        return ['HTTP ' + result.status];
+      }
+
+      function showMessage(message) {
+        messages.replaceChildren(el('p', {}, message));
+      }
+
+      function showError(result) {
+        showMessage('Error: ' + errorText(result).join('; '));
+      }
+
+      function showFormErrors(list) {
+        const items = el('ul');
+        list.forEach((message) => items.appendChild(el('li', {}, message)));
+        formErrors.replaceChildren(el('p', {}, 'Error:'), items);
+      }
+
+      async function loadStatus() {
+        const result = await api('GET', 'fhir/metadata');
+        byId('fhir-status').textContent = result.status === 200 ? 'FHIR API enabled'
+          : result.status === 404 ? 'FHIR API disabled (fhir.api.enabled)'
+          : 'FHIR API status unknown (HTTP ' + result.status + ')';
+      }
+
+      async function loadTrackedEntityTypes() {
+        const result = await api('GET', 'trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false');
+        if (!result.ok || !result.json) return showError(result);
+        state.types = new Map((result.json.trackedEntityTypes || []).map((type) => [type.id, type]));
+        fillSelect(typeSelect, 'Select a tracked entity type', Array.from(state.types.values()).map((type) => [type.id, text(type.displayName)]));
+      }
+
+      async function loadPrograms(typeId) {
+        const token = ++state.programLoad;
+        let programs = [];
+        if (typeId) {
+          const result = await api('GET', 'programs?filter=programType:eq:WITH_REGISTRATION&filter=trackedEntityType.id:eq:' + encodeURIComponent(typeId) + '&fields=id,displayName,programTrackedEntityAttributes[trackedEntityAttribute[id,displayName,valueType]],programStages[id,displayName,programStageDataElements[dataElement[id,displayName,valueType]]]&paging=false');
+          if (token !== state.programLoad) return;
+          if (result.ok && result.json) programs = result.json.programs || [];
+          else showError(result);
+        }
+        state.programs = programs;
+        state.programsFor = typeId;
+        fillSelect(programSelect, '(none)', programs.map((program) => [program.id, text(program.displayName)]));
+        fillStages();
+      }
+
+      function currentProgram() {
+        return state.programs.find((program) => program.id === programSelect.value);
+      }
+
+      function currentStage() {
+        const program = currentProgram();
+        return program ? (program.programStages || []).find((stage) => stage.id === stageSelect.value) : undefined;
+      }
+
+      function fillStages() {
+        const program = currentProgram();
+        fillSelect(stageSelect, 'Select a program stage', (program ? program.programStages || [] : []).map((stage) => [stage.id, text(stage.displayName)]));
+      }
+
+      function applyResourceType() {
+        const eventDerived = resourceSelect.value !== 'PATIENT';
+        programSelect.required = eventDerived;
+        byId('fhir-program-required').textContent = eventDerived ? ' (required)' : '';
+        stageField.hidden = !eventDerived;
+        stageSelect.required = eventDerived;
+      }
+
+      function sourceItems(sourceType) {
+        if (sourceType === 'ATTRIBUTE') {
+          const items = new Map();
+          const type = state.types.get(typeSelect.value);
+          const program = currentProgram();
+          [...(type ? type.trackedEntityTypeAttributes || [] : []), ...(program ? program.programTrackedEntityAttributes || [] : [])]
+            .map((link) => link && link.trackedEntityAttribute)
+            .filter((attribute) => attribute && !items.has(attribute.id))
+            .forEach((attribute) => items.set(attribute.id, attribute));
+          return Array.from(items.values());
+        }
+        const stage = sourceType === 'DATA_ELEMENT' ? currentStage() : undefined;
+        return (stage ? stage.programStageDataElements || [] : []).map((link) => link && link.dataElement).filter((element) => element);
+      }
+
+      function rowInputs(row) {
+        const target = TARGETS[row.target.value];
+        return target ? target.inputs[row.sourceType.value] || [] : [];
+      }
+
+      function rebuildSources(row) {
+        const target = TARGETS[row.target.value];
+        const selected = row.source.value;
+        const items = target ? sourceItems(row.sourceType.value).filter((item) => target.valueTypes.includes(item.valueType)) : [];
+        fillSelect(row.source, 'Select a source', items.map((item) => [item.id, text(item.displayName)]));
+        setValue(row.source, selected);
+      }
+
+      function rebuildAllSources() {
+        state.rows.forEach(rebuildSources);
+      }
+
+      function updateRow(row) {
+        const target = TARGETS[row.target.value];
+        const inputs = rowInputs(row);
+        row.sourceField.hidden = !WITH_SOURCE.includes(row.sourceType.value);
+        Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
+          const control = row.inputs[key];
+          const required = inputs.includes(key) && target.requiredInputs.includes(key);
+          control.wrapper.hidden = !inputs.includes(key);
+          control.input.required = required;
+          control.label.textContent = labelText + (required ? ' (required)' : '');
+        });
+        row.valueMap.hidden = !inputs.includes('valueMap');
+        rebuildSources(row);
+      }
+
+      function changeTarget(row) {
+        const target = TARGETS[row.target.value];
+        const sources = target ? target.sources : [];
+        fillSelect(row.sourceType, 'Select a source type', sources.map((sourceType) => [sourceType, sourceType]));
+        if (sources.length === 1) row.sourceType.value = sources[0];
+        updateRow(row);
+      }
+
+      function addPair(row, key, value) {
+        const id = row.id + '-vm' + ++state.pairCount;
+        const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value'}), code: el('select', {id: id + '-code'}),
+          remove: el('button', {type: 'button'}, 'Remove value')};
+        pair.key.value = text(key);
+        fillSelect(pair.code, null, GENDERS.map((gender) => [gender, gender]));
+        if (value !== undefined) setValue(pair.code, value);
+        pair.remove.addEventListener('click', () => {
+          row.pairList = row.pairList.filter((other) => other !== pair);
+          pair.node.remove();
+          renumberPairs(row);
+          row.addPair.focus();
+        });
+        pair.node.appendChild(field(id + '-value', 'DHIS2 value', pair.key).wrapper);
+        pair.node.appendChild(field(id + '-code', 'FHIR gender', pair.code).wrapper);
+        pair.node.appendChild(pair.remove);
+        row.pairList.push(pair);
+        row.pairs.appendChild(pair.node);
+        renumberPairs(row);
+      }
+
+      function renumberPairs(row) {
+        row.pairList.forEach((pair, index) => pair.remove.setAttribute('aria-label', 'Remove value ' + (index + 1)));
+      }
+
+      function renumberRows() {
+        state.rows.forEach((row, index) => {
+          row.legend.textContent = 'Field mapping ' + (index + 1);
+          row.remove.setAttribute('aria-label', 'Remove field mapping ' + (index + 1));
+        });
+      }
+
+      function removeRows() {
+        state.rows = [];
+        rowsBox.replaceChildren();
+      }
+
+      function addRow(entry) {
+        const id = 'fm' + ++state.rowCount;
+        const row = {id, inputs: {}, pairList: [], fieldset: el('fieldset', {class: 'mapping-row'}), legend: el('legend'),
+          target: el('select', {id: id + '-target'}), sourceType: el('select', {id: id + '-source-type'}),
+          source: el('select', {id: id + '-source'}), valueMap: el('fieldset', {class: 'value-map'}),
+          pairs: el('div', {class: 'pairs'}), remove: el('button', {type: 'button'}, 'Remove'), addPair: el('button', {type: 'button'}, 'Add value')};
+        fillSelect(row.target, 'Select a target', Object.entries(TARGETS).filter(([, target]) => target.resource === resourceSelect.value)
+          .map(([name, target]) => [name, name + (target.required ? ' (required)' : '')]));
+        row.fieldset.appendChild(row.legend);
+        row.fieldset.appendChild(field(id + '-target', 'Target', row.target).wrapper);
+        row.fieldset.appendChild(field(id + '-source-type', 'Source type', row.sourceType).wrapper);
+        row.sourceField = row.fieldset.appendChild(field(id + '-source', 'Source', row.source).wrapper);
+        Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
+          const input = el('input', {type: 'text', id: id + '-' + key});
+          const control = field(id + '-' + key, labelText, input);
+          row.inputs[key] = {input, wrapper: control.wrapper, label: control.label};
+          row.fieldset.appendChild(control.wrapper);
+        });
+        row.valueMap.appendChild(el('legend', {}, 'Gender value map'));
+        row.valueMap.appendChild(row.pairs);
+        row.valueMap.appendChild(row.addPair);
+        row.fieldset.appendChild(row.valueMap);
+        row.fieldset.appendChild(row.remove);
+        row.addPair.addEventListener('click', () => addPair(row, '', undefined));
+        row.target.addEventListener('change', () => changeTarget(row));
+        row.sourceType.addEventListener('change', () => updateRow(row));
+        row.remove.addEventListener('click', () => {
+          state.rows = state.rows.filter((other) => other !== row);
+          row.fieldset.remove();
+          renumberRows();
+          byId('fhir-add-row').focus();
+        });
+        state.rows.push(row);
+        rowsBox.appendChild(row.fieldset);
+        renumberRows();
+        setValue(row.target, entry.target);
+        changeTarget(row);
+        if (entry.sourceType) {
+          setValue(row.sourceType, entry.sourceType);
+          updateRow(row);
+        }
+        setValue(row.source, entry.source);
+        Object.entries(row.inputs).forEach(([key, control]) => {
+          control.input.value = text(entry[key]);
+        });
+        Object.entries(entry.valueMap || {}).forEach(([key, value]) => addPair(row, key, value));
+      }
+
+      function entryOf(row) {
+        const entry = {};
+        const inputs = rowInputs(row);
+        if (row.target.value) entry.target = row.target.value;
+        if (row.sourceType.value) entry.sourceType = row.sourceType.value;
+        if (WITH_SOURCE.includes(row.sourceType.value) && row.source.value) entry.source = row.source.value;
+        Object.keys(TEXT_INPUTS).filter((key) => inputs.includes(key)).forEach((key) => {
+          const value = row.inputs[key].input.value.trim();
+          if (value) entry[key] = value;
+        });
+        if (inputs.includes('valueMap')) {
+          const valueMap = {};
+          row.pairList.filter((pair) => pair.key.value.trim()).forEach((pair) => {
+            valueMap[pair.key.value.trim()] = pair.code.value;
+          });
+          if (Object.keys(valueMap).length > 0) entry.valueMap = valueMap;
+        }
+        return entry;
+      }
+
+      function mappingBody() {
+        const body = {name: nameInput.value.trim(), resourceType: resourceSelect.value, trackedEntityType: {id: typeSelect.value}};
+        if (programSelect.value) body.program = {id: programSelect.value};
+        if (resourceSelect.value !== 'PATIENT' && stageSelect.value) body.programStage = {id: stageSelect.value};
+        body.fieldMappings = state.rows.map(entryOf);
+        if (state.editing && state.editing.code !== null && state.editing.code !== undefined) body.code = state.editing.code;
+        if (state.editing && state.editing.sharing !== null && state.editing.sharing !== undefined) body.sharing = state.editing.sharing;
+        return body;
+      }
+
+      async function save(event) {
+        event.preventDefault();
+        formErrors.replaceChildren();
+        const name = nameInput.value.trim();
+        const result = state.editing
+          ? await api('PUT', 'fhirResourceMappings/' + encodeURIComponent(state.editing.id), mappingBody())
+          : await api('POST', 'fhirResourceMappings', mappingBody());
+        if (succeeded(result)) {
+          showMessage('Saved mapping "' + name + '".');
+          await loadMappings();
+          resetForm();
+        } else if (result.ok || result.status === 409 || result.status === 400) {
+          showFormErrors(errorText(result));
+        } else {
+          showFormErrors([result.json && result.json.message ? text(result.json.message) : 'HTTP ' + result.status]);
+        }
+      }
+
+      function mappingRow(mapping) {
+        const name = text(mapping.displayName);
+        const reference = (object) => text(object && object.displayName);
+        const row = el('tr');
+        const actions = el('div', {class: 'actions'});
+        const edit = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Edit ' + name}, 'Edit'));
+        const remove = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Delete ' + name}, 'Delete'));
+        edit.addEventListener('click', () => editMapping(mapping.id));
+        remove.addEventListener('click', () => deleteMapping(mapping.id, name));
+        row.appendChild(el('th', {scope: 'row'}, name));
+        [text(mapping.resourceType), reference(mapping.trackedEntityType), reference(mapping.program), reference(mapping.programStage),
+          String(Array.isArray(mapping.fieldMappings) ? mapping.fieldMappings.length : 0)]
+          .forEach((value) => row.appendChild(el('td', {}, value)));
+        row.appendChild(el('td')).appendChild(actions);
+        return row;
+      }
+
+      async function loadMappings() {
+        const result = await api('GET', 'fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false');
+        if (!result.ok || !result.json) return showError(result);
+        byId('fhir-mapping-rows').replaceChildren(...(result.json.fhirResourceMappings || []).map(mappingRow));
+      }
+
+      async function editMapping(id) {
+        const token = ++state.editLoad;
+        const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing');
+        if (token !== state.editLoad) return;
+        if (!result.ok || !result.json) return showError(result);
+        const mapping = result.json;
+        clearForm();
+        state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing};
+        nameInput.value = text(mapping.name);
+        resourceSelect.value = RESOURCE_TYPES.includes(mapping.resourceType) ? mapping.resourceType : 'PATIENT';
+        applyResourceType();
+        byId('fhir-editing').textContent = 'Editing: ' + text(mapping.name);
+        cancelButton.hidden = false;
+        setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id);
+        await loadPrograms(typeSelect.value);
+        if (token !== state.editLoad) return;
+        setValue(programSelect, mapping.program && mapping.program.id);
+        fillStages();
+        setValue(stageSelect, mapping.programStage && mapping.programStage.id);
+        (Array.isArray(mapping.fieldMappings) ? mapping.fieldMappings : []).forEach((entry) => addRow(entry || {}));
+      }
+
+      async function deleteMapping(id, name) {
+        if (!window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
+        const result = await api('DELETE', 'fhirResourceMappings/' + encodeURIComponent(id));
+        if (!succeeded(result)) return showError(result);
+        if (state.editing && state.editing.id === id) resetForm();
+        showMessage('Deleted mapping "' + name + '".');
+        await loadMappings();
+      }
+
+      function clearForm() {
+        state.editing = null;
+        nameInput.value = '';
+        resourceSelect.value = 'PATIENT';
+        applyResourceType();
+        typeSelect.value = '';
+        loadPrograms('');
+        removeRows();
+        formErrors.replaceChildren();
+        byId('fhir-editing').textContent = 'New mapping';
+        cancelButton.hidden = true;
+      }
+
+      function resetForm() {
+        state.editLoad++;
+        clearForm();
+      }
+
+      resourceSelect.addEventListener('change', () => {
+        applyResourceType();
+        removeRows();
+      });
+      typeSelect.addEventListener('change', async () => {
+        await loadPrograms(typeSelect.value);
+        rebuildAllSources();
+      });
+      programSelect.addEventListener('change', () => {
+        if (programSelect.value) setValue(typeSelect, state.programsFor);
+        fillStages();
+        rebuildAllSources();
+      });
+      stageSelect.addEventListener('change', rebuildAllSources);
+      byId('fhir-add-row').addEventListener('click', () => addRow({}));
+      cancelButton.addEventListener('click', () => {
+        resetForm();
+        nameInput.focus();
+      });
+      form.addEventListener('submit', save);
+      applyResourceType();
+
+      (async () => {
+        await loadStatus();
+        await loadTrackedEntityTypes();
+        await loadMappings();
+      })();
+    </script>
+  </body>
+</html>
+
