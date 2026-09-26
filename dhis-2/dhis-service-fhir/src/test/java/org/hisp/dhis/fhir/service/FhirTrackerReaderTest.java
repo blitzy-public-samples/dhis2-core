@@ -64,6 +64,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.hisp.dhis.common.IllegalQueryException;
+import org.hisp.dhis.common.UID;
 import org.hisp.dhis.deadline.Deadline;
 import org.hisp.dhis.deadline.DeadlineExceededException;
 import org.hisp.dhis.deadline.DeadlineHolder;
@@ -337,6 +338,52 @@ class FhirTrackerReaderTest {
     assertNotSupported(
         enrollmentError(
             new IllegalQueryException("Query is not valid"), FhirResourceType.OBSERVATION),
+        "Observation");
+  }
+
+  @Test
+  void badRequestHidingTheSelectedProgramOrTypeIsForbidden() throws Exception {
+    TrackedEntityRequestParams byType = new TrackedEntityRequestParams();
+    byType.setTrackedEntityType(UID.of(TRACKED_ENTITY_TYPE));
+    doThrow(
+            new BadRequestException(
+                "Tracked entity type is specified but does not exist: " + TRACKED_ENTITY_TYPE))
+        .when(trackedEntityAdapter)
+        .find(byType, request);
+    FhirApiException typeHidden =
+        fhirError(() -> reader.findTrackedEntities(byType, request, origin));
+    assertEquals(HttpStatus.FORBIDDEN, typeHidden.getStatus());
+    assertEquals(IssueType.FORBIDDEN, typeHidden.getIssueType());
+    assertEquals(FhirApiException.forbidden().getDiagnostics(), typeHidden.getDiagnostics());
+
+    TrackedEntityRequestParams byProgram = new TrackedEntityRequestParams();
+    byProgram.setProgram(UID.of(PROGRAM));
+    doThrow(new BadRequestException("Program is specified but does not exist: " + PROGRAM))
+        .when(trackedEntityAdapter)
+        .find(byProgram, request);
+    FhirApiException programHidden =
+        fhirError(() -> reader.findTrackedEntities(byProgram, request, origin));
+    assertEquals(typeHidden.getDiagnostics(), programHidden.getDiagnostics());
+    assertEquals(HttpStatus.FORBIDDEN, programHidden.getStatus());
+
+    EnrollmentRequestParams enrollmentParams = new EnrollmentRequestParams();
+    enrollmentParams.setProgram(UID.of(PROGRAM));
+    doThrow(new BadRequestException("Program is specified but does not exist: " + PROGRAM))
+        .when(enrollmentAdapter)
+        .find(enrollmentParams, request);
+    EnrollmentResult result =
+        reader.findEnrollments(enrollmentParams, request, FhirResourceType.ENCOUNTER);
+    assertTrue(result.forbidden());
+    assertEquals(List.of(), result.enrollments());
+
+    assertNotSupported(
+        trackedEntityError(
+            new BadRequestException("Program is specified but does not exist: " + PROGRAM), origin),
+        "Patient");
+    assertNotSupported(
+        enrollmentError(
+            new BadRequestException("Program is specified but does not exist: " + PROGRAM),
+            FhirResourceType.OBSERVATION),
         "Observation");
   }
 

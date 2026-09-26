@@ -45,6 +45,7 @@ import javax.annotation.Nonnull;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.IllegalQueryException;
+import org.hisp.dhis.common.UID;
 import org.hisp.dhis.deadline.DeadlineHolder;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.BadRequestException;
@@ -81,6 +82,8 @@ import org.springframework.stereotype.Service;
  * <ul>
  *   <li>{@link ForbiddenException}: {@code 403 forbidden} for tracked entities, and a forbidden
  *       {@link EnrollmentResult} for enrollments.
+ *   <li>{@link BadRequestException} stating that the program or tracked entity type the request
+ *       selects does not exist for the user: the same as {@link ForbiddenException}.
  *   <li>{@link NotFoundException}: {@code 404 not-found}.
  *   <li>{@link BadRequestException} and {@link IllegalQueryException}: {@code 400 invalid} naming
  *       the FHIR parameters of the attributes they cite, or {@code 400 invalid} naming the
@@ -106,6 +109,12 @@ public class FhirTrackerReader {
 
   static final String ATTRIBUTE_NOT_SEARCHABLE =
       "The attribute cannot be searched outside the user's capture scope";
+
+  /**
+   * The phrase of the export path's {@link BadRequestException} for a selected program or tracked
+   * entity type that the current user cannot find.
+   */
+  static final String SELECTOR_NOT_FOUND = "is specified but does not exist";
 
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
 
@@ -203,6 +212,10 @@ public class FhirTrackerReader {
       log.debug("Tracked entity export found no entity: {}", e.getMessage());
       throw FhirApiException.notFound();
     } catch (BadRequestException e) {
+      if (hidesSelector(e, params.getProgram(), params.getTrackedEntityType())) {
+        log.debug("Tracked entity export cannot see the selected metadata: {}", e.getMessage());
+        throw FhirApiException.forbidden();
+      }
       throw translateBadRequest(e, origin);
     } catch (IllegalQueryException e) {
       throw translateIllegalQuery(e, origin);
@@ -233,9 +246,34 @@ public class FhirTrackerReader {
     } catch (ForbiddenException e) {
       log.debug("Enrollment export denied access: {}", e.getMessage());
       return EnrollmentResult.ofForbidden();
-    } catch (BadRequestException | IllegalQueryException e) {
+    } catch (BadRequestException e) {
+      if (hidesSelector(e, params.getProgram())) {
+        log.debug("Enrollment export cannot see the selected program: {}", e.getMessage());
+        return EnrollmentResult.ofForbidden();
+      }
+      throw unusableMapping(type, e);
+    } catch (IllegalQueryException e) {
       throw unusableMapping(type, e);
     }
+  }
+
+  /**
+   * Returns whether a {@link BadRequestException} reports that the program or tracked entity type
+   * the request selects does not exist for the current user, which is how the export path answers a
+   * selected object the user may not read as metadata: its message contains {@value
+   * #SELECTOR_NOT_FOUND} and cites one of {@code selectors}.
+   */
+  private static boolean hidesSelector(BadRequestException exception, UID... selectors) {
+    String message = exception.getMessage();
+    if (message == null || !message.contains(SELECTOR_NOT_FOUND)) {
+      return false;
+    }
+    for (UID selector : selectors) {
+      if (selector != null && cites(message, selector.getValue())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
