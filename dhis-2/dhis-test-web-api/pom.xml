@@ -571,28 +571,5 @@
         </plugins>
       </build>
     </profile>
-    <profile>
-      <id>fhir-tests-absent</id>
-      <activation>
-        <file>
-          <missing>${basedir}/src/test/java/org/hisp/dhis/fhir</missing>
-        </file>
-      </activation>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-dependency-plugin</artifactId>
-            <configuration>
-              <ignoredUnusedDeclaredDependencies combine.children="append">
-                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-fhir</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>ca.uhn.hapi.fhir:hapi-fhir-base</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>ca.uhn.hapi.fhir:org.hl7.fhir.r4</ignoredUnusedDeclaredDependency>
-              </ignoredUnusedDeclaredDependencies>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
   </profiles>
 </project>

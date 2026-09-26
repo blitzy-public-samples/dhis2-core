@@ -30,100 +30,36 @@
 package org.hisp.dhis.fhir.mapping;
 
 import static org.hisp.dhis.common.ValueType.*;
-import static org.hisp.dhis.feedback.ErrorCode.E4000;
-import static org.hisp.dhis.feedback.ErrorCode.E4010;
-import static org.hisp.dhis.feedback.ErrorCode.E4014;
-import static org.hisp.dhis.feedback.ErrorCode.E4027;
-import static org.hisp.dhis.feedback.ErrorCode.E5002;
-import static org.hisp.dhis.feedback.ErrorCode.E5003;
-import static org.hisp.dhis.fhir.FhirTestFixtures.BODY_HEIGHT_UNIT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.BODY_WEIGHT_UNIT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.CVX_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.CVX_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.CVX_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_HEIGHT_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_HEIGHT_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_WEIGHT_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_WEIGHT_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.dataElement;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.lookup;
-import static org.hisp.dhis.fhir.FhirTestFixtures.mapping;
-import static org.hisp.dhis.fhir.FhirTestFixtures.program;
-import static org.hisp.dhis.fhir.FhirTestFixtures.programStage;
-import static org.hisp.dhis.fhir.FhirTestFixtures.trackedEntityAttribute;
-import static org.hisp.dhis.fhir.FhirTestFixtures.trackedEntityType;
-import static org.hisp.dhis.fhir.FhirTestFixtures.uid;
-import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.uniquenessKey;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.ENCOUNTER;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.IMMUNIZATION;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.OBSERVATION;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.PATIENT;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.ATTRIBUTE;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
+import static org.hisp.dhis.feedback.ErrorCode.*;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
-import static org.hisp.dhis.program.ProgramType.WITHOUT_REGISTRATION;
-import static org.hisp.dhis.program.ProgramType.WITH_REGISTRATION;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.hisp.dhis.program.ProgramType.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-import java.util.ArrayList;
-import java.util.EnumMap;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.function.BiFunction;
-import java.util.stream.Stream;
-import org.hisp.dhis.common.IdentifiableObject;
-import org.hisp.dhis.common.IdentifiableObjectManager;
-import org.hisp.dhis.common.ValueType;
+import java.util.*;
+import java.util.stream.*;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
-import org.hisp.dhis.feedback.ErrorCode;
-import org.hisp.dhis.feedback.ErrorReport;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.program.Program;
-import org.hisp.dhis.program.ProgramStage;
-import org.hisp.dhis.program.ProgramStageDataElement;
-import org.hisp.dhis.trackedentity.TrackedEntityAttribute;
-import org.hisp.dhis.trackedentity.TrackedEntityType;
-import org.hisp.dhis.trackedentity.TrackedEntityTypeAttribute;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.hisp.dhis.feedback.*;
+import org.hisp.dhis.program.*;
+import org.hisp.dhis.trackedentity.*;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.junit.jupiter.params.provider.*;
 
-/**
- * Unit tests of {@link FhirResourceMappingValidator}. Each case starts from a valid mapping of one
- * resource type over an in-memory metadata world, breaks one rule, and expects reports of that
- * rule's error code only.
- */
-@ExtendWith(MockitoExtension.class)
+/** Positive cases expect no reports; negative ones break one rule and expect only its code. */
 class FhirResourceMappingValidatorTest {
-  private static final String SYSTEM = "urn:test:id";
-
+  private static final String SYSTEM = "urn:test:id", LDAP = "ldap://directory.example.org/ids";
   private static final Map<String, String> GENDER_MAP = Map.of("M", "male", "F", "female");
-
+  private static final Entry AMBULATORY =
+      Entry.constant(
+          ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
   private static final Set<ErrorCode> VALIDATOR_CODES =
-      EnumSet.of(E4000, E4010, E4014, E4027, E5002, E5003);
-
-  /** The value types accepted by each target that takes attribute or data element sources. */
+      EnumSet.of(E4000, E4001, E4010, E4014, E4027, E5002, E5003);
   private static final Map<FhirTargetField, Set<ValueType>> ACCEPTED =
       new EnumMap<>(FhirTargetField.class);
 
@@ -131,8 +67,8 @@ class FhirResourceMappingValidatorTest {
     Set<ValueType> text = EnumSet.of(TEXT, LONG_TEXT, LETTER);
     Set<ValueType> integer =
         EnumSet.of(INTEGER, INTEGER_POSITIVE, INTEGER_NEGATIVE, INTEGER_ZERO_OR_POSITIVE);
-    Set<ValueType> identifier = EnumSet.of(USERNAME, EMAIL, PHONE_NUMBER, URL);
-    identifier.addAll(text);
+    Set<ValueType> identifier =
+        EnumSet.of(USERNAME, EMAIL, PHONE_NUMBER, URL, TEXT, LONG_TEXT, LETTER);
     identifier.addAll(integer);
     Set<ValueType> doseNumber = EnumSet.of(TEXT);
     doseNumber.addAll(integer);
@@ -152,50 +88,20 @@ class FhirResourceMappingValidatorTest {
             EnumSet.of(FILE_RESOURCE, IMAGE, COORDINATE, GEOJSON, ORGANISATION_UNIT, REFERENCE)));
   }
 
-  @Mock private IdentifiableObjectManager manager;
-
+  private final IdentifiableObjectManager manager = mock(IdentifiableObjectManager.class);
   private final List<IdentifiableObject> metadata = new ArrayList<>();
-  private FhirResourceMappingValidator validator;
+  private final FhirResourceMappingValidator validator = new FhirResourceMappingValidator(manager);
   private TrackedEntityType person;
-  private TrackedEntityAttribute textTea;
-  private TrackedEntityAttribute text2Tea;
-  private TrackedEntityAttribute genderTea;
-  private TrackedEntityAttribute integerTea;
-  private TrackedEntityAttribute dateTea;
-  private TrackedEntityAttribute phoneTea;
-  private TrackedEntityAttribute emailTea;
-  private TrackedEntityAttribute addressTea;
-  private TrackedEntityAttribute programTea;
-  private TrackedEntityAttribute strayTea;
-  private Program program;
-  private Program withoutRegistrationProgram;
-  private Program otherTypeProgram;
-  private ProgramStage stage;
-  private ProgramStage otherStage;
-  private DataElement booleanDe;
-  private DataElement textDe;
-  private DataElement integerDe;
-  private DataElement numberDe;
-  private DataElement number2De;
-  private DataElement strayDe;
+  private TrackedEntityAttribute textTea, text2Tea, addressTea, programTea, strayTea;
+  private Program program, withoutRegistrationProgram, otherTypeProgram;
+  private ProgramStage stage, otherStage;
+  private DataElement booleanDe, textDe, numberDe, number2De, strayDe;
 
-  /**
-   * Registers tracked entity type {@code person} with its attributes; the registration {@code
-   * program} on {@code person} with attribute {@code programTea} and stage {@code stage} with its
-   * data elements; a stage of another program; a program without registration; a program of another
-   * type; and the attribute {@code strayTea} and data element {@code strayDe} of nothing.
-   */
   @BeforeEach
   void setUp() {
-    validator = new FhirResourceMappingValidator(manager);
     person = register(trackedEntityType(uid()));
     textTea = personAttribute(TEXT);
     text2Tea = personAttribute(TEXT);
-    genderTea = personAttribute(TEXT);
-    integerTea = personAttribute(INTEGER);
-    dateTea = personAttribute(DATE);
-    phoneTea = personAttribute(PHONE_NUMBER);
-    emailTea = personAttribute(EMAIL);
     addressTea = personAttribute(LONG_TEXT);
     programTea = register(trackedEntityAttribute(uid(), TEXT));
     strayTea = register(trackedEntityAttribute(uid(), TEXT));
@@ -203,7 +109,6 @@ class FhirResourceMappingValidatorTest {
     stage = register(programStage(uid(), program));
     booleanDe = stageDataElement(BOOLEAN);
     textDe = stageDataElement(TEXT);
-    integerDe = stageDataElement(INTEGER);
     numberDe = stageDataElement(NUMBER);
     number2De = stageDataElement(NUMBER);
     strayDe = register(dataElement(uid(), TEXT));
@@ -217,69 +122,52 @@ class FhirResourceMappingValidatorTest {
   @ParameterizedTest
   @EnumSource(FhirResourceType.class)
   void validMappingOfEachTypeHasNoReports(FhirResourceType type) {
-    assertNoReports(validate(validMapping(type)));
-
+    assertEquals(List.of(), validate(validMapping(type)));
     if (type == PATIENT) {
-      FhirResourceMapping withProgram =
-          withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_ADDRESS_TEXT, programTea));
+      var withProgram = withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_ADDRESS_TEXT, programTea));
       withProgram.setProgram(program);
-      assertNoReports(validate(withProgram));
+      assertEquals(List.of(), validate(withProgram));
     }
   }
 
   @Test
   void validateWithoutLookupResolvesMetadataThroughManagerWithoutAcl() {
-    BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup =
-        lookup(metadata.toArray(IdentifiableObject[]::new));
+    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
     when(manager.getNoAcl(any(), anyString()))
         .thenAnswer(call -> lookup.apply(call.getArgument(0), call.getArgument(1)));
-
-    assertNoReports(validator.validate(validMapping(ENCOUNTER), null));
+    assertEquals(List.of(), validator.validate(validMapping(ENCOUNTER), null));
     verify(manager).getNoAcl(Program.class, program.getUid());
     verify(manager).getNoAcl(ProgramStage.class, stage.getUid());
   }
 
-  // E4000: missing required properties
-
-  @Test
-  void nullEntryIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    mapping.getFieldMappings().add(null);
-    assertOnly(validate(mapping), E4000, "fieldMappings");
-  }
-
-  @Test
-  void entryWithoutTargetIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    mapping.getFieldMappings().add(Entry.field(null, ATTRIBUTE, textTea.getUid()).build());
-    assertOnly(validate(mapping), E4000, "target");
-  }
-
-  @Test
-  void entryWithoutSourceTypeIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_FAMILY_NAME).setSourceType(null);
-    assertOnly(validate(mapping), E4000, "sourceType");
+  @ParameterizedTest
+  @CsvSource({
+    "PATIENT_FAMILY_NAME, fieldMappings",
+    "PATIENT_FAMILY_NAME, target",
+    "PATIENT_FAMILY_NAME, sourceType",
+    "PATIENT_FAMILY_NAME, source",
+    "PATIENT_IDENTIFIER, system",
+    "ENCOUNTER_CLASS, code",
+    "OBSERVATION_VALUE, code",
+    "PATIENT_FAMILY_NAME, resourceType",
+    "ENCOUNTER_CLASS, resourceType",
+    "PATIENT_FAMILY_NAME, trackedEntityType",
+    "ENCOUNTER_CLASS, trackedEntityType"
+  })
+  void entryWithoutPropertyIsMissingRequiredProperty(FhirTargetField target, String property) {
+    String blank = property.equals("system") ? " " : null;
+    assertOnly(validate(withValue(target, property, blank)), E4000, property);
   }
 
   @ParameterizedTest
-  @CsvSource({
-    "ENCOUNTER, program",
-    "ENCOUNTER, programStage",
-    "IMMUNIZATION, program",
-    "IMMUNIZATION, programStage",
-    "OBSERVATION, program",
-    "OBSERVATION, programStage"
-  })
-  void eventMappingWithoutProgramOrStageIsMissingRequiredProperty(
-      FhirResourceType type, String property) {
-    FhirResourceMapping mapping = validMapping(type);
-    if ("program".equals(property)) {
-      mapping.setProgram(null);
-    } else {
-      mapping.setProgramStage(null);
-    }
-    assertOnly(validate(mapping), E4000, property);
+  @EnumSource(value = FhirResourceType.class, names = "PATIENT", mode = EnumSource.Mode.EXCLUDE)
+  void eventMappingWithoutProgramOrStageIsMissingRequiredProperty(FhirResourceType type) {
+    FhirResourceMapping withoutProgram = validMapping(type);
+    withoutProgram.setProgram(null);
+    assertOnly(validate(withoutProgram), E4000, "program");
+    FhirResourceMapping withoutStage = validMapping(type);
+    withoutStage.setProgramStage(null);
+    assertOnly(validate(withoutStage), E4000, "programStage");
   }
 
   @ParameterizedTest
@@ -296,36 +184,6 @@ class FhirResourceMappingValidatorTest {
   }
 
   @Test
-  void identifierWithoutSystemIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_IDENTIFIER).setSystem(" ");
-    assertOnly(validate(mapping), E4000, "system");
-  }
-
-  @Test
-  void constantWithoutCodeIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(ENCOUNTER);
-    entryOf(mapping, ENCOUNTER_CLASS).setCode(null);
-    assertOnly(validate(mapping), E4000, "code");
-  }
-
-  @Test
-  void observationValueWithoutCodeIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(OBSERVATION);
-    entryOf(mapping, OBSERVATION_VALUE).setCode(null);
-    assertOnly(validate(mapping), E4000, "code");
-  }
-
-  @Test
-  void nonConstantEntryWithoutSourceIsMissingRequiredProperty() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_FAMILY_NAME).setSource(null);
-    assertOnly(validate(mapping), E4000, "source");
-  }
-
-  // E4010: targets and source types the mapping does not support
-
-  @Test
   void targetOfAnotherResourceTypeIsNotSupported() {
     FhirResourceMapping mapping = validMapping(PATIENT);
     mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_HEIGHT_CODE, null).build());
@@ -333,46 +191,40 @@ class FhirResourceMappingValidatorTest {
   }
 
   @ParameterizedTest
-  @EnumSource(
-      value = FhirTargetField.class,
-      names = {"ENCOUNTER_CLASS", "PATIENT_FAMILY_NAME"})
+  @ValueSource(strings = {"ENCOUNTER_CLASS", "PATIENT_FAMILY_NAME"})
   void sourceTypeNotAllowedForTargetIsNotSupported(FhirTargetField target) {
-    FhirResourceMapping mapping =
-        withEntries(target, Entry.field(target, DATA_ELEMENT, textDe.getUid()));
+    var mapping = withEntries(target, Entry.field(target, DATA_ELEMENT, textDe.getUid()));
     assertOnly(validate(mapping), E4010, "DATA_ELEMENT", target.name());
   }
 
-  // E4014 and E4027: invalid values
-
   @Test
   void sourceThatIsNotAUidIsInvalid() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_FAMILY_NAME).setSource("not-a-uid");
+    var mapping = withValue(PATIENT_FAMILY_NAME, "source", "not-a-uid");
     assertOnly(validate(mapping), E4014, "not-a-uid", "source");
   }
 
-  @Test
-  void genderValueMapOutsideAdministrativeGenderIsInvalid() {
+  @ParameterizedTest
+  @CsvSource({
+    "M, man, F, female, E4027, man",
+    "'  ', male, F, female, E4027, '  '",
+    "A;B, male, C, male, E4027, A;B",
+    "Ä, male, ä, female, E5003, ä",
+    "ΟΔΟΣ, other, F, female, E4027, ΟΔΟΣ"
+  })
+  void genderValueMapOutsideAdministrativeGenderIsInvalid(
+      String k1, String v1, String k2, String v2, ErrorCode code, String arg) {
     FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_GENDER).setValueMap(Map.of("M", "man", "F", "female"));
-    assertOnly(validate(mapping), E4027, "man", "valueMap");
-  }
-
-  /** Sources the birth date from {@code textTea} in a mapping without family name entry. */
-  @Test
-  void birthDateFedTextAttributeIsInvalidValueType() {
-    FhirResourceMapping mapping =
-        replace(
-            withEntries(PATIENT_FAMILY_NAME),
-            PATIENT_BIRTH_DATE,
-            entry(PATIENT_BIRTH_DATE, textTea));
-    assertOnly(validate(mapping), E4027, "TEXT", "PATIENT_BIRTH_DATE");
+    entryOf(mapping, PATIENT_GENDER).setValueMap(new TreeMap<>(Map.of(k1, v1, k2, v2)));
+    String id = mapping.getUid();
+    String[] args =
+        code == E5003 ? new String[] {"valueMap", arg, id, id} : new String[] {arg, "valueMap"};
+    assertOnly(validate(mapping), code, args);
   }
 
   @ParameterizedTest
   @MethodSource("acceptedValueTypes")
   void acceptedValueTypeHasNoValueTypeReport(FhirTargetField target, ValueType valueType) {
-    assertNoReports(validate(withEntries(target, sourceOfValueType(target, valueType))));
+    assertEquals(List.of(), validate(withEntries(target, sourceOfValueType(target, valueType))));
   }
 
   @ParameterizedTest
@@ -382,13 +234,11 @@ class FhirResourceMappingValidatorTest {
     assertOnly(validate(mapping), E4027, valueType.name(), target.name());
   }
 
-  /** One row per target and value type it accepts. */
   static Stream<Arguments> acceptedValueTypes() {
     return ACCEPTED.entrySet().stream()
         .flatMap(e -> e.getValue().stream().map(type -> Arguments.of(e.getKey(), type)));
   }
 
-  /** One row per target and value type it does not accept. */
   static Stream<Arguments> rejectedValueTypes() {
     return ACCEPTED.entrySet().stream()
         .flatMap(
@@ -397,58 +247,35 @@ class FhirResourceMappingValidatorTest {
                     .map(type -> Arguments.of(e.getKey(), type)));
   }
 
-  // E5002: invalid references
-
-  @Test
-  void programWithoutRegistrationIsInvalidReference() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    mapping.setProgram(withoutRegistrationProgram);
-    String programUid = withoutRegistrationProgram.getUid();
-    assertOnly(validate(mapping), E5002, programUid, mapping.getUid(), "program");
+  @ParameterizedTest
+  @CsvSource({
+    "PATIENT, program",
+    "PATIENT, trackedEntityType",
+    "PATIENT, programStage",
+    "ENCOUNTER, programStage"
+  })
+  void programOrStageOutsideItsScopeIsInvalidReference(FhirResourceType type, String property) {
+    FhirResourceMapping mapping = validMapping(type);
+    switch (property) {
+      case "program" -> mapping.setProgram(withoutRegistrationProgram);
+      case "trackedEntityType" -> mapping.setProgram(otherTypeProgram);
+      default -> mapping.setProgramStage(type == PATIENT ? stage : otherStage);
+    }
+    IdentifiableObject reference =
+        property.equals("programStage") ? mapping.getProgramStage() : mapping.getProgram();
+    assertOnly(validate(mapping), E5002, reference.getUID().getValue(), mapping.getUid(), property);
   }
 
   @Test
-  void programOfAnotherTrackedEntityTypeIsInvalidReference() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    mapping.setProgram(otherTypeProgram);
-    String programUid = otherTypeProgram.getUid();
-    assertOnly(validate(mapping), E5002, programUid, mapping.getUid(), "trackedEntityType");
-  }
-
-  @Test
-  void stageNotInProgramIsInvalidReference() {
-    FhirResourceMapping mapping = validMapping(ENCOUNTER);
-    mapping.setProgramStage(otherStage);
-    assertOnly(validate(mapping), E5002, otherStage.getUid(), mapping.getUid(), "programStage");
-  }
-
-  @Test
-  void programStageOnPatientMappingIsInvalidReference() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    mapping.setProgramStage(stage);
-    assertOnly(validate(mapping), E5002, stage.getUid(), mapping.getUid(), "programStage");
-  }
-
-  /** An attribute of nothing, and a program attribute on a mapping without program. */
-  @Test
-  void attributeNotOnTypeOrProgramIsInvalidReference() {
-    for (TrackedEntityAttribute attribute : List.of(strayTea, programTea)) {
-      FhirResourceMapping mapping =
-          withEntries(PATIENT_FAMILY_NAME, entry(PATIENT_FAMILY_NAME, attribute));
-      String id = mapping.getUid();
-      assertOnly(validate(mapping), E5002, attribute.getUid(), id, "PATIENT_FAMILY_NAME");
+  void sourceOutsideTypeProgramOrStageIsInvalidReference() {
+    for (IdentifiableObject source : List.of(strayTea, programTea, strayDe)) {
+      FhirTargetField target = source == strayDe ? ENCOUNTER_TYPE : PATIENT_FAMILY_NAME;
+      FhirResourceMapping mapping = withEntries(target, entry(target, source));
+      assertOnly(
+          validate(mapping), E5002, source.getUID().getValue(), mapping.getUid(), target.name());
     }
   }
 
-  @Test
-  void dataElementNotInStageIsInvalidReference() {
-    FhirResourceMapping mapping = withEntries(ENCOUNTER_TYPE, entry(ENCOUNTER_TYPE, strayDe));
-    assertOnly(validate(mapping), E5002, strayDe.getUid(), mapping.getUid(), "ENCOUNTER_TYPE");
-  }
-
-  // E5003: duplicates
-
-  /** The mapping itself and a mapping with its UID are skipped; the other holder is named. */
   @ParameterizedTest
   @EnumSource(FhirResourceType.class)
   void uniquenessKeyAlreadyHeldIsDuplicate(FhirResourceType type) {
@@ -458,20 +285,20 @@ class FhirResourceMappingValidatorTest {
     FhirResourceMapping other = validMapping(type);
     List<ErrorReport> reports = validate(mapping, mapping, sameUid, other);
     String key = uniquenessKey(mapping);
-    assertOnly(reports, E5003, "resourceType", key, mapping.getUid(), other.getUid());
+    assertOnly(reports, E5003, "resourceType", key, mapping.getUid(), OTHER_MAPPING);
+    String message = reports.get(0).getMessage();
+    assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
   }
 
   @Test
   void immunizationWithDifferentAdministeredDataElementIsAllowed() {
-    FhirResourceMapping other =
-        withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
-    assertNoReports(validate(validMapping(IMMUNIZATION), other));
+    var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
+    assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
   }
 
   @Test
   void repeatedOneCardinalityTargetIsDuplicate() {
-    FhirResourceMapping mapping =
-        withEntries(PATIENT_GIVEN_NAME, entry(PATIENT_FAMILY_NAME, text2Tea));
+    var mapping = withEntries(PATIENT_GIVEN_NAME, entry(PATIENT_FAMILY_NAME, text2Tea));
     String id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "target", "PATIENT_FAMILY_NAME", id, id);
   }
@@ -482,6 +309,13 @@ class FhirResourceMappingValidatorTest {
         withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
     String id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "system", SYSTEM, id, id);
+    String tooLong = "urn:x:" + "a".repeat(MAX_TEXT_LENGTH);
+    mapping.getFieldMappings().stream()
+        .filter(e -> e.getSystem() != null)
+        .forEach(e -> e.setSystem(tooLong));
+    List<String> args = List.of("system", "1024", String.valueOf(tooLong.length()));
+    assertEquals(
+        List.of(args, args), validate(mapping).stream().map(ErrorReport::getArgs).toList());
   }
 
   @Test
@@ -495,57 +329,108 @@ class FhirResourceMappingValidatorTest {
   @Test
   void duplicateObservationDataElementIsDuplicate() {
     FhirResourceMapping mapping = validMapping(OBSERVATION);
-    Entry weight = observation(numberDe, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY);
-    mapping.getFieldMappings().add(weight.build());
+    mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_WEIGHT_CODE, null).build());
     String id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), id, id);
   }
 
   @Test
   void uniquenessKeyPerResourceType() {
-    String stageUid = stage.getUid();
     assertEquals("PATIENT", uniquenessKey(validMapping(PATIENT)));
-    assertEquals("ENCOUNTER:" + stageUid, uniquenessKey(validMapping(ENCOUNTER)));
-    assertEquals("OBSERVATION:" + stageUid, uniquenessKey(validMapping(OBSERVATION)));
+    assertEquals("ENCOUNTER:" + stage.getUid(), uniquenessKey(validMapping(ENCOUNTER)));
+    assertEquals("OBSERVATION:" + stage.getUid(), uniquenessKey(validMapping(OBSERVATION)));
     assertEquals(
-        "IMMUNIZATION:" + stageUid + ":" + booleanDe.getUid(),
+        "IMMUNIZATION:" + stage.getUid() + ":" + booleanDe.getUid(),
         uniquenessKey(validMapping(IMMUNIZATION)));
-
-    FhirResourceMapping withoutType = validMapping(PATIENT);
-    withoutType.setResourceType(null);
-    FhirResourceMapping withoutStage = validMapping(ENCOUNTER);
-    withoutStage.setProgramStage(null);
     assertNull(uniquenessKey(null));
-    assertNull(uniquenessKey(withoutType));
-    assertNull(uniquenessKey(withoutStage));
+    assertNull(uniquenessKey(withValue(PATIENT_FAMILY_NAME, "resourceType", null)));
+    assertNull(uniquenessKey(withValue(ENCOUNTER_CLASS, "programStage", null)));
     assertNull(uniquenessKey(withEntries(IMMUNIZATION_ADMINISTERED)));
   }
 
-  // Fixture factories and assertions
+  @ParameterizedTest
+  @CsvSource({
+    "OBSERVATION_VALUE, code, '8302-2 ', false",
+    "ENCOUNTER_CLASS, code, 'a  b', false",
+    "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', false",
+    "OBSERVATION_VALUE, code, 'a\u00a0b', false",
+    "ENCOUNTER_TYPE, system, 'urn:bad uri', false",
+    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, false",
+    "ENCOUNTER_CLASS, system, http:foo, false",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, false",
+    "OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, false",
+    "OBSERVATION_VALUE, system, " + LDAP + ", false",
+    "OBSERVATION_VALUE, code, a b, true",
+    "ENCOUNTER_CLASS, code, \u00e4, true",
+    "PATIENT_IDENTIFIER, system, " + LDAP + ", true",
+    "ENCOUNTER_TYPE, system, https://fhir.example.org:8443/x, true",
+    "PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1, true",
+    "OBSERVATION_VALUE, system, urn:uuid:53fefa32-fcbb-4ff8-8a92-55ee120877b7, true"
+  })
+  void codeOrSystemFollowsR4CodeAndUriRules(
+      FhirTargetField target, String property, String value, boolean valid) {
+    List<ErrorReport> reports = validate(withValue(target, property, value));
+    if (valid) {
+      assertEquals(List.of(), reports);
+    } else {
+      assertOnly(reports, E4027, value, property);
+    }
+  }
+
+  @Test
+  void mappingOverCountOrTotalTextBoundIsTooLong() {
+    FhirResourceMapping mapping = validMapping(ENCOUNTER);
+    FhirFieldMapping type = entryOf(mapping, ENCOUNTER_TYPE);
+    type.setValueMap(pairs(MAX_VALUE_MAP_SIZE));
+    List<FhirFieldMapping> entries = mapping.getFieldMappings();
+    IntStream.range(entries.size(), MAX_FIELD_MAPPINGS)
+        .forEach(i -> entries.add(Entry.constant(ENCOUNTER_TYPE, SYSTEM, "t" + i, null).build()));
+    assertEquals(List.of(), validate(mapping));
+    type.setValueMap(pairs(101));
+    assertOnly(validate(mapping), E4001, "valueMap", "100", "101");
+    entries.add(entry(ENCOUNTER_TYPE, strayDe).build());
+    assertOnly(validate(mapping), E4001, "fieldMappings", "500", "501");
+    FhirResourceMapping text = withEntries(ENCOUNTER_TYPE);
+    String coding = ENCOUNTER_CLASS_SYSTEM + ENCOUNTER_CLASS_CODE + ENCOUNTER_CLASS_DISPLAY;
+    int free = MAX_TOTAL_TEXT_LENGTH - coding.length();
+    Entry reason =
+        entry(ENCOUNTER_REASON, textDe).display("d".repeat(1000 - textDe.getUid().length()));
+    IntStream.range(0, free / 1000).forEach(i -> text.getFieldMappings().add(reason.build()));
+    FhirFieldMapping encounterClass = entryOf(text, ENCOUNTER_CLASS);
+    encounterClass.setDisplay(encounterClass.getDisplay() + "d".repeat(free % 1000));
+    assertEquals(List.of(), validate(text));
+    entryOf(text, ENCOUNTER_REASON).setValueMap(Map.of("d", ""));
+    assertOnly(validate(text), E4001, "fieldMappings.text", "100000", "100001");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"source", "system", "code", "display", "unit", "valueMap.key", "valueMap.value"})
+  void textLongerThanMaxTextLengthIsTooLong(String property) {
+    String urn = "urn:x:" + "a".repeat(MAX_TEXT_LENGTH - "urn:x:".length());
+    List<ErrorReport> atBound = validate(withValue(OBSERVATION_VALUE, property, urn));
+    assertTrue(atBound.stream().noneMatch(r -> r.getErrorCode() == E4001), atBound::toString);
+    var tooLong = withValue(OBSERVATION_VALUE, property, urn + "a");
+    assertOnly(validate(tooLong), E4001, property, "1024", "1025");
+  }
 
   private <T extends IdentifiableObject> T register(T object) {
     metadata.add(object);
     return object;
   }
 
-  /** Registers a new attribute of the value type and adds it to {@code person}. */
   private TrackedEntityAttribute personAttribute(ValueType valueType) {
     TrackedEntityAttribute attribute = register(trackedEntityAttribute(uid(), valueType));
     person.getTrackedEntityTypeAttributes().add(new TrackedEntityTypeAttribute(person, attribute));
     return attribute;
   }
 
-  /** Registers a new data element of the value type and adds it to {@code stage}. */
   private DataElement stageDataElement(ValueType valueType) {
     DataElement dataElement = register(dataElement(uid(), valueType));
     stage.getProgramStageDataElements().add(new ProgramStageDataElement(stage, dataElement));
     return dataElement;
   }
 
-  /**
-   * Returns a new valid mapping of the type with a new UID; Patient mappings use every Patient
-   * target, event mappings read {@code stage} of {@code program}.
-   */
   private FhirResourceMapping validMapping(FhirResourceType type) {
     boolean patient = type == PATIENT;
     FhirResourceMapping mapping =
@@ -554,28 +439,21 @@ class FhirResourceMappingValidatorTest {
         switch (type) {
           case PATIENT ->
               entries(
-                  entry(PATIENT_IDENTIFIER, integerTea).system(SYSTEM),
+                  entry(PATIENT_IDENTIFIER, personAttribute(INTEGER)).system(SYSTEM),
                   entry(PATIENT_FAMILY_NAME, textTea),
                   entry(PATIENT_GIVEN_NAME, text2Tea),
-                  entry(PATIENT_GENDER, genderTea).valueMap(GENDER_MAP),
-                  entry(PATIENT_BIRTH_DATE, dateTea),
-                  entry(PATIENT_PHONE, phoneTea),
-                  entry(PATIENT_EMAIL, emailTea),
+                  entry(PATIENT_GENDER, personAttribute(TEXT)).valueMap(GENDER_MAP),
+                  entry(PATIENT_BIRTH_DATE, personAttribute(DATE)),
+                  entry(PATIENT_PHONE, personAttribute(PHONE_NUMBER)),
+                  entry(PATIENT_EMAIL, personAttribute(EMAIL)),
                   entry(PATIENT_ADDRESS_TEXT, addressTea));
-          case ENCOUNTER ->
-              entries(
-                  Entry.constant(
-                      ENCOUNTER_CLASS,
-                      ENCOUNTER_CLASS_SYSTEM,
-                      ENCOUNTER_CLASS_CODE,
-                      ENCOUNTER_CLASS_DISPLAY),
-                  entry(ENCOUNTER_TYPE, textDe).system(SYSTEM));
+          case ENCOUNTER -> entries(AMBULATORY, entry(ENCOUNTER_TYPE, textDe).system(SYSTEM));
           case IMMUNIZATION ->
               entries(
                   entry(IMMUNIZATION_ADMINISTERED, booleanDe),
                   Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, CVX_DISPLAY),
                   entry(IMMUNIZATION_LOT_NUMBER, textDe),
-                  entry(IMMUNIZATION_DOSE_NUMBER, integerDe));
+                  entry(IMMUNIZATION_DOSE_NUMBER, stageDataElement(INTEGER)));
           case OBSERVATION ->
               entries(
                   observation(numberDe, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
@@ -586,23 +464,35 @@ class FhirResourceMappingValidatorTest {
     return mapping;
   }
 
-  /**
-   * Returns the valid mapping of the target's resource type with every entry of the target replaced
-   * by the given entries, which may be none.
-   */
   private FhirResourceMapping withEntries(FhirTargetField target, Entry... replacements) {
-    return replace(validMapping(target.resourceType()), target, replacements);
-  }
-
-  /** Removes every entry of the target from the mapping, appends the replacements, returns it. */
-  private static FhirResourceMapping replace(
-      FhirResourceMapping mapping, FhirTargetField target, Entry... replacements) {
-    mapping.getFieldMappings().removeIf(entry -> entry != null && entry.getTarget() == target);
+    FhirResourceMapping mapping = validMapping(target.resourceType());
+    mapping.getFieldMappings().removeIf(entry -> entry.getTarget() == target);
     mapping.getFieldMappings().addAll(entries(replacements));
     return mapping;
   }
 
-  /** Returns the first entry of the target in the mapping; changing it changes the mapping. */
+  private FhirResourceMapping withValue(FhirTargetField target, String property, String value) {
+    FhirResourceMapping mapping = validMapping(target.resourceType());
+    FhirFieldMapping entry = entryOf(mapping, target);
+    switch (property) {
+      case "fieldMappings" -> mapping.getFieldMappings().add(null);
+      case "target" -> entry.setTarget(null);
+      case "sourceType" -> entry.setSourceType(null);
+      case "resourceType" -> mapping.setResourceType(null);
+      case "trackedEntityType" -> mapping.setTrackedEntityType(null);
+      case "programStage" -> mapping.setProgramStage(null);
+      case "source" -> entry.setSource(value);
+      case "system" -> entry.setSystem(value);
+      case "code" -> entry.setCode(value);
+      case "display" -> entry.setDisplay(value);
+      case "unit" -> entry.setUnit(value);
+      case "valueMap.key" -> entry.setValueMap(Map.of(value, "v"));
+      case "valueMap.value" -> entry.setValueMap(Map.of("k", value));
+      default -> throw new IllegalArgumentException(property);
+    }
+    return mapping;
+  }
+
   private static FhirFieldMapping entryOf(FhirResourceMapping mapping, FhirTargetField target) {
     return mapping.getFieldMappings().stream()
         .filter(entry -> entry.getTarget() == target)
@@ -610,35 +500,28 @@ class FhirResourceMappingValidatorTest {
         .orElseThrow();
   }
 
-  /** Starts an entry of the target with an attribute source for Patient targets, else a DE. */
   private static Entry entry(FhirTargetField target, IdentifiableObject source) {
     FhirSourceType sourceType = target.resourceType() == PATIENT ? ATTRIBUTE : DATA_ELEMENT;
-    return Entry.field(target, sourceType, source.getUid());
+    return Entry.field(target, sourceType, source.getUID().getValue());
   }
 
   private static Entry observation(DataElement source, String code, String display) {
     return entry(OBSERVATION_VALUE, source).system(LOINC_SYSTEM).code(code).display(display);
   }
 
-  /**
-   * Starts an entry of the target whose source is a new attribute of {@code person} (Patient
-   * targets) or a new data element of {@code stage} (other targets) of the value type, with a
-   * system, a code and a valid gender value map.
-   */
   private Entry sourceOfValueType(FhirTargetField target, ValueType valueType) {
     IdentifiableObject source =
         target.resourceType() == PATIENT ? personAttribute(valueType) : stageDataElement(valueType);
     return entry(target, source).system(SYSTEM).code(LOINC_BODY_HEIGHT_CODE).valueMap(GENDER_MAP);
   }
 
-  /**
-   * Validates the mapping against the others over the registered metadata, and asserts that each
-   * report has one of the validator's error codes and {@link FhirResourceMapping} as its class.
-   */
+  private static Map<String, String> pairs(int size) {
+    return IntStream.range(0, size).boxed().collect(Collectors.toMap(i -> "k" + i, i -> "v" + i));
+  }
+
   private List<ErrorReport> validate(FhirResourceMapping mapping, FhirResourceMapping... others) {
-    List<ErrorReport> reports =
-        validator.validate(
-            mapping, List.of(others), lookup(metadata.toArray(IdentifiableObject[]::new)));
+    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
+    List<ErrorReport> reports = validator.validate(mapping, List.of(others), lookup);
     for (ErrorReport report : reports) {
       assertTrue(VALIDATOR_CODES.contains(report.getErrorCode()), report::toString);
       assertEquals(FhirResourceMapping.class, report.getMainKlass(), report::toString);
@@ -646,19 +529,8 @@ class FhirResourceMappingValidatorTest {
     return reports;
   }
 
-  /**
-   * Asserts that there are reports and that all have the code; given arguments, also asserts that
-   * there is exactly one report and that it carries exactly these arguments.
-   */
   private static void assertOnly(List<ErrorReport> reports, ErrorCode code, String... args) {
-    assertFalse(reports.isEmpty(), () -> "expected a report with " + code);
-    reports.forEach(report -> assertEquals(code, report.getErrorCode(), report::toString));
-    if (args.length > 0) {
-      assertEquals(List.of(List.of(args)), reports.stream().map(ErrorReport::getArgs).toList());
-    }
-  }
-
-  private static void assertNoReports(List<ErrorReport> reports) {
-    assertTrue(reports.isEmpty(), reports::toString);
+    List<String> actual = reports.stream().map(r -> r.getErrorCode() + " " + r.getArgs()).toList();
+    assertEquals(List.of(code + " " + List.of(args)), actual);
   }
 }

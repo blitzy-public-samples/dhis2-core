@@ -29,78 +29,77 @@
  */
 package org.hisp.dhis.fhir;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.jupiter.api.Assertions.*;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.parser.IParser;
-import ca.uhn.fhir.parser.StrictErrorHandler;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Stream;
-import org.hisp.dhis.external.conf.ConfigurationKey;
-import org.hisp.dhis.external.conf.DhisConfigurationProvider;
+import org.hisp.dhis.external.conf.*;
+import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.test.webapi.AuthenticationApiTestBase;
-import org.hl7.fhir.r4.model.OperationOutcome;
-import org.hl7.fhir.r4.model.OperationOutcome.OperationOutcomeIssueComponent;
+import org.hisp.dhis.webapi.filter.ApiVersionFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
+import org.springframework.http.*;
 import org.springframework.mock.web.MockHttpServletResponse;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers;
+import org.springframework.security.web.FilterChainProxy;
+import org.springframework.test.web.servlet.request.*;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
- * Tests the FHIR R4 API with {@code fhir.api.enabled} at its default value, through the real Spring
- * Security filter chain: every route under {@code /api/fhir/**} and {@code /api/{version}/fhir/**}
- * answers {@code 404} with a not-found {@code OperationOutcome} for anonymous and authenticated
- * callers and for every HTTP method, while routes outside the FHIR API keep their existing
- * responses.
+ * Tests, through the security filter chain and then the API version filter with {@code
+ * fhir.api.enabled} at its default, that each of {@link #FHIR_ROUTES} answers the FHIR not-found
+ * {@code 404} to anonymous, Basic and session callers: {@code GET}, {@code HEAD}, {@code OPTIONS},
+ * CORS preflight and {@code POST} on unversioned and versioned paths, also on {@code /loginConfig}
+ * paths that security ignores, while the sampled non-FHIR routes keep their responses.
  */
 class FhirApiDisabledTest extends AuthenticationApiTestBase {
-
-  private static final String BASIC_AUTH_USER_NAME = "usera";
-
-  /** {@code Authorization} header value holding the basic credentials of {@code usera}. */
-  private static final String BASIC_AUTH_HEADER =
-      "Basic "
-          + Base64.getEncoder()
-              .encodeToString(
-                  (BASIC_AUTH_USER_NAME + ":" + DEFAULT_ADMIN_PASSWORD)
-                      .getBytes(StandardCharsets.UTF_8));
-
-  private static final String X_REQUESTED_WITH = "X-Requested-With";
-
-  private static final String XML_HTTP_REQUEST = "XMLHttpRequest";
-
+  static final String BASIC_AUTH_USER_NAME = "usera";
+  static final String BASIC_AUTH_HEADER =
+      "Basic " + HttpHeaders.encodeBasicAuth(BASIC_AUTH_USER_NAME, DEFAULT_ADMIN_PASSWORD, UTF_8);
+  static final String X_REQUESTED_WITH = "X-Requested-With";
+  static final String XML_HTTP_REQUEST = "XMLHttpRequest";
   private static final String PATIENT_ID = "dUE514NMOlo";
-
+  private static final String PATIENT_BODY = "{\"resourceType\":\"Patient\"}";
+  private static final String LOGIN_CONFIG = "/loginConfig";
   private static final List<FhirRoute> FHIR_ROUTES =
       List.of(
-          new FhirRoute(HttpMethod.GET, "/api/fhir/Patient/" + PATIENT_ID, null),
-          new FhirRoute(HttpMethod.GET, "/api/fhir/metadata", null),
-          new FhirRoute(HttpMethod.GET, "/api/fhir", null),
-          new FhirRoute(HttpMethod.GET, "/api/44/fhir/Patient/" + PATIENT_ID, null),
-          new FhirRoute(HttpMethod.POST, "/api/fhir/Patient", "{\"resourceType\":\"Patient\"}"));
-
+          new FhirRoute(HttpMethod.GET, "/api/fhir/Patient/" + PATIENT_ID, null, false),
+          new FhirRoute(HttpMethod.HEAD, "/api/fhir/Patient/" + PATIENT_ID, null, false),
+          new FhirRoute(HttpMethod.OPTIONS, "/api/fhir/Patient/" + PATIENT_ID, null, true),
+          new FhirRoute(HttpMethod.GET, "/api/fhir/metadata", null, false),
+          new FhirRoute(HttpMethod.OPTIONS, "/api/fhir/metadata", null, false),
+          new FhirRoute(HttpMethod.GET, "/api/fhir", null, false),
+          new FhirRoute(HttpMethod.GET, "/api/44/fhir/Patient/" + PATIENT_ID, null, false),
+          new FhirRoute(HttpMethod.POST, "/api/fhir/Patient", PATIENT_BODY, false),
+          new FhirRoute(HttpMethod.GET, "/api/fhir/Patient" + LOGIN_CONFIG, null, false),
+          new FhirRoute(HttpMethod.GET, "/api/fhir" + LOGIN_CONFIG, null, false),
+          new FhirRoute(HttpMethod.GET, "/api/44/fhir/Patient" + LOGIN_CONFIG, null, false),
+          new FhirRoute(HttpMethod.POST, "/api/fhir/Patient" + LOGIN_CONFIG, PATIENT_BODY, false),
+          new FhirRoute(HttpMethod.OPTIONS, "/api/fhir/Patient" + LOGIN_CONFIG, null, false));
   private static final List<String> NON_FHIR_PATHS =
       List.of("/api/fhirResourceMappings", "/api/44/fhirResourceMappings");
 
   @Autowired private DhisConfigurationProvider config;
+  @Autowired private FilterChainProxy springSecurityFilterChain;
+  @Autowired private ApiVersionFilter apiVersionFilter;
 
   @BeforeEach
   void createBasicAuthUser() {
     createUserWithAuth(BASIC_AUTH_USER_NAME, "ALL");
+  }
+
+  @BeforeEach
+  void addApiVersionFilterAfterSecurity() {
+    mvc =
+        MockMvcBuilders.webAppContextSetup(webApplicationContext)
+            .apply(SecurityMockMvcConfigurers.springSecurity(springSecurityFilterChain))
+            .addFilter(apiVersionFilter)
+            .build();
   }
 
   @Test
@@ -114,9 +113,7 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   @ParameterizedTest(name = "{0} as {1}")
   @MethodSource("fhirRouteCalls")
   void everyFhirRouteReturnsNotFoundWhenDisabled(FhirRoute route, Caller caller) throws Exception {
-    MockHttpServletResponse response = perform(route, caller);
-
-    assertNotFoundOutcome(response, route + " as " + caller);
+    assertNotFoundOutcome(perform(route, caller), route.method() == HttpMethod.HEAD);
   }
 
   @Test
@@ -127,33 +124,33 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
           mvc.perform(MockMvcRequestBuilders.get(path).header(X_REQUESTED_WITH, XML_HTTP_REQUEST))
               .andReturn()
               .getResponse();
-
       assertEquals(401, anonymous.getStatus(), "GET " + path + " as ANONYMOUS");
       assertNotFhirJson(anonymous, "GET " + path + " as ANONYMOUS");
     }
-
     MockHttpServletResponse me =
-        perform(new FhirRoute(HttpMethod.GET, "/api/me", null), Caller.BASIC_AUTHENTICATED);
-
+        perform(new FhirRoute(HttpMethod.GET, "/api/me", null, false), Caller.BASIC_AUTHENTICATED);
     assertEquals(200, me.getStatus(), "GET /api/me as BASIC_AUTHENTICATED");
+    MockHttpServletResponse loginConfig =
+        perform(
+            new FhirRoute(HttpMethod.GET, "/api" + LOGIN_CONFIG, null, false), Caller.ANONYMOUS);
+    assertEquals(200, loginConfig.getStatus(), "GET /api/loginConfig as ANONYMOUS");
+    assertNotFhirJson(loginConfig, "GET /api/loginConfig as ANONYMOUS");
   }
 
-  /** Returns every FHIR route combined with every caller. */
   static Stream<Arguments> fhirRouteCalls() {
     return FHIR_ROUTES.stream()
-        .flatMap(
-            route -> Arrays.stream(Caller.values()).map(caller -> Arguments.of(route, caller)));
+        .flatMap(route -> Stream.of(Caller.values()).map(caller -> Arguments.of(route, caller)));
   }
 
-  /**
-   * Sends the request of the route as the caller: without session and credentials, with the {@code
-   * Authorization} header of {@code usera}, or with the admin session.
-   */
   private MockHttpServletResponse perform(FhirRoute route, Caller caller) throws Exception {
     MockHttpServletRequestBuilder request =
         MockMvcRequestBuilders.request(route.method(), route.path());
     if (route.body() != null) {
       request.contentType(MediaType.APPLICATION_JSON).content(route.body());
+    }
+    if (route.preflight()) {
+      request.header(HttpHeaders.ORIGIN, "http://localhost:3000");
+      request.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, HttpMethod.GET.name());
     }
     switch (caller) {
       case ANONYMOUS -> clearSecurityContext();
@@ -166,34 +163,17 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
     return mvc.perform(request).andReturn().getResponse();
   }
 
-  /**
-   * Asserts that the response is {@code 404} with the FHIR JSON content type and a body that parses
-   * strictly as an {@code OperationOutcome} holding exactly the not-found issue.
-   */
-  private static void assertNotFoundOutcome(MockHttpServletResponse response, String description)
-      throws Exception {
-    assertEquals(404, response.getStatus(), description);
-    assertNotNull(response.getContentType(), description);
-    assertEquals(
-        FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE,
-        MediaType.parseMediaType(response.getContentType()),
-        description);
-
-    IParser parser =
-        FhirContext.forR4Cached().newJsonParser().setParserErrorHandler(new StrictErrorHandler());
-    OperationOutcome outcome =
-        parser.parseResource(
-            OperationOutcome.class, response.getContentAsString(StandardCharsets.UTF_8));
-
-    assertEquals(1, outcome.getIssue().size(), description);
-    OperationOutcomeIssueComponent issue = outcome.getIssueFirstRep();
-    assertEquals(OperationOutcome.IssueSeverity.ERROR, issue.getSeverity(), description);
-    assertEquals(OperationOutcome.IssueType.NOTFOUND, issue.getCode(), description);
-    assertEquals(FhirApiException.notFound().getDiagnostics(), issue.getDiagnostics(), description);
+  /** Asserts the FHIR {@code 404 not-found} outcome; a {@code HEAD} response may lack the body. */
+  static void assertNotFoundOutcome(MockHttpServletResponse response, boolean head) {
+    HttpResponse fhir = new HttpResponse(toResponse(response));
+    if (head && response.getContentAsByteArray().length == 0) {
+      FhirPostgresControllerTestBase.fhirBody(fhir, HttpStatus.NOT_FOUND);
+    } else {
+      FhirPostgresControllerTestBase.assertNotFound(fhir);
+    }
   }
 
-  /** Asserts that the response does not carry the FHIR JSON content type. */
-  private static void assertNotFhirJson(MockHttpServletResponse response, String description) {
+  static void assertNotFhirJson(MockHttpServletResponse response, String description) {
     String contentType = response.getContentType();
     if (contentType != null) {
       assertNotEquals(
@@ -203,18 +183,16 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
     }
   }
 
-  /** The caller of a request: anonymous, authenticated by basic credentials, or by session. */
   private enum Caller {
     ANONYMOUS,
     BASIC_AUTHENTICATED,
     SESSION_AUTHENTICATED
   }
 
-  /** A request to the API: its HTTP method, path and optional JSON body. */
-  private record FhirRoute(HttpMethod method, String path, String body) {
+  private record FhirRoute(HttpMethod method, String path, String body, boolean preflight) {
     @Override
     public String toString() {
-      return method + " " + path;
+      return method + " " + path + (preflight ? " (CORS preflight)" : "");
     }
   }
 }

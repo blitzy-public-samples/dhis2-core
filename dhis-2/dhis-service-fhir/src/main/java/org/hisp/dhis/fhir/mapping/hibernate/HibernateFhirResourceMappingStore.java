@@ -34,16 +34,13 @@ import jakarta.persistence.criteria.CriteriaBuilder;
 import java.util.List;
 import javax.annotation.Nonnull;
 import org.hisp.dhis.common.hibernate.HibernateIdentifiableObjectStore;
-import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
-import org.hisp.dhis.fhir.mapping.FhirResourceMappingStore;
-import org.hisp.dhis.fhir.mapping.FhirResourceType;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.hibernate.JpaQueryParameters;
 import org.hisp.dhis.security.acl.AclService;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** Hibernate store for FHIR resource mappings. */
 @Repository("org.hisp.dhis.fhir.mapping.FhirResourceMappingStore")
 public class HibernateFhirResourceMappingStore
     extends HibernateIdentifiableObjectStore<FhirResourceMapping>
@@ -56,12 +53,6 @@ public class HibernateFhirResourceMappingStore
     super(entityManager, jdbcTemplate, publisher, FhirResourceMapping.class, aclService, false);
   }
 
-  /**
-   * Returns every mapping of the given resource type without applying sharing restrictions.
-   *
-   * @param type the FHIR resource type the mappings produce
-   * @return the mappings whose resource type is {@code type}; empty when there are none
-   */
   @Nonnull
   @Override
   public List<FhirResourceMapping> getByResourceTypeNoAcl(@Nonnull FhirResourceType type) {

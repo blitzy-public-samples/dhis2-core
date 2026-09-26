@@ -29,75 +29,52 @@
  */
 package org.hisp.dhis.fhir.web;
 
+import static org.hisp.dhis.fhir.web.FhirOpenApi.FHIR_JSON;
+
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.service.FhirPatientService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * FHIR R4 read-only endpoints for the {@code Patient} resource: read, search-type and {@code
- * $everything}.
- *
- * <ul>
- *   <li>{@code GET /api/fhir/Patient/{id}} reads one {@code Patient} by its tracked entity UID.
- *   <li>{@code GET /api/fhir/Patient} searches {@code Patient}s and returns a {@code searchset}
- *       Bundle.
- *   <li>{@code GET /api/fhir/Patient/{id}/$everything} returns a {@code searchset} Bundle holding
- *       the {@code Patient} followed by its {@code Encounter}s, {@code Immunization}s and {@code
- *       Observation}s.
- * </ul>
- *
- * <p>Every handler passes the whole request to {@link FhirPatientService}, which validates the
- * query string, and returns the result as FHIR JSON with the content type {@value
- * FhirResourceSerializer#FHIR_JSON_CONTENT_TYPE}. Errors propagate as exceptions: a {@link
- * org.hisp.dhis.fhir.FhirApiException} is rendered as an {@code OperationOutcome} by the FHIR
- * exception handler, and any other exception by the platform's exception handling.
- */
+/** FHIR R4 read, search-type and {@code $everything} endpoints for {@code Patient}. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir/Patient")
 public class FhirPatientController {
-
   private final FhirPatientService patientService;
-
   private final FhirResourceSerializer serializer;
 
-  /**
-   * Creates the controller.
-   *
-   * @param patientService reads, searches and assembles the {@code Patient} resources
-   * @param serializer encodes the resulting resources as FHIR JSON responses
-   */
   public FhirPatientController(
       FhirPatientService patientService, FhirResourceSerializer serializer) {
     this.patientService = patientService;
     this.serializer = serializer;
   }
 
-  /** Returns the {@code Patient} whose logical id is the tracked entity UID {@code id}. */
+  @OpenApi.Response(value = FhirOpenApi.FhirPatientResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
   @GetMapping("/{id}")
-  public ResponseEntity<String> readPatient(@PathVariable String id, HttpServletRequest request) {
+  public ResponseEntity<String> readPatient(
+      @OpenApi.Description("The tracked entity UID") @PathVariable String id,
+      HttpServletRequest request) {
     return serializer.ok(patientService.read(id, request));
   }
 
-  /** Returns a {@code searchset} Bundle of the {@code Patient}s matching the query parameters. */
+  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirPatientSearchParameters.class)
   @GetMapping
   public ResponseEntity<String> searchPatients(HttpServletRequest request) {
     return serializer.ok(patientService.search(request));
   }
 
-  /**
-   * Returns a {@code searchset} Bundle holding the {@code Patient} {@code id} followed by its
-   * event-derived resources.
-   */
+  /** Returns a searchset Bundle of Patient {@code id} followed by its event-derived resources. */
+  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
   @GetMapping("/{id}/$everything")
   public ResponseEntity<String> patientEverything(
-      @PathVariable String id, HttpServletRequest request) {
+      @OpenApi.Description("The tracked entity UID") @PathVariable String id,
+      HttpServletRequest request) {
     return serializer.ok(patientService.everything(id, request));
   }
 }

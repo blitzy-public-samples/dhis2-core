@@ -32,80 +32,56 @@ package org.hisp.dhis.fhir.mapping;
 import static org.hisp.dhis.common.DxfNamespaces.DXF_2_0;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlRootElement;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
 import java.io.Serializable;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import java.util.*;
+import lombok.*;
 
-/**
- * One entry of a FHIR resource mapping: it names the FHIR element it fills ({@link #target}) and
- * where that element's value comes from ({@link #sourceType}, {@link #source}, or the constant
- * coding in {@link #system}, {@link #code} and {@link #display}).
- */
+/** One entry of a FHIR resource mapping: the FHIR element it fills and its value's source. */
 @Data
 @NoArgsConstructor
 @JacksonXmlRootElement(localName = "fieldMapping", namespace = DXF_2_0)
 public class FhirFieldMapping implements Serializable {
   private static final long serialVersionUID = 1L;
 
-  /** The FHIR element this entry fills. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private FhirTargetField target;
 
-  /** Whether the value comes from an attribute, a data element or the entry's constant coding. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private FhirSourceType sourceType;
 
-  /**
-   * The UID of the tracked entity attribute ({@link FhirSourceType#ATTRIBUTE}) or data element
-   * ({@link FhirSourceType#DATA_ELEMENT}) that supplies the value; {@code null} for {@link
-   * FhirSourceType#CONSTANT}.
-   */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private String source;
 
-  /** The coding system, or the identifier system for {@link FhirTargetField#PATIENT_IDENTIFIER}. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private String system;
 
-  /** The coding code of a constant entry or of an {@link FhirTargetField#OBSERVATION_VALUE}. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private String code;
 
-  /** The coding display text. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private String display;
 
-  /** The {@code Quantity.unit} of a numeric {@link FhirTargetField#OBSERVATION_VALUE}. */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private String unit;
 
-  /**
-   * Translates source values to FHIR codes, keyed by the DHIS2 value; used by {@link
-   * FhirTargetField#PATIENT_GENDER}.
-   */
   @JsonProperty
   @JacksonXmlProperty(namespace = DXF_2_0)
   private Map<String, String> valueMap;
 
-  /**
-   * Creates an independent copy of {@code other}. The copy's {@link #valueMap} is a new map with
-   * the same entries in the same order, or {@code null} when {@code other} has none, so changing
-   * either object never affects the other.
-   *
-   * @param other the entry to copy, never {@code null}
-   */
+  /** Creates an independent copy of {@code other}, with a new value map of the same entries. */
   public FhirFieldMapping(FhirFieldMapping other) {
+    this(other, other.valueMap == null ? null : new LinkedHashMap<>(other.valueMap));
+  }
+
+  private FhirFieldMapping(FhirFieldMapping other, Map<String, String> valueMap) {
     this.target = other.target;
     this.sourceType = other.sourceType;
     this.source = other.source;
@@ -113,6 +89,63 @@ public class FhirFieldMapping implements Serializable {
     this.code = other.code;
     this.display = other.display;
     this.unit = other.unit;
-    this.valueMap = other.valueMap == null ? null : new LinkedHashMap<>(other.valueMap);
+    this.valueMap = valueMap;
+  }
+
+  /** Returns an unmodifiable copy of {@code entry}, or {@code entry} when it already is one. */
+  public static FhirFieldMapping unmodifiableCopy(FhirFieldMapping entry) {
+    return entry instanceof Unmodifiable ? entry : new Unmodifiable(entry);
+  }
+
+  private static final class Unmodifiable extends FhirFieldMapping {
+    private static final long serialVersionUID = 1L;
+
+    private Unmodifiable(FhirFieldMapping entry) {
+      super(
+          entry,
+          entry.valueMap == null
+              ? null
+              : Collections.unmodifiableMap(new LinkedHashMap<>(entry.valueMap)));
+    }
+
+    @Override
+    public void setTarget(FhirTargetField target) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setSourceType(FhirSourceType sourceType) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setSource(String source) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setSystem(String system) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setCode(String code) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setDisplay(String display) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setUnit(String unit) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setValueMap(Map<String, String> valueMap) {
+      throw new UnsupportedOperationException();
+    }
   }
 }

@@ -29,62 +29,42 @@
  */
 package org.hisp.dhis.fhir.web;
 
+import static org.hisp.dhis.fhir.web.FhirOpenApi.FHIR_JSON;
+
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.hisp.dhis.fhir.service.FhirEventResourceService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * FHIR R4 read-only endpoints for the {@code Immunization} resource: read and search-type.
- *
- * <ul>
- *   <li>{@code GET /api/fhir/Immunization/{id}} reads one Immunization by its logical id {@code
- *       {enrollment}-{event}-{dataElement}}.
- *   <li>{@code GET /api/fhir/Immunization} searches Immunizations and returns a {@code searchset}
- *       Bundle.
- * </ul>
- *
- * <p>Every handler delegates to {@link FhirEventResourceService} with {@link
- * FhirResourceType#IMMUNIZATION} and returns the result as FHIR JSON with the content type {@value
- * FhirResourceSerializer#FHIR_JSON_CONTENT_TYPE}. Errors propagate as exceptions: a {@link
- * org.hisp.dhis.fhir.FhirApiException} is rendered as an {@code OperationOutcome} by the FHIR
- * exception handler, and any other exception by the platform's exception handling.
- */
+/** FHIR R4 read and search-type endpoints for {@code Immunization}. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir/Immunization")
 public class FhirImmunizationController {
-
   private final FhirEventResourceService eventResourceService;
-
   private final FhirResourceSerializer serializer;
 
-  /**
-   * Creates the controller.
-   *
-   * @param eventResourceService reads and searches the event-derived FHIR resources
-   * @param serializer encodes the resources as FHIR JSON responses
-   */
   public FhirImmunizationController(
       FhirEventResourceService eventResourceService, FhirResourceSerializer serializer) {
     this.eventResourceService = eventResourceService;
     this.serializer = serializer;
   }
 
-  /** Returns the {@code Immunization} with the logical id {@code id} as a {@code 200} response. */
+  @OpenApi.Response(value = FhirOpenApi.FhirImmunizationResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
   @GetMapping("/{id}")
   public ResponseEntity<String> readImmunization(
-      @PathVariable String id, HttpServletRequest request) {
+      @OpenApi.Description("`{enrollmentUid}-{eventUid}-{dataElementUid}`") @PathVariable String id,
+      HttpServletRequest request) {
     return serializer.ok(eventResourceService.read(FhirResourceType.IMMUNIZATION, id, request));
   }
 
-  /** Returns the {@code searchset} Bundle of the Immunizations matching the query parameters. */
+  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirImmunizationSearchParameters.class)
+  @OpenApi.Description("Requires `patient` or `_id`.")
   @GetMapping
   public ResponseEntity<String> searchImmunizations(HttpServletRequest request) {
     return serializer.ok(eventResourceService.search(FhirResourceType.IMMUNIZATION, request));

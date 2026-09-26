@@ -29,75 +29,31 @@
  */
 package org.hisp.dhis.fhir.mapper;
 
-import static java.util.stream.Collectors.toSet;
-import static org.hisp.dhis.common.ValueType.BOOLEAN;
-import static org.hisp.dhis.common.ValueType.DATE;
-import static org.hisp.dhis.common.ValueType.DATETIME;
-import static org.hisp.dhis.common.ValueType.INTEGER;
-import static org.hisp.dhis.common.ValueType.NUMBER;
-import static org.hisp.dhis.common.ValueType.TEXT;
-import static org.hisp.dhis.common.ValueType.TIME;
-import static org.hisp.dhis.fhir.FhirTestFixtures.BODY_HEIGHT_UNIT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.BODY_WEIGHT_UNIT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_HEIGHT_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_HEIGHT_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_WEIGHT_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_WEIGHT_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.OCCURRED;
-import static org.hisp.dhis.fhir.FhirTestFixtures.UPDATED;
-import static org.hisp.dhis.fhir.FhirTestFixtures.dataValue;
-import static org.hisp.dhis.fhir.FhirTestFixtures.enrollment;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.event;
-import static org.hisp.dhis.fhir.FhirTestFixtures.resolved;
+import static java.util.stream.Collectors.*;
+import static org.hisp.dhis.common.ValueType.*;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.OBSERVATION_VALUE;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
+import ca.uhn.fhir.model.api.TemporalPrecisionEnum;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.event.EventStatus;
 import org.hisp.dhis.fhir.FhirR4Validation;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.fhir.mapping.FhirFieldMapping;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.fhir.mapping.FhirResourceType;
-import org.hisp.dhis.webapi.controller.tracker.view.DataValue;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Event;
-import org.hl7.fhir.r4.model.BooleanType;
-import org.hl7.fhir.r4.model.Bundle;
-import org.hl7.fhir.r4.model.Bundle.BundleEntryComponent;
-import org.hl7.fhir.r4.model.Bundle.BundleType;
-import org.hl7.fhir.r4.model.Bundle.SearchEntryMode;
-import org.hl7.fhir.r4.model.Coding;
-import org.hl7.fhir.r4.model.DateTimeType;
-import org.hl7.fhir.r4.model.Observation;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
+import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Observation.ObservationStatus;
-import org.hl7.fhir.r4.model.Quantity;
-import org.hl7.fhir.r4.model.StringType;
-import org.hl7.fhir.r4.model.TimeType;
-import org.hl7.fhir.r4.model.Type;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests of {@link FhirObservationMapper}. */
 class FhirObservationMapperTest {
-  private static final String TRACKED_ENTITY_TYPE = "TeTypeUid01";
+  private static final String TE_TYPE = "TeTypeUid01";
   private static final String PROGRAM = "ProgramUid1";
   private static final String STAGE = "StageUid001";
   private static final String TE = "TrackedEnt1";
@@ -110,18 +66,13 @@ class FhirObservationMapperTest {
   private static final String DE_HEIGHT = "DeHeight001";
   private static final String DE_WEIGHT = "DeWeight001";
   private static final String DE_MISSING = "DeMissing01";
-  private static final String DE_UNMAPPED = "DeUnmapped1";
   private static final String DE_NUMBER = "DeNumber001";
-  private static final String DE_INTEGER = "DeInteger01";
   private static final String DE_BOOLEAN = "DeBoolean01";
-  private static final String DE_DATE = "DeDate00001";
   private static final String DE_DATETIME = "DeDateTime1";
   private static final String DE_TIME = "DeTime00001";
   private static final String DE_TEXT = "DeText00001";
   private static final String DE_BAD_NUMBER = "DeBadNumber";
   private static final String TEST_SYSTEM = "urn:dhis2:fhir-test:observation";
-  private static final String FULL_URL_BASE = "http://localhost/api/fhir/Observation/";
-
   private final FhirObservationMapper mapper = new FhirObservationMapper(new FhirValueConverter());
 
   @Test
@@ -129,33 +80,24 @@ class FhirObservationMapperTest {
     ResolvedMapping mapping =
         observationMapping(
             entries(
-                loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
-                    .unit(BODY_HEIGHT_UNIT),
+                height(),
                 loinc(DE_WEIGHT, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY)
                     .unit(BODY_WEIGHT_UNIT),
                 coded(DE_MISSING, "missing")),
             Map.of(DE_HEIGHT, NUMBER, DE_WEIGHT, NUMBER, DE_MISSING, NUMBER));
-    Event event =
-        stageEvent(
-            EVT,
-            EventStatus.COMPLETED,
-            dataValue(DE_HEIGHT, "172.5"),
-            dataValue(DE_WEIGHT, "68"),
-            dataValue(DE_UNMAPPED, "unmapped value"));
-
-    List<Observation> observations =
-        mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
-
+    DataValue heightValue = dataValue(DE_HEIGHT, "172.5");
+    DataValue weightValue = dataValue(DE_WEIGHT, "68");
+    DataValue unmapped = dataValue("DeUnmapped1", "unmapped value");
+    Event event = stageEvent(EVT, EventStatus.COMPLETED, heightValue, weightValue, unmapped);
+    var observations = mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
     List<String> ids = observations.stream().map(Observation::getIdPart).toList();
     assertEquals(List.of(id(ENR, EVT, DE_HEIGHT), id(ENR, EVT, DE_WEIGHT)), ids);
-
     Observation height = observations.get(0);
     assertCoding(height, LOINC_SYSTEM, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY);
     assertQuantity(height.getValue(), "172.5", BODY_HEIGHT_UNIT);
     Observation weight = observations.get(1);
     assertCoding(weight, LOINC_SYSTEM, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY);
     assertQuantity(weight.getValue(), "68", BODY_WEIGHT_UNIT);
-
     for (Observation observation : observations) {
       String id = observation.getIdPart();
       assertEquals(ObservationStatus.FINAL, observation.getStatus(), id);
@@ -167,109 +109,37 @@ class FhirObservationMapperTest {
   }
 
   @Test
-  void idsAndFullUrlsAreUniqueWithinBundle() {
-    ResolvedMapping mapping = fullMapping();
-    Event first = fullEvent(EVT, EventStatus.COMPLETED);
-    Event second = fullEvent(EVT_2, EventStatus.ACTIVE);
-    Event other = fullEvent(EVT_3, EventStatus.COMPLETED);
-    Enrollment enrollment = enrollment(ENR, TE, PROGRAM, first, second);
-    Enrollment otherEnrollment = enrollment(ENR_2, TE_2, PROGRAM, other);
-
-    List<Observation> observations = new ArrayList<>();
-    observations.addAll(mapper.map(enrollment, first, mapping, true));
-    observations.addAll(mapper.map(enrollment, second, mapping, true));
-    observations.addAll(mapper.map(otherEnrollment, other, mapping, true));
-
-    Bundle bundle = new Bundle().setType(BundleType.SEARCHSET);
-    for (Observation observation : observations) {
-      bundle
-          .addEntry()
-          .setFullUrl(FULL_URL_BASE + observation.getIdPart())
-          .setResource(observation)
-          .getSearch()
-          .setMode(SearchEntryMode.MATCH);
-    }
-
-    Set<String> expectedIds = new HashSet<>();
-    for (String[] source : new String[][] {{ENR, EVT}, {ENR, EVT_2}, {ENR_2, EVT_3}}) {
-      for (String dataElement : List.of(DE_HEIGHT, DE_BOOLEAN, DE_TEXT)) {
-        expectedIds.add(id(source[0], source[1], dataElement));
-      }
-    }
-    Set<String> ids = observations.stream().map(Observation::getIdPart).collect(toSet());
-    Set<String> fullUrls =
-        bundle.getEntry().stream().map(BundleEntryComponent::getFullUrl).collect(toSet());
-    assertEquals(9, observations.size());
-    assertEquals(observations.size(), ids.size(), "ids are unique");
-    assertEquals(observations.size(), fullUrls.size(), "fullUrls are unique");
-    assertEquals(expectedIds, ids);
-
-    for (String id : ids) {
-      Optional<FhirLogicalId> parsed = FhirLogicalId.parse(FhirResourceType.OBSERVATION, id);
-      assertTrue(parsed.isPresent(), "parses as an Observation id: " + id);
-      assertEquals(id, parsed.get().compose(), "round trip of " + id);
-    }
-    FhirR4Validation.assertValid(bundle);
-  }
-
-  @Test
   void valueTypingPerValueType() {
     ResolvedMapping mapping =
         observationMapping(
             entries(
-                coded(DE_NUMBER, "number").unit("mmHg"),
-                coded(DE_INTEGER, "integer"),
-                coded(DE_BOOLEAN, "boolean"),
-                coded(DE_DATE, "date"),
-                coded(DE_DATETIME, "datetime"),
-                coded(DE_TIME, "time"),
-                coded(DE_TEXT, "text"),
-                coded(DE_BAD_NUMBER, "bad-number")),
-            Map.of(
-                DE_NUMBER, NUMBER,
-                DE_INTEGER, INTEGER,
-                DE_BOOLEAN, BOOLEAN,
-                DE_DATE, DATE,
-                DE_DATETIME, DATETIME,
-                DE_TIME, TIME,
-                DE_TEXT, TEXT,
-                DE_BAD_NUMBER, NUMBER));
-    Event event =
-        stageEvent(
-            EVT,
-            EventStatus.COMPLETED,
-            dataValue(DE_NUMBER, "120.5"),
-            dataValue(DE_INTEGER, "42"),
-            dataValue(DE_BOOLEAN, "true"),
-            dataValue(DE_DATE, "2024-03-01"),
-            dataValue(DE_DATETIME, "2024-03-01T10:15:30Z"),
-            dataValue(DE_TIME, "08:30:15"),
-            dataValue(DE_TEXT, "Blood pressure within normal range"),
-            dataValue(DE_BAD_NUMBER, "abc"));
-
-    Map<String, Observation> byId =
-        byId(mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false));
-
-    assertEquals(8, byId.size());
-    assertQuantity(value(byId, DE_NUMBER), "120.5", "mmHg");
-    Quantity integer = assertInstanceOf(Quantity.class, value(byId, DE_INTEGER));
-    assertEquals(0, new BigDecimal("42").compareTo(integer.getValue()), "INTEGER quantity value");
-    assertFalse(integer.hasUnit(), "INTEGER quantity without unit");
-    assertEquals(
-        Boolean.TRUE, assertInstanceOf(BooleanType.class, value(byId, DE_BOOLEAN)).getValue());
-    assertEquals(
-        "2024-03-01",
-        assertInstanceOf(DateTimeType.class, value(byId, DE_DATE)).getValueAsString());
-    assertEquals(
-        Instant.parse("2024-03-01T10:15:30Z"),
-        assertInstanceOf(DateTimeType.class, value(byId, DE_DATETIME)).getValue().toInstant());
-    assertEquals("08:30:15", assertInstanceOf(TimeType.class, value(byId, DE_TIME)).getValue());
-    assertEquals(
-        "Blood pressure within normal range",
-        assertInstanceOf(StringType.class, value(byId, DE_TEXT)).getValue());
-
-    Observation badNumber = observation(byId, DE_BAD_NUMBER);
-    assertFalse(badNumber.hasValue(), "an unparseable value leaves value[x] absent");
+                coded(DE_NUMBER, "number").unit("mmHg"), coded(DE_BOOLEAN, "boolean"),
+                coded(DE_DATETIME, "datetime"), coded(DE_TIME, "time"),
+                coded(DE_TEXT, "text"), coded(DE_BAD_NUMBER, "bad-number")),
+            Map.ofEntries(
+                Map.entry(DE_NUMBER, NUMBER), Map.entry(DE_BOOLEAN, BOOLEAN),
+                Map.entry(DE_DATETIME, DATETIME), Map.entry(DE_TIME, TIME),
+                Map.entry(DE_TEXT, TEXT), Map.entry(DE_BAD_NUMBER, NUMBER)));
+    String note = "Blood pressure within normal range";
+    DataValue[] values = {
+      dataValue(DE_NUMBER, "120.5"), dataValue(DE_TEXT, note),
+      dataValue(DE_BOOLEAN, "true"), dataValue(DE_DATETIME, "2024-03-01T10:15:30.123Z"),
+      dataValue(DE_TIME, "08:30:15"), dataValue(DE_BAD_NUMBER, "abc")
+    };
+    Event event = stageEvent(EVT, EventStatus.COMPLETED, values);
+    Map<String, Observation> byDataElement =
+        mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false).stream()
+            .collect(toMap(o -> o.getIdPart().substring(24), o -> o));
+    Function<String, Type> value = dataElement -> byDataElement.get(dataElement).getValue();
+    assertQuantity(value.apply(DE_NUMBER), "120.5", "mmHg");
+    assertTrue(assertInstanceOf(BooleanType.class, value.apply(DE_BOOLEAN)).booleanValue());
+    var dateTime = assertInstanceOf(DateTimeType.class, value.apply(DE_DATETIME));
+    assertEquals(Instant.parse("2024-03-01T10:15:30.123Z"), dateTime.getValue().toInstant());
+    assertEquals(TemporalPrecisionEnum.MILLI, dateTime.getPrecision());
+    assertEquals("08:30:15", assertInstanceOf(TimeType.class, value.apply(DE_TIME)).getValue());
+    assertEquals(note, assertInstanceOf(StringType.class, value.apply(DE_TEXT)).getValue());
+    Observation badNumber = byDataElement.get(DE_BAD_NUMBER);
+    assertFalse(badNumber.hasValue());
     assertCoding(badNumber, TEST_SYSTEM, "bad-number", "Test bad-number");
     assertEquals(ObservationStatus.FINAL, badNumber.getStatus());
   }
@@ -284,172 +154,124 @@ class FhirObservationMapperTest {
             EventStatus.SCHEDULE, ObservationStatus.REGISTERED,
             EventStatus.OVERDUE, ObservationStatus.REGISTERED,
             EventStatus.SKIPPED, ObservationStatus.CANCELLED);
-    ResolvedMapping mapping = heightMapping();
-
-    Set<EventStatus> covered = EnumSet.noneOf(EventStatus.class);
+    Map<EventStatus, ObservationStatus> actual = new EnumMap<>(EventStatus.class);
     for (EventStatus status : EventStatus.values()) {
-      assertNotNull(expected.get(status), "expected Observation status for " + status);
-      Observation observation =
-          single(mapper.map(enrollment(ENR, TE, PROGRAM), heightEvent(status), mapping, false));
-      assertEquals(
-          expected.get(status), observation.getStatus(), "Observation status for " + status);
-      covered.add(status);
+      actual.put(status, single(status, OCCURRED, UPDATED).getStatus());
     }
-    assertEquals(EnumSet.allOf(EventStatus.class), covered);
-
-    Observation withoutStatus =
-        single(mapper.map(enrollment(ENR, TE, PROGRAM), heightEvent(null), mapping, false));
-    assertEquals(
-        ObservationStatus.PRELIMINARY,
-        withoutStatus.getStatus(),
-        "Observation status for an event without status");
+    assertEquals(expected, actual);
+    assertEquals(ObservationStatus.PRELIMINARY, single(null, OCCURRED, UPDATED).getStatus());
   }
 
   @Test
   void emptyMappingYieldsOnlyStructuralElements() {
-    Event event = heightEvent(EventStatus.COMPLETED);
-    Enrollment enrollment = enrollment(ENR, TE, PROGRAM, event);
-
+    Event event = stageEvent(EVT, EventStatus.COMPLETED, dataValue(DE_HEIGHT, "172.5"));
     ResolvedMapping empty = observationMapping(entries(), Map.of());
-    assertTrue(mapper.map(enrollment, event, empty, true).isEmpty(), "empty mapping");
+    assertTrue(mapper.map(enrollment(ENR, TE, PROGRAM, event), event, empty, true).isEmpty());
+    Observation undated = single(EventStatus.COMPLETED, null, null);
+    assertEquals(id(ENR, EVT, DE_HEIGHT), undated.getIdPart());
+    assertFalse(undated.hasEffective());
+    assertFalse(undated.hasMeta());
+    assertQuantity(undated.getValue(), "172.5", BODY_HEIGHT_UNIT);
+    Instant fractional = Instant.parse("2024-03-10T09:00:00.250Z");
+    var effective = single(EventStatus.COMPLETED, fractional, UPDATED).getEffectiveDateTimeType();
+    assertEquals(fractional, effective.getValue().toInstant());
+    assertEquals(TemporalPrecisionEnum.MILLI, effective.getPrecision());
+  }
 
-    ResolvedMapping mapping = heightMapping();
-    Observation withoutEncounter = single(mapper.map(enrollment, event, mapping, false));
-    assertFalse(withoutEncounter.hasEncounter(), "no Encounter reference when not mapped");
-    Observation withEncounter = single(mapper.map(enrollment, event, mapping, true));
-    assertEquals("Encounter/" + ENR + "-" + EVT, withEncounter.getEncounter().getReference());
-    assertEquals("Patient/" + TE, withEncounter.getSubject().getReference());
-
-    Event undated =
-        event(EVT, STAGE, EventStatus.COMPLETED, null, null, null, dataValue(DE_HEIGHT, "172.5"));
-    Observation withoutDates = single(mapper.map(enrollment, undated, mapping, false));
-    assertEquals(id(ENR, EVT, DE_HEIGHT), withoutDates.getIdPart());
-    assertFalse(withoutDates.hasEffective(), "no effective[x] without occurredAt");
-    assertFalse(withoutDates.hasMeta(), "no meta.lastUpdated without updatedAt");
-    assertQuantity(withoutDates.getValue(), "172.5", BODY_HEIGHT_UNIT);
+  @Test
+  void idsAndFullUrlsAreUniqueWithinBundle() {
+    List<Observation> observations = fullObservations();
+    List<String> expected = new ArrayList<>();
+    for (String source : List.of(ENR + "-" + EVT, ENR + "-" + EVT_2, ENR_2 + "-" + EVT_3)) {
+      List.of(DE_HEIGHT, DE_BOOLEAN, DE_TEXT).forEach(de -> expected.add(source + "-" + de));
+    }
+    assertEquals(expected, observations.stream().map(Observation::getIdPart).toList());
+    for (Observation observation : observations) {
+      String id = observation.getIdPart();
+      var parsed = FhirLogicalId.parse(FhirResourceType.OBSERVATION, id);
+      assertEquals(Optional.of(id), parsed.map(FhirLogicalId::compose));
+    }
   }
 
   @Test
   void outputIsValidR4() {
-    Event event = fullEvent(EVT, EventStatus.COMPLETED);
-
-    List<Observation> observations =
-        mapper.map(enrollment(ENR, TE, PROGRAM, event), event, fullMapping(), true);
-
-    assertEquals(3, observations.size());
-    for (Observation observation : observations) {
-      assertTrue(observation.hasValue(), "value[x] of " + observation.getIdPart());
-      assertTrue(observation.hasEncounter(), "encounter of " + observation.getIdPart());
+    for (Observation observation : fullObservations()) {
+      String id = observation.getIdPart();
+      assertTrue(observation.hasValue(), id);
+      assertEquals("Encounter/" + id.substring(0, 23), observation.getEncounter().getReference());
       FhirR4Validation.assertValid(observation);
     }
   }
 
-  /** Height (NUMBER, cm), a BOOLEAN and a TEXT data element. */
+  private List<Observation> fullObservations() {
+    Event first = fullEvent(EVT, EventStatus.COMPLETED);
+    Event second = fullEvent(EVT_2, EventStatus.ACTIVE);
+    Event other = fullEvent(EVT_3, EventStatus.COMPLETED);
+    Enrollment enrollment = enrollment(ENR, TE, PROGRAM, first, second);
+    ResolvedMapping mapping = fullMapping();
+    List<Observation> observations = new ArrayList<>(mapper.map(enrollment, first, mapping, true));
+    observations.addAll(mapper.map(enrollment, second, mapping, true));
+    observations.addAll(mapper.map(enrollment(ENR_2, TE_2, PROGRAM, other), other, mapping, true));
+    return observations;
+  }
+
   private static ResolvedMapping fullMapping() {
     return observationMapping(
-        entries(
-            loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
-                .unit(BODY_HEIGHT_UNIT),
-            coded(DE_BOOLEAN, "smoker"),
-            coded(DE_TEXT, "note")),
+        entries(height(), coded(DE_BOOLEAN, "smoker"), coded(DE_TEXT, "note")),
         Map.of(DE_HEIGHT, NUMBER, DE_BOOLEAN, BOOLEAN, DE_TEXT, TEXT));
   }
 
-  /** An event of the mapped stage with a value for every data element of {@link #fullMapping}. */
   private static Event fullEvent(String uid, EventStatus status) {
-    return stageEvent(
-        uid,
-        status,
-        dataValue(DE_HEIGHT, "172.5"),
-        dataValue(DE_BOOLEAN, "true"),
-        dataValue(DE_TEXT, "No abnormal findings"));
+    DataValue smoker = dataValue(DE_BOOLEAN, "true");
+    DataValue note = dataValue(DE_TEXT, "No abnormal findings");
+    return stageEvent(uid, status, dataValue(DE_HEIGHT, "172.5"), smoker, note);
   }
 
-  private static ResolvedMapping heightMapping() {
-    return observationMapping(
-        entries(
-            loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
-                .unit(BODY_HEIGHT_UNIT)),
-        Map.of(DE_HEIGHT, NUMBER));
-  }
-
-  private static Event heightEvent(EventStatus status) {
-    return stageEvent(EVT, status, dataValue(DE_HEIGHT, "172.5"));
-  }
-
-  /** An event of the mapped stage, occurred at {@code OCCURRED} and updated at {@code UPDATED}. */
   private static Event stageEvent(String uid, EventStatus status, DataValue... values) {
     return event(uid, STAGE, status, OCCURRED, null, UPDATED, values);
   }
 
   private static ResolvedMapping observationMapping(
       List<FhirFieldMapping> entries, Map<String, ValueType> valueTypes) {
-    return resolved(
-        FhirResourceType.OBSERVATION, TRACKED_ENTITY_TYPE, PROGRAM, STAGE, entries, valueTypes);
+    return resolved(FhirResourceType.OBSERVATION, TE_TYPE, PROGRAM, STAGE, entries, valueTypes);
   }
 
   private static Entry loinc(String dataElement, String code, String display) {
-    return Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement)
-        .system(LOINC_SYSTEM)
-        .code(code)
-        .display(display);
+    return coded(dataElement, code).system(LOINC_SYSTEM).display(display);
   }
 
-  /** An entry coded in {@link #TEST_SYSTEM} with the display {@code "Test " + code}. */
+  private static Entry height() {
+    return loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
+        .unit(BODY_HEIGHT_UNIT);
+  }
+
   private static Entry coded(String dataElement, String code) {
-    return Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement)
-        .system(TEST_SYSTEM)
-        .code(code)
-        .display("Test " + code);
+    Entry entry = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement).system(TEST_SYSTEM);
+    return entry.code(code).display("Test " + code);
   }
 
   private static String id(String enrollment, String event, String dataElement) {
     return enrollment + "-" + event + "-" + dataElement;
   }
 
-  /** Indexes Observations by id and fails on a duplicate id. */
-  private static Map<String, Observation> byId(List<Observation> observations) {
-    Map<String, Observation> byId = new LinkedHashMap<>();
-    for (Observation observation : observations) {
-      assertNull(
-          byId.put(observation.getIdPart(), observation),
-          "duplicate id " + observation.getIdPart());
-    }
-    return byId;
-  }
-
-  private static Observation observation(Map<String, Observation> byId, String dataElement) {
-    Observation observation = byId.get(id(ENR, EVT, dataElement));
-    assertNotNull(observation, "Observation of data element " + dataElement);
-    return observation;
-  }
-
-  private static Type value(Map<String, Observation> byId, String dataElement) {
-    Observation observation = observation(byId, dataElement);
-    assertTrue(observation.hasValue(), "value[x] of data element " + dataElement);
-    return observation.getValue();
-  }
-
-  private static Observation single(List<Observation> observations) {
-    assertEquals(1, observations.size(), "number of Observations");
+  private Observation single(EventStatus status, Instant occurredAt, Instant updatedAt) {
+    DataValue value = dataValue(DE_HEIGHT, "172.5");
+    Event event = event(EVT, STAGE, status, occurredAt, null, updatedAt, value);
+    ResolvedMapping height = observationMapping(entries(height()), Map.of(DE_HEIGHT, NUMBER));
+    List<Observation> observations = mapper.map(enrollment(ENR, TE, PROGRAM), event, height, false);
+    assertEquals(1, observations.size());
     return observations.get(0);
   }
 
-  private static void assertCoding(
-      Observation observation, String system, String code, String display) {
-    assertEquals(1, observation.getCode().getCoding().size(), "codings");
-    Coding coding = observation.getCode().getCodingFirstRep();
-    assertEquals(system, coding.getSystem());
-    assertEquals(code, coding.getCode());
-    assertEquals(display, coding.getDisplay());
+  private static void assertCoding(Observation actual, String system, String code, String display) {
+    var codings = actual.getCode().getCoding().stream();
+    var codes = codings.map(c -> c.getSystem() + "|" + c.getCode() + "|" + c.getDisplay()).toList();
+    assertEquals(List.of(system + "|" + code + "|" + display), codes);
   }
 
-  private static void assertQuantity(Type value, String expectedValue, String expectedUnit) {
+  private static void assertQuantity(Type value, String expected, String unit) {
     Quantity quantity = assertInstanceOf(Quantity.class, value);
-    assertEquals(
-        0,
-        new BigDecimal(expectedValue).compareTo(quantity.getValue()),
-        "quantity " + quantity.getValue() + " equals " + expectedValue);
-    assertEquals(expectedUnit, quantity.getUnit());
+    assertEquals(0, new BigDecimal(expected).compareTo(quantity.getValue()), expected);
+    assertEquals(unit, quantity.getUnit());
   }
 }

@@ -140,7 +140,7 @@
           "system": "urn:dhis2:fhir-test:observation",
           "code": "number-value",
           "display": "Number value",
-          "unit": "kg"
+          "unit": "cm"
         }
       ]
     }

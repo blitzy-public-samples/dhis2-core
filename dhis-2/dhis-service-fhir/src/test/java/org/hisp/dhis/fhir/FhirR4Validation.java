@@ -29,89 +29,49 @@
  */
 package org.hisp.dhis.fhir;
 
-import static org.junit.jupiter.api.Assertions.fail;
+import static ca.uhn.fhir.validation.ResultSeverityEnum.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.context.support.DefaultProfileValidationSupport;
 import ca.uhn.fhir.parser.StrictErrorHandler;
 import ca.uhn.fhir.validation.FhirValidator;
-import ca.uhn.fhir.validation.ResultSeverityEnum;
-import ca.uhn.fhir.validation.SingleValidationMessage;
-import ca.uhn.fhir.validation.ValidationResult;
 import java.util.List;
-import org.hl7.fhir.common.hapi.validation.support.CommonCodeSystemsTerminologyService;
-import org.hl7.fhir.common.hapi.validation.support.InMemoryTerminologyServerValidationSupport;
-import org.hl7.fhir.common.hapi.validation.support.ValidationSupportChain;
+import org.hl7.fhir.common.hapi.validation.support.*;
 import org.hl7.fhir.common.hapi.validation.validator.FhirInstanceValidator;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 
-/**
- * Validates HAPI R4 resources against the FHIR R4 base specification, and parses and encodes FHIR
- * JSON with the shared R4 context.
- */
+/** Validates R4 resources against the base specification and parses and encodes FHIR JSON. */
 public final class FhirR4Validation {
-
   private static final FhirContext CONTEXT = FhirContext.forR4Cached();
-
-  private static final FhirValidator VALIDATOR = createValidator();
+  private static final ValidationSupportChain SUPPORT =
+      new ValidationSupportChain(
+          new DefaultProfileValidationSupport(CONTEXT),
+          new InMemoryTerminologyServerValidationSupport(CONTEXT),
+          new CommonCodeSystemsTerminologyService(CONTEXT));
+  private static final FhirValidator VALIDATOR =
+      CONTEXT.newValidator().registerValidatorModule(new FhirInstanceValidator(SUPPORT));
 
   private FhirR4Validation() {}
 
-  /**
-   * Validates the resource and fails the calling test when the validator reports an ERROR or FATAL
-   * message. The failure message names the resource type on its first line, then lists one line per
-   * such message as {@code severity location: message}. WARNING and INFORMATION messages are
-   * accepted.
-   */
+  /** Fails the test, listing each message, when validation reports an ERROR or FATAL message. */
   public static void assertValid(IBaseResource resource) {
-    ValidationResult result = VALIDATOR.validateWithResult(resource);
     List<String> errors =
-        result.getMessages().stream()
-            .filter(FhirR4Validation::isErrorOrFatal)
-            .map(FhirR4Validation::describe)
+        VALIDATOR.validateWithResult(resource).getMessages().stream()
+            .filter(m -> m.getSeverity() == ERROR || m.getSeverity() == FATAL)
+            .map(m -> m.getSeverity() + " " + m.getLocationString() + ": " + m.getMessage())
             .toList();
-    if (!errors.isEmpty()) {
-      fail(
-          "FHIR R4 validation of "
-              + resource.fhirType()
-              + " reported errors:\n"
-              + String.join("\n", errors));
-    }
+    assertEquals(List.of(), errors, "FHIR R4 validation errors in " + resource.fhirType());
   }
 
-  /**
-   * Parses FHIR JSON into the given resource type with a new parser that rejects unknown elements
-   * and invalid values.
-   */
+  /** Parses FHIR JSON with a new parser that rejects unknown elements and invalid values. */
   public static <T extends IBaseResource> T parseStrict(String json, Class<T> type) {
-    return CONTEXT
-        .newJsonParser()
-        .setParserErrorHandler(new StrictErrorHandler())
-        .parseResource(type, json);
+    var parser = CONTEXT.newJsonParser().setParserErrorHandler(new StrictErrorHandler());
+    return parser.parseResource(type, json);
   }
 
   /** Encodes the resource as compact FHIR JSON with a new parser. */
   public static String encode(IBaseResource resource) {
     return CONTEXT.newJsonParser().encodeResourceToString(resource);
-  }
-
-  private static boolean isErrorOrFatal(SingleValidationMessage message) {
-    ResultSeverityEnum severity = message.getSeverity();
-    return severity == ResultSeverityEnum.ERROR || severity == ResultSeverityEnum.FATAL;
-  }
-
-  private static String describe(SingleValidationMessage message) {
-    return message.getSeverity() + " " + message.getLocationString() + ": " + message.getMessage();
-  }
-
-  private static FhirValidator createValidator() {
-    ValidationSupportChain chain =
-        new ValidationSupportChain(
-            new DefaultProfileValidationSupport(CONTEXT),
-            new InMemoryTerminologyServerValidationSupport(CONTEXT),
-            new CommonCodeSystemsTerminologyService(CONTEXT));
-    FhirValidator validator = CONTEXT.newValidator();
-    validator.registerValidatorModule(new FhirInstanceValidator(chain));
-    return validator;
   }
 }

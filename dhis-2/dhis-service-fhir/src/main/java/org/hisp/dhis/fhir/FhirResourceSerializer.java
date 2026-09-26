@@ -38,74 +38,27 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.OperationOutcome;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 
-/**
- * Serialises FHIR R4 resources, Bundles, CapabilityStatements and error {@code OperationOutcome}s
- * as compact FHIR JSON. Every body it produces carries the content type {@value
- * #FHIR_JSON_CONTENT_TYPE}.
- *
- * <p>All serialisation uses one shared R4 {@link FhirContext} and creates a new JSON parser for
- * each serialisation.
- *
- * <p>Usage:
- *
- * <pre>{@code
- * ResponseEntity<String> found = serializer.ok(patient);
- * ResponseEntity<String> missing = serializer.error(FhirApiException.notFound());
- * serializer.writeError(servletResponse, FhirApiException.notFound());
- * }</pre>
- *
- * <p>An error {@code OperationOutcome} has exactly one issue, holding the severity {@code error},
- * the {@link FhirApiException#getIssueType() issue type} as {@code code} and the {@link
- * FhirApiException#getDiagnostics() diagnostics}, and no other element.
- */
+/** Serialises FHIR R4 resources and {@link FhirApiException} outcomes as compact FHIR JSON. */
 @Component
 public class FhirResourceSerializer {
-
-  /** The content type of every FHIR response: FHIR JSON encoded as UTF-8. */
   public static final String FHIR_JSON_CONTENT_TYPE = "application/fhir+json;charset=UTF-8";
-
-  /** {@link #FHIR_JSON_CONTENT_TYPE} as a media type. */
   public static final MediaType FHIR_JSON_MEDIA_TYPE =
       MediaType.parseMediaType(FHIR_JSON_CONTENT_TYPE);
-
   private final FhirContext context = FhirContext.forR4Cached();
 
-  /**
-   * Returns the shared FHIR R4 context used for every serialisation, for example to list the R4
-   * resource type names or to create a parser for reading FHIR JSON.
-   *
-   * @return the FHIR R4 context
-   */
   public FhirContext context() {
     return context;
   }
 
-  /**
-   * Creates a {@code 200 OK} response whose body is the resource encoded as compact FHIR JSON, with
-   * the content type {@value #FHIR_JSON_CONTENT_TYPE}.
-   *
-   * @param resource the resource, Bundle or CapabilityStatement to return
-   * @return the response carrying the encoded resource
-   * @throws NullPointerException if {@code resource} is {@code null}
-   */
   public ResponseEntity<String> ok(IBaseResource resource) {
     Objects.requireNonNull(resource, "resource");
     return ResponseEntity.ok().contentType(FHIR_JSON_MEDIA_TYPE).body(encode(resource));
   }
 
-  /**
-   * Creates the error response for the exception: its HTTP status, the content type {@value
-   * #FHIR_JSON_CONTENT_TYPE}, and a body holding the {@code OperationOutcome} with its single
-   * {@code error} issue.
-   *
-   * @param exception the FHIR error to render
-   * @return the response carrying the encoded {@code OperationOutcome}
-   * @throws NullPointerException if {@code exception} is {@code null}
-   */
+  /** Creates the response with the exception's status and one-issue {@code OperationOutcome}. */
   public ResponseEntity<String> error(FhirApiException exception) {
     Objects.requireNonNull(exception, "exception");
     return ResponseEntity.status(exception.getStatus())
@@ -113,17 +66,7 @@ public class FhirResourceSerializer {
         .body(encode(outcome(exception)));
   }
 
-  /**
-   * Writes the error response for the exception directly to the servlet response: the same status,
-   * content type and {@code OperationOutcome} body as {@link #error(FhirApiException)}. The body is
-   * encoded before the response is touched, then written as UTF-8 bytes and flushed, which commits
-   * the response.
-   *
-   * @param response the servlet response to write to; it must not be committed
-   * @param exception the FHIR error to render
-   * @throws IOException if writing the body fails
-   * @throws NullPointerException if {@code response} or {@code exception} is {@code null}
-   */
+  /** Writes the {@link #error} response to the uncommitted servlet response and commits it. */
   public void writeError(HttpServletResponse response, FhirApiException exception)
       throws IOException {
     Objects.requireNonNull(response, "response");
@@ -137,10 +80,6 @@ public class FhirResourceSerializer {
     output.flush();
   }
 
-  /**
-   * Builds the {@code OperationOutcome} of the exception: one issue with severity {@code error},
-   * the exception's issue type as {@code code} and its diagnostics.
-   */
   private static OperationOutcome outcome(FhirApiException exception) {
     OperationOutcome outcome = new OperationOutcome();
     outcome
@@ -151,7 +90,6 @@ public class FhirResourceSerializer {
     return outcome;
   }
 
-  /** Encodes the resource as compact FHIR JSON with a new JSON parser. */
   private String encode(IBaseResource resource) {
     IParser parser = context.newJsonParser();
     parser.setPrettyPrint(false);

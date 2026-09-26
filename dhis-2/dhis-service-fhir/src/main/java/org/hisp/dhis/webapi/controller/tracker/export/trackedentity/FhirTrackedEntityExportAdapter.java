@@ -31,47 +31,23 @@ package org.hisp.dhis.webapi.controller.tracker.export.trackedentity;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
-import org.hisp.dhis.feedback.BadRequestException;
-import org.hisp.dhis.feedback.ForbiddenException;
-import org.hisp.dhis.feedback.NotFoundException;
+import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.tracker.TrackerIdSchemeParams;
 import org.hisp.dhis.user.CurrentUserUtil;
 import org.hisp.dhis.webapi.controller.tracker.view.FilteredPage;
 import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
 import org.springframework.stereotype.Component;
 
-/**
- * Delegates to the tracked entity list handler of {@link TrackedEntitiesExportController} for the
- * current user with the default UID id scheme.
- */
+/** Delegates to the tracked entity list handler of {@link TrackedEntitiesExportController}. */
 @Component
 public final class FhirTrackedEntityExportAdapter {
-
   private final TrackedEntitiesExportController controller;
 
-  /**
-   * Creates the adapter over the given tracked entity export controller.
-   *
-   * @param controller the controller whose list handler serves every call
-   */
   public FhirTrackedEntityExportAdapter(TrackedEntitiesExportController controller) {
     this.controller = controller;
   }
 
-  /**
-   * Finds tracked entities through the tracked entity list handler of {@link
-   * TrackedEntitiesExportController}, as the currently authenticated user and with the default UID
-   * id scheme.
-   *
-   * @param params the tracked entity request parameters, passed to the handler unchanged
-   * @param request the current HTTP request, passed to the handler unchanged
-   * @return the page returned by the handler, unchanged
-   * @throws BadRequestException propagated unchanged from the handler
-   * @throws ForbiddenException propagated unchanged from the handler
-   * @throws NotFoundException propagated unchanged from the handler
-   * @throws WebMessageException propagated unchanged from the handler
-   * @throws IllegalStateException when no authenticated DHIS2 user is present
-   */
+  /** Finds tracked entities as the current user with the default UID id scheme. */
   public FilteredPage<TrackedEntity> find(
       TrackedEntityRequestParams params, HttpServletRequest request)
       throws BadRequestException, ForbiddenException, NotFoundException, WebMessageException {

@@ -37,28 +37,17 @@ public enum FhirResourceType {
   ENCOUNTER(ResourceType.Encounter.name()),
   IMMUNIZATION(ResourceType.Immunization.name()),
   OBSERVATION(ResourceType.Observation.name());
-
   private final String fhirType;
 
   FhirResourceType(String fhirType) {
     this.fhirType = fhirType;
   }
 
-  /**
-   * Returns the FHIR R4 resource type name, for example {@code Patient}.
-   *
-   * @return the FHIR resource type name
-   */
   public String fhirType() {
     return fhirType;
   }
 
-  /**
-   * Returns whether resources of this type are built from Tracker events rather than tracked
-   * entities.
-   *
-   * @return {@code true} for every type except {@link #PATIENT}
-   */
+  /** Returns whether resources of this type are built from Tracker events: all but PATIENT. */
   public boolean isEventDerived() {
     return this != PATIENT;
   }

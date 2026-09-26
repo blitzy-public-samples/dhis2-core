@@ -29,171 +29,104 @@
  */
 package org.hisp.dhis.fhir.service;
 
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_DISPLAY;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.OCCURRED;
-import static org.hisp.dhis.fhir.FhirTestFixtures.UPDATED;
-import static org.hisp.dhis.fhir.FhirTestFixtures.enrollment;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.event;
-import static org.hisp.dhis.fhir.FhirTestFixtures.resolved;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.ENCOUNTER;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.IMMUNIZATION;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.ENCOUNTER_CLASS;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 import org.hisp.dhis.common.UID;
-import org.hisp.dhis.deadline.Deadline;
-import org.hisp.dhis.deadline.DeadlineExceededException;
-import org.hisp.dhis.deadline.DeadlineHolder;
+import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.event.EventStatus;
 import org.hisp.dhis.feedback.ForbiddenException;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.FhirR4Validation;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.fhir.mapper.FhirEncounterMapper;
-import org.hisp.dhis.fhir.mapper.FhirImmunizationMapper;
-import org.hisp.dhis.fhir.mapper.FhirLogicalId;
-import org.hisp.dhis.fhir.mapper.FhirObservationMapper;
-import org.hisp.dhis.fhir.mapper.FhirValueConverter;
-import org.hisp.dhis.fhir.mapping.FhirResourceMappingService;
+import org.hisp.dhis.fhir.mapper.*;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.fhir.search.FhirSearchParameters;
-import org.hisp.dhis.fhir.search.FhirSearchTranslator;
-import org.hisp.dhis.setting.SystemSettings;
-import org.hisp.dhis.setting.SystemSettingsProvider;
+import org.hisp.dhis.fhir.search.*;
+import org.hisp.dhis.setting.*;
 import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
 import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
-import org.hisp.dhis.webapi.controller.tracker.export.enrollment.EnrollmentRequestParams;
-import org.hisp.dhis.webapi.controller.tracker.export.enrollment.FhirEnrollmentExportAdapter;
+import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.FhirTrackedEntityExportAdapter;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.FilteredPage;
-import org.hisp.dhis.webapi.controller.tracker.view.Page;
-import org.hl7.fhir.r4.model.Bundle;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
+import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Bundle.BundleEntryComponent;
-import org.hl7.fhir.r4.model.Encounter;
 import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
-import org.hl7.fhir.r4.model.Resource;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InOrder;
+import org.junit.jupiter.api.function.Executable;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 
-/**
- * Tests that {@link FhirEventResourceService} aggregates event-derived reads and searches over
- * several candidate programs, checks a read in the order usable mapping, parameters, id syntax,
- * export call, and runs each read and search within one deadline that starts before mapping
- * resolution and stops the operation once it is spent.
- */
+/** Tests {@link FhirEventResourceService} and the {@link FhirPatientService} operations on it. */
 @ExtendWith(MockitoExtension.class)
 class FhirEventResourceServiceTest {
   private static final Duration BUDGET = Duration.ofSeconds(10);
-
-  private static final Duration OVER_BUDGET = Duration.ofSeconds(11);
-
   private static final String TET = "fhirTeType1";
-
   private static final String TE = "fhirPerson1";
-
   private static final String P1 = "fhirProgrm1";
-
   private static final String P2 = "fhirProgrm2";
-
   private static final String P3 = "fhirProgrm3";
-
   private static final String S1 = "fhirStage01";
-
   private static final String S2 = "fhirStage02";
-
   private static final String S3 = "fhirStage03";
-
   private static final String ENR = "fhirEnroll1";
-
+  private static final String ENR2 = "fhirEnroll2";
   private static final String EVT = "fhirEvent01";
-
+  private static final String EVT2 = "fhirEvent02";
+  private static final String EVT3 = "fhirEvent03";
+  private static final String DE_A = "fhirDataEl1";
+  private static final String DE_B = "fhirDataEl2";
+  private static final String GENDER_TEA = "fhirGender1";
   private static final String ENCOUNTER_ID = FhirLogicalId.encounter(ENR, EVT).compose();
-
   private static final String MALFORMED_ID = "not-a-valid-id";
-
   @Mock private FhirTrackedEntityExportAdapter teAdapter;
-
   @Mock private FhirEnrollmentExportAdapter enrollmentAdapter;
-
   @Mock private TrackerExportTimeout timeout;
-
   @Mock private SystemSettingsProvider settingsProvider;
-
   @Mock private FhirResourceMappingService mappingService;
-
-  /** Test clock read by every deadline that {@link TrackerExportTimeout#newDeadline()} returns. */
+  private final List<Deadline> seen = new ArrayList<>();
   private long nanos = TimeUnit.SECONDS.toNanos(1_000);
-
-  private ResolvedMapping m1;
-
-  private ResolvedMapping m2;
-
-  private ResolvedMapping m3;
-
-  /** An enrollment of {@link #TE} in {@link #P2} holding one completed event on {@link #S2}. */
-  private Enrollment enrollment;
-
+  private final ResolvedMapping m1 = encounterMapping(TET, P1, S1);
+  private final ResolvedMapping m2 = encounterMapping(TET, P2, S2);
+  private final ResolvedMapping m3 = encounterMapping(TET, P3, S3);
+  private final Enrollment enrollment = enrollment(ENR, TE, P2, completed(EVT, S2));
+  private FhirEncounterMapper encounterMapper;
   private FhirEventResourceService service;
+  private FhirPatientService patientService;
 
   @BeforeEach
   void setUp() {
     lenient().when(settingsProvider.getCurrentSettings()).thenReturn(SystemSettings.of(Map.of()));
-    lenient()
-        .when(timeout.newDeadline())
-        .thenAnswer(invocation -> Deadline.in(BUDGET, () -> nanos));
-
-    FhirTrackerReader reader = new FhirTrackerReader(teAdapter, enrollmentAdapter, timeout);
+    lenient().when(timeout.newDeadline()).thenAnswer(i -> Deadline.in(BUDGET, () -> nanos));
     FhirSearchParameters parameters = new FhirSearchParameters(settingsProvider);
     FhirSearchTranslator translator = new FhirSearchTranslator(parameters);
+    FhirTrackerReader reader = new FhirTrackerReader(teAdapter, enrollmentAdapter, timeout);
     FhirValueConverter converter = new FhirValueConverter();
+    encounterMapper = spy(new FhirEncounterMapper(converter));
     service =
         new FhirEventResourceService(
             mappingService,
             parameters,
             translator,
             reader,
-            new FhirEncounterMapper(converter),
+            encounterMapper,
             new FhirImmunizationMapper(converter),
             new FhirObservationMapper(converter));
-
-    m1 = encounterMapping(P1, S1);
-    m2 = encounterMapping(P2, S2);
-    m3 = encounterMapping(P3, S3);
-    enrollment =
-        enrollment(ENR, TE, P2, event(EVT, S2, EventStatus.COMPLETED, OCCURRED, null, UPDATED));
+    FhirPatientMapper mapper = new FhirPatientMapper(converter);
+    patientService =
+        new FhirPatientService(mappingService, parameters, translator, reader, mapper, service);
   }
 
   @AfterEach
@@ -205,264 +138,331 @@ class FhirEventResourceServiceTest {
   void readAndSearchAggregationRules() throws Exception {
     when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m1, m2));
     when(mappingService.resolve(IMMUNIZATION)).thenReturn(List.of());
-
-    readWithoutUsableMappingIsNotSupported();
-    readWithUnsupportedParameterIsInvalidBeforeIdSyntax();
-    readWithMalformedIdIsNotFoundWithoutExportCall();
-    readForbiddenInEveryProgramIsForbidden();
-    readFromReadableProgramReturnsResource();
-    readAbsentFromReadableProgramIsNotFound();
-    searchForbiddenInEveryProgramIsForbidden();
-    searchWithMixedAccessReturnsResourcesOfReadablePrograms();
-    searchOfReadableProgramsWithoutDataReturnsEmptyBundle();
-
-    assertNull(DeadlineHolder.get(), "every operation clears its deadline");
+    FhirApiException unmapped = readError(IMMUNIZATION, MALFORMED_ID, "foo", "bar");
+    assertError(HttpStatus.NOT_IMPLEMENTED, IssueType.NOTSUPPORTED, unmapped);
+    FhirApiException invalid = readError(ENCOUNTER, MALFORMED_ID, "foo", "bar");
+    assertError(HttpStatus.BAD_REQUEST, IssueType.INVALID, invalid);
+    assertTrue(invalid.getDiagnostics().startsWith("Invalid parameter 'foo'"));
+    for (String id : List.of(MALFORMED_ID, ENR, ENCOUNTER_ID + "-" + S2)) {
+      assertError(HttpStatus.NOT_FOUND, IssueType.NOTFOUND, readError(ENCOUNTER, id));
+    }
+    verifyNoInteractions(enrollmentAdapter, teAdapter);
+    forbid(P1);
+    forbid(P2);
+    FhirApiException readForbidden = readError(ENCOUNTER, ENCOUNTER_ID);
+    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, readForbidden);
+    assertEquals(FhirApiException.forbidden().getDiagnostics(), readForbidden.getDiagnostics());
+    verify(enrollmentAdapter).find(forProgram(P1), any());
+    verify(enrollmentAdapter).find(forProgram(P2), any());
+    FhirApiException searchForbidden =
+        assertThrows(FhirApiException.class, () -> service.search(ENCOUNTER, searchRequest()));
+    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, searchForbidden);
+    assertEquals(FhirApiException.forbidden().getDiagnostics(), searchForbidden.getDiagnostics());
+    reset(enrollmentAdapter);
+    forbid(P1);
+    answer(P2, enrollment);
+    Encounter encounter =
+        assertInstanceOf(Encounter.class, service.read(ENCOUNTER, ENCOUNTER_ID, request()));
+    assertEquals(ENCOUNTER_ID, encounter.getIdElement().getIdPart());
+    assertEquals("Patient/" + TE, encounter.getSubject().getReference());
+    FhirR4Validation.assertValid(encounter);
+    verify(enrollmentAdapter)
+        .find(forProgram(P2, params -> Set.of(UID.of(ENR)).equals(params.getEnrollments())), any());
+    Bundle bundle = service.search(ENCOUNTER, searchRequest());
+    assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
+    assertFalse(FhirR4Validation.encode(bundle).contains(P1));
+    verify(enrollmentAdapter)
+        .find(forProgram(P2, params -> UID.of(TE).equals(params.getTrackedEntity())), any());
+    reset(enrollmentAdapter);
+    forbid(P1);
+    answer(P2);
+    assertError(HttpStatus.NOT_FOUND, IssueType.NOTFOUND, readError(ENCOUNTER, ENCOUNTER_ID));
+    assertEntries(service.search(ENCOUNTER, searchRequest()));
+    assertNull(DeadlineHolder.get());
   }
 
   @Test
   void deadlineStartsBeforeMappingResolution() {
-    List<Deadline> heldDuringResolution = new ArrayList<>();
-    when(mappingService.resolve(ENCOUNTER))
-        .thenAnswer(
-            invocation -> {
-              heldDuringResolution.add(DeadlineHolder.get());
-              elapse(OVER_BUDGET);
-              return List.of(m1, m2);
-            });
-
-    assertThrows(
-        DeadlineExceededException.class,
-        () -> service.read(ENCOUNTER, ENCOUNTER_ID, readRequest()));
-    assertNull(DeadlineHolder.get(), "the read clears its deadline");
-    assertThrows(DeadlineExceededException.class, () -> service.search(ENCOUNTER, searchRequest()));
-    assertNull(DeadlineHolder.get(), "the search clears its deadline");
-
-    assertEquals(2, heldDuringResolution.size());
-    heldDuringResolution.forEach(
-        deadline -> assertNotNull(deadline, "a deadline is held while mappings are resolved"));
-    InOrder inOrder = inOrder(timeout, mappingService);
-    inOrder.verify(timeout).newDeadline();
-    inOrder.verify(mappingService).resolve(ENCOUNTER);
-    inOrder.verify(timeout).newDeadline();
-    inOrder.verify(mappingService).resolve(ENCOUNTER);
+    when(mappingService.resolve(ENCOUNTER)).thenAnswer(i -> recorded(spent(List.of(m1, m2))));
+    assertExpired(() -> service.read(ENCOUNTER, ENCOUNTER_ID, request()));
+    assertNull(DeadlineHolder.get());
+    assertExpired(() -> service.search(ENCOUNTER, searchRequest()));
+    assertNull(DeadlineHolder.get());
+    assertEquals(2, seen.size());
+    assertFalse(seen.contains(null), "a deadline is held while mappings resolve");
+    verify(timeout, times(2)).newDeadline();
     verifyNoInteractions(enrollmentAdapter, teAdapter);
   }
 
   @Test
   void multiProgramOperationStopsWhenBudgetIsSpent() throws Exception {
     when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m1, m2, m3));
-    AtomicInteger calls = new AtomicInteger();
-    when(enrollmentAdapter.find(any(), any()))
-        .thenAnswer(
-            invocation -> {
-              if (calls.incrementAndGet() == 2) {
-                elapse(OVER_BUDGET);
-              }
-              return page();
-            });
-
-    assertThrows(DeadlineExceededException.class, () -> service.search(ENCOUNTER, searchRequest()));
-
-    assertEquals(2, calls.get(), "no program is requested after the budget is spent");
+    when(enrollmentAdapter.find(any(), any())).thenReturn(page()).thenAnswer(i -> spent(page()));
+    assertExpired(() -> service.search(ENCOUNTER, searchRequest()));
     verify(enrollmentAdapter, times(2)).find(any(), any());
     verify(timeout, times(1)).newDeadline();
-    assertNull(DeadlineHolder.get(), "the search clears its deadline");
+    assertNull(DeadlineHolder.get());
     verifyNoInteractions(teAdapter);
   }
 
-  /** A type without a usable mapping answers 501 whatever its parameters and id. */
-  private void readWithoutUsableMappingIsNotSupported() {
-    FhirApiException exception =
-        assertThrows(
-            FhirApiException.class,
-            () -> service.read(IMMUNIZATION, MALFORMED_ID, request("foo", "bar")));
-
-    assertError(HttpStatus.NOT_IMPLEMENTED, IssueType.NOTSUPPORTED, exception);
-    verifyNoInteractions(enrollmentAdapter, teAdapter);
+  @Test
+  void readAndSearchCheckTheDeadlineBeforeAnswering() throws Exception {
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
+    when(enrollmentAdapter.find(forProgram(P2), any()))
+        .thenReturn(page(enrollment))
+        .thenAnswer(i -> spent(page()))
+        .thenAnswer(
+            i -> {
+              throw spent(denied(P2));
+            })
+        .thenReturn(page(enrollment));
+    doAnswer(i -> spent(i.callRealMethod()))
+        .doCallRealMethod()
+        .when(encounterMapper)
+        .map(any(), any(), any());
+    Executable read = () -> service.read(ENCOUNTER, ENCOUNTER_ID, request());
+    assertThrows(DeadlineExceededException.class, read, "spent mapping the event: no 200");
+    assertThrows(DeadlineExceededException.class, read, "spent by an empty export: no 404");
+    assertThrows(DeadlineExceededException.class, read, "spent by a forbidden export: no 403");
+    assertExpired(() -> service.search(ENCOUNTER, expiringOnLinks("patient", TE)));
+    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
+    when(mappingService.resolveAll()).thenReturn(List.of(patientMapping()));
+    FilteredPage<TrackedEntity> patient = page(trackedEntity(TE, TET, UPDATED));
+    when(teAdapter.find(any(), any())).thenAnswer(i -> spent(patient)).thenReturn(patient);
+    assertExpired(() -> patientService.read(TE, request()));
+    assertExpired(() -> patientService.everything(TE, expiringOnLinks()));
+    verify(teAdapter, times(2)).find(any(), any());
+    verify(enrollmentAdapter, times(4)).find(any(), any());
+    assertNull(DeadlineHolder.get());
   }
 
-  /** A mapped type answers 400 naming an unsupported parameter, even for a malformed id. */
-  private void readWithUnsupportedParameterIsInvalidBeforeIdSyntax() {
-    FhirApiException exception =
-        assertThrows(
-            FhirApiException.class,
-            () -> service.read(ENCOUNTER, MALFORMED_ID, request("foo", "bar")));
-
-    assertError(HttpStatus.BAD_REQUEST, IssueType.INVALID, exception);
-    assertTrue(
-        exception.getDiagnostics().startsWith("Invalid parameter 'foo'"),
-        exception.getDiagnostics());
-    verifyNoInteractions(enrollmentAdapter, teAdapter);
+  @Test
+  void everythingRunsWithinOneDeadlineOverMappingsResolvedOnce() throws Exception {
+    ResolvedMapping otherType = encounterMapping("fhirTeType2", P3, S3);
+    when(mappingService.resolveAll())
+        .thenReturn(List.of(patientMapping(), m2, otherType, observationMapping(), m1));
+    when(teAdapter.find(any(), any()))
+        .thenAnswer(i -> recorded(page(trackedEntity(TE, TET, UPDATED))));
+    Event observed = completed(EVT2, S1, dataValue(DE_A, "12"));
+    Enrollment first = enrollment(ENR, TE, P1, observed, completed(EVT, S1));
+    when(enrollmentAdapter.find(forProgram(P1), any())).thenAnswer(i -> recorded(page(first)));
+    Enrollment other = enrollment(ENR2, TE, P2, completed(EVT3, S2));
+    when(enrollmentAdapter.find(forProgram(P2), any())).thenAnswer(i -> recorded(page(other)));
+    Bundle bundle = patientService.everything(TE, request());
+    String second = ENR + "-" + EVT2;
+    assertEntries(
+        bundle,
+        "Patient/" + TE,
+        "Encounter/" + ENCOUNTER_ID,
+        "Encounter/" + second,
+        "Observation/" + second + "-" + DE_A,
+        "Encounter/" + ENR2 + "-" + EVT3);
+    assertEquals(1, bundle.getLink().size());
+    String self = bundle.getLink(Bundle.LINK_SELF).getUrl();
+    assertEquals("http://localhost/api/fhir/Patient/" + TE + "/$everything", self);
+    assertNotNull(seen.get(0));
+    assertEquals(Collections.nCopies(3, seen.get(0)), seen);
+    verify(timeout, times(1)).newDeadline();
+    verify(mappingService, times(1)).resolveAll();
+    verify(mappingService, never()).resolve(any());
+    verify(enrollmentAdapter, times(2)).find(any(), any());
+    assertNull(DeadlineHolder.get());
   }
 
-  /** A malformed id answers 404 without any export call. */
-  private void readWithMalformedIdIsNotFoundWithoutExportCall() {
-    for (String id : List.of(MALFORMED_ID, ENR, ENCOUNTER_ID + "-" + S2)) {
-      FhirApiException exception =
-          assertThrows(FhirApiException.class, () -> service.read(ENCOUNTER, id, readRequest()));
+  @Test
+  void searchWithUnmappedGenderReturnsEmptySearchsetWithoutExportCall() throws Exception {
+    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
+    Bundle empty = patientService.search(request(FhirSearchParameters.GENDER, "unknown"));
+    assertEquals(Bundle.BundleType.SEARCHSET, empty.getType());
+    assertTrue(empty.getEntry().isEmpty());
+    assertFalse(empty.hasTotal());
+    assertEquals(1, empty.getLink().size());
+    assertNotNull(empty.getLink(Bundle.LINK_SELF));
+    verifyNoInteractions(teAdapter, enrollmentAdapter);
+    Attribute male = attribute(GENDER_TEA, ValueType.TEXT, "M");
+    when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED, male)));
+    Bundle found = patientService.search(request(FhirSearchParameters.GENDER, "male"));
+    assertEquals(List.of("Patient/" + TE), references(found));
+    verify(teAdapter)
+        .find(argThat(p -> p.getFilter() != null && p.getFilter().contains(GENDER_TEA)), any());
+  }
 
-      assertError(HttpStatus.NOT_FOUND, IssueType.NOTFOUND, exception);
+  @Test
+  void idsAndFullUrlsAreUniqueWithinBundle() throws Exception {
+    stubObservationSearch();
+    Bundle bundle = service.search(OBSERVATION, searchRequest());
+    List<String> expected = new ArrayList<>();
+    for (String event : List.of(ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3)) {
+      expected.add("Observation/" + event + "-" + DE_A);
+      expected.add("Observation/" + event + "-" + DE_B);
     }
-    verifyNoInteractions(enrollmentAdapter, teAdapter);
+    assertEntries(bundle, expected.toArray(String[]::new));
   }
 
-  /** A read forbidden in every candidate program answers 403 with fixed diagnostics. */
-  private void readForbiddenInEveryProgramIsForbidden() throws Exception {
+  @Test
+  void observationCodeSelectsEntriesAndUnmatchedCodeMakesNoExportCall() throws Exception {
+    stubObservationSearch();
+    String height = LOINC_SYSTEM + "|" + LOINC_BODY_HEIGHT_CODE;
+    Bundle matched = service.search(OBSERVATION, request("patient", TE, "code", height));
+    String[] events = {ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3};
+    assertEntries(
+        matched,
+        Stream.of(events).map(e -> "Observation/" + e + "-" + DE_A).toArray(String[]::new));
     reset(enrollmentAdapter);
-    forbid(P1);
-    forbid(P2);
-
-    FhirApiException exception =
-        assertThrows(
-            FhirApiException.class, () -> service.read(ENCOUNTER, ENCOUNTER_ID, readRequest()));
-
-    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, exception);
-    assertEquals(FhirApiException.forbidden().getDiagnostics(), exception.getDiagnostics());
-    verify(enrollmentAdapter).find(forProgram(P1), any());
-    verify(enrollmentAdapter).find(forProgram(P2), any());
+    String unknown = LOINC_SYSTEM + "|unknown";
+    assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
+    verifyNoInteractions(enrollmentAdapter);
   }
 
-  /** A read returns the resource of a readable program even when another program is forbidden. */
-  private void readFromReadableProgramReturnsResource() throws Exception {
-    reset(enrollmentAdapter);
-    forbid(P1);
-    answer(P2, enrollment);
-
-    Resource resource = service.read(ENCOUNTER, ENCOUNTER_ID, readRequest());
-
-    Encounter encounter = assertInstanceOf(Encounter.class, resource);
-    assertEquals(ENCOUNTER_ID, encounter.getIdElement().getIdPart());
-    assertEquals("Patient/" + TE, encounter.getSubject().getReference());
-    FhirR4Validation.assertValid(encounter);
-    verify(enrollmentAdapter)
-        .find(
-            argThat(
-                params ->
-                    params != null
-                        && UID.of(P2).equals(params.getProgram())
-                        && Set.of(UID.of(ENR)).equals(params.getEnrollments())),
-            any());
+  @Test
+  void idSearchMapsOnlyTheRequestedEvents() throws Exception {
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
+    Event other = completed(EVT2, S2);
+    answer(P2, enrollment(ENR, TE, P2, other, completed(EVT, S2), completed(EVT3, S2)));
+    Bundle bundle = service.search(ENCOUNTER, request("_id", ENCOUNTER_ID));
+    assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
+    verify(encounterMapper, times(1)).map(any(), any(), any());
+    verify(encounterMapper).map(any(), argThat(e -> EVT.equals(e.getEvent().getValue())), any());
   }
 
-  /** A read answers 404 when no readable program holds the resource. */
-  private void readAbsentFromReadableProgramIsNotFound() throws Exception {
-    reset(enrollmentAdapter);
-    forbid(P1);
-    answer(P2);
-
-    FhirApiException exception =
-        assertThrows(
-            FhirApiException.class, () -> service.read(ENCOUNTER, ENCOUNTER_ID, readRequest()));
-
-    assertError(HttpStatus.NOT_FOUND, IssueType.NOTFOUND, exception);
+  @Test
+  void manyStageSearchIndexesMappingsByStage() throws Exception {
+    List<ResolvedMapping> mappings =
+        Stream.of(S1, S3, "fhirStage04").map(s -> spy(encounterMapping(TET, P1, s))).toList();
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(mappings);
+    Event last = completed("fhirEvent04", "fhirStage04");
+    Event[] events = {last, completed(EVT3, S3), completed(EVT2, S2), completed(EVT, S1)};
+    answer(P1, enrollment(ENR, TE, P1, events));
+    assertEntries(
+        service.search(ENCOUNTER, searchRequest()),
+        "Encounter/" + ENCOUNTER_ID,
+        "Encounter/" + ENR + "-" + EVT3,
+        "Encounter/" + ENR + "-fhirEvent04");
+    mappings.forEach(mapping -> verify(mapping, atMost(2)).programStage());
   }
 
-  /** A search forbidden in every candidate program answers 403 with fixed diagnostics. */
-  private void searchForbiddenInEveryProgramIsForbidden() throws Exception {
-    reset(enrollmentAdapter);
-    forbid(P1);
-    forbid(P2);
-
-    FhirApiException exception =
-        assertThrows(FhirApiException.class, () -> service.search(ENCOUNTER, searchRequest()));
-
-    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, exception);
-    assertEquals(FhirApiException.forbidden().getDiagnostics(), exception.getDiagnostics());
+  private FhirApiException readError(FhirResourceType type, String id, String... query) {
+    return assertThrows(FhirApiException.class, () -> service.read(type, id, request(query)));
   }
 
-  /** A search returns the resources of the readable programs and nothing of forbidden ones. */
-  private void searchWithMixedAccessReturnsResourcesOfReadablePrograms() throws Exception {
-    reset(enrollmentAdapter);
-    forbid(P1);
-    answer(P2, enrollment);
-
-    Bundle bundle = service.search(ENCOUNTER, searchRequest());
-
-    assertEquals(Bundle.BundleType.SEARCHSET, bundle.getType());
-    assertEquals(1, bundle.getTotal());
-    assertEquals(1, bundle.getEntry().size());
-    BundleEntryComponent entry = bundle.getEntryFirstRep();
-    assertEquals(ENCOUNTER_ID, entry.getResource().getIdElement().getIdPart());
-    assertTrue(
-        entry.getFullUrl().endsWith("/api/fhir/Encounter/" + ENCOUNTER_ID), entry.getFullUrl());
-    String json = FhirR4Validation.encode(bundle);
-    assertFalse(json.contains(P1), "the Bundle does not mention the forbidden program");
-    FhirR4Validation.assertValid(bundle);
-    verify(enrollmentAdapter)
-        .find(
-            argThat(
-                params ->
-                    params != null
-                        && UID.of(P2).equals(params.getProgram())
-                        && UID.of(TE).equals(params.getTrackedEntity())),
-            any());
-  }
-
-  /** A search of readable programs without matching data returns an empty searchset. */
-  private void searchOfReadableProgramsWithoutDataReturnsEmptyBundle() throws Exception {
-    reset(enrollmentAdapter);
-    answer(P1);
-    answer(P2);
-
-    Bundle bundle = service.search(ENCOUNTER, searchRequest());
-
-    assertEquals(Bundle.BundleType.SEARCHSET, bundle.getType());
-    assertTrue(bundle.getEntry().isEmpty());
-    assertTrue(bundle.hasTotal());
-    assertEquals(0, bundle.getTotal());
-  }
-
-  /** Makes the enrollment export deny access to the program. */
   private void forbid(String program) throws Exception {
-    when(enrollmentAdapter.find(forProgram(program), any()))
-        .thenThrow(new ForbiddenException("User has no data read access to program: " + program));
+    when(enrollmentAdapter.find(forProgram(program), any())).thenThrow(denied(program));
   }
 
-  /** Makes the enrollment export return the enrollments for the program. */
   private void answer(String program, Enrollment... enrollments) throws Exception {
     when(enrollmentAdapter.find(forProgram(program), any())).thenReturn(page(enrollments));
   }
 
+  private void stubObservationSearch() throws Exception {
+    when(mappingService.resolve(OBSERVATION)).thenReturn(List.of(observationMapping()));
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m1));
+    DataValue[] observed = {dataValue(DE_A, "172.5"), dataValue(DE_B, "70")};
+    Enrollment first =
+        enrollment(ENR, TE, P1, completed(EVT2, S1, observed), completed(EVT, S1, observed));
+    answer(P1, first, enrollment(ENR2, TE, P1, completed(EVT3, S1, observed)));
+  }
+
+  private static ForbiddenException denied(String program) {
+    return new ForbiddenException("User has no data read access to program: " + program);
+  }
+
+  private static Event completed(String uid, String stage, DataValue... values) {
+    return event(uid, stage, EventStatus.COMPLETED, OCCURRED, null, UPDATED, values);
+  }
+
   private static EnrollmentRequestParams forProgram(String program) {
-    return argThat(params -> params != null && UID.of(program).equals(params.getProgram()));
+    return forProgram(program, params -> true);
   }
 
-  private static FilteredPage<Enrollment> page(Enrollment... enrollments) {
-    return new FilteredPage<>(Page.withoutPager("enrollments", List.of(enrollments)), Fields.all());
+  private static EnrollmentRequestParams forProgram(
+      String program, Predicate<EnrollmentRequestParams> matches) {
+    return argThat(p -> p != null && UID.of(program).equals(p.getProgram()) && matches.test(p));
   }
 
-  /** Returns an ENCOUNTER mapping of the program and stage with an ambulatory class. */
-  private static ResolvedMapping encounterMapping(String program, String stage) {
-    return resolved(
-        ENCOUNTER,
-        TET,
-        program,
-        stage,
-        entries(
-            Entry.constant(
-                ENCOUNTER_CLASS,
-                ENCOUNTER_CLASS_SYSTEM,
-                ENCOUNTER_CLASS_CODE,
-                ENCOUNTER_CLASS_DISPLAY)),
-        Map.of());
+  @SafeVarargs
+  private static <T> FilteredPage<T> page(T... items) {
+    return new FilteredPage<>(Page.withoutPager("items", List.of(items)), Fields.all());
   }
 
-  private static MockHttpServletRequest readRequest() {
-    return new MockHttpServletRequest();
+  private static List<String> references(Bundle bundle) {
+    return bundle.getEntry().stream().map(FhirEventResourceServiceTest::reference).toList();
+  }
+
+  private static String reference(BundleEntryComponent entry) {
+    return entry.getResource().fhirType() + "/" + entry.getResource().getIdElement().getIdPart();
+  }
+
+  private static void assertEntries(Bundle bundle, String... expected) {
+    assertEquals(Bundle.BundleType.SEARCHSET, bundle.getType());
+    assertEquals(List.of(expected), references(bundle));
+    assertTrue(bundle.hasTotal());
+    assertEquals(expected.length, bundle.getTotal());
+    Stream<String> fullUrls = bundle.getEntry().stream().map(BundleEntryComponent::getFullUrl);
+    assertEquals(expected.length, fullUrls.distinct().count());
+    for (BundleEntryComponent entry : bundle.getEntry()) {
+      assertEquals("http://localhost/api/fhir/" + reference(entry), entry.getFullUrl());
+      assertEquals(Bundle.SearchEntryMode.MATCH, entry.getSearch().getMode());
+    }
+    assertNotNull(bundle.getLink(Bundle.LINK_SELF));
+    FhirR4Validation.assertValid(bundle);
+  }
+
+  private static ResolvedMapping encounterMapping(String type, String program, String stage) {
+    Entry ambulatory =
+        Entry.constant(
+            ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
+    return resolved(ENCOUNTER, type, program, stage, entries(ambulatory), Map.of());
+  }
+
+  private static ResolvedMapping observationMapping() {
+    Entry a = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_A).system(LOINC_SYSTEM);
+    Entry b = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_B).system(LOINC_SYSTEM);
+    var values = entries(a.code(LOINC_BODY_HEIGHT_CODE), b.code(LOINC_BODY_WEIGHT_CODE));
+    var types = Map.of(DE_A, ValueType.NUMBER, DE_B, ValueType.NUMBER);
+    return resolved(OBSERVATION, TET, P1, S1, values, types);
+  }
+
+  private static ResolvedMapping patientMapping() {
+    Entry gender = Entry.field(PATIENT_GENDER, ATTRIBUTE, GENDER_TEA).valueMap(Map.of("M", "male"));
+    return resolved(PATIENT, TET, null, null, entries(gender), Map.of(GENDER_TEA, ValueType.TEXT));
   }
 
   private static MockHttpServletRequest searchRequest() {
     return request(FhirSearchParameters.PATIENT, TE);
   }
 
-  private static MockHttpServletRequest request(String name, String value) {
+  private static MockHttpServletRequest request(String... namesAndValues) {
     MockHttpServletRequest request = new MockHttpServletRequest();
-    request.setParameter(name, value);
+    for (int i = 0; i < namesAndValues.length; i += 2) {
+      request.setParameter(namesAndValues[i], namesAndValues[i + 1]);
+    }
     return request;
   }
 
-  private void elapse(Duration elapsed) {
-    nanos += elapsed.toNanos();
+  private MockHttpServletRequest expiringOnLinks(String... namesAndValues) {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest() {
+          @Override
+          public String getQueryString() {
+            return spent(super.getQueryString());
+          }
+        };
+    request.setParameters(request(namesAndValues).getParameterMap());
+    return request;
+  }
+
+  private <T> T recorded(T result) {
+    seen.add(DeadlineHolder.get());
+    return result;
+  }
+
+  private <T> T spent(T result) {
+    nanos += BUDGET.plusSeconds(1).toNanos();
+    return result;
+  }
+
+  private static void assertExpired(Executable operation) {
+    assertThrows(DeadlineExceededException.class, operation);
   }
 
   private static void assertError(

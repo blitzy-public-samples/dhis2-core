@@ -32,55 +32,29 @@ package org.hisp.dhis.fhir.mapping;
 import static java.util.stream.Collectors.joining;
 
 import jakarta.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.OpenApi;
-import org.hisp.dhis.feedback.ConflictException;
-import org.hisp.dhis.feedback.ErrorReport;
+import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.query.GetObjectListParams;
 import org.hisp.dhis.webapi.controller.AbstractCrudController;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * CRUD API for {@link FhirResourceMapping} metadata at {@code /api/fhirResourceMappings}, and the
- * host of the FHIR mapping settings page.
- *
- * <p>List, read, gist, create, update, patch, delete, sharing and translation operations are
- * inherited from {@link AbstractCrudController}. Before a create, update or patch is imported, the
- * submitted mapping is checked with {@link FhirResourceMappingValidator} against every other stored
- * mapping; a mapping that violates any rule is rejected with a {@link ConflictException} whose
- * message lists every violation, separated by {@code "; "}, and nothing is stored.
- *
- * <p>{@code GET /api/fhirResourceMappings/settings} serves the self-contained HTML settings page,
- * which manages mappings through this API.
- */
+/** CRUD API for {@link FhirResourceMapping} metadata and host of the FHIR mapping settings page. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:metadata"})
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/fhirResourceMappings")
 public class FhirResourceMappingController
     extends AbstractCrudController<FhirResourceMapping, GetObjectListParams> {
-
-  /** Classpath location of the FHIR mapping settings page. */
   static final String SETTINGS_PAGE = "org/hisp/dhis/fhir/settings/fhir-settings.html";
-
   private final FhirResourceMappingValidator validator;
-
   private final FhirResourceMappingStore store;
 
-  /**
-   * Serves the FHIR mapping settings page as UTF-8 HTML that is never cached.
-   *
-   * @param response the response the page is written to
-   * @throws IOException when the page cannot be read from the classpath or written to the response
-   */
+  /** Serves the FHIR mapping settings page as UTF-8 HTML that is never cached. */
   @OpenApi.Ignore
   @GetMapping(value = "/settings", produces = MediaType.TEXT_HTML_VALUE)
   public void getSettingsPage(HttpServletResponse response) throws IOException {
@@ -91,50 +65,23 @@ public class FhirResourceMappingController
     }
   }
 
-  /**
-   * Rejects a new mapping that violates the FHIR mapping rules.
-   *
-   * @param entity the mapping to create
-   * @throws ConflictException listing every violated rule when the mapping is invalid
-   */
   @Override
   protected void preCreateEntity(FhirResourceMapping entity) throws ConflictException {
     validateOrConflict(entity);
   }
 
-  /**
-   * Rejects a replacement mapping that violates the FHIR mapping rules.
-   *
-   * @param persisted the stored mapping being replaced
-   * @param parsed the submitted replacement, carrying the UID of {@code persisted}
-   * @throws ConflictException listing every violated rule when the replacement is invalid
-   */
   @Override
   protected void preUpdateEntity(FhirResourceMapping persisted, FhirResourceMapping parsed)
       throws ConflictException {
     validateOrConflict(parsed);
   }
 
-  /**
-   * Rejects a patched mapping that violates the FHIR mapping rules.
-   *
-   * @param persisted the stored mapping being patched
-   * @param patched the mapping with the patch applied, carrying the UID of {@code persisted}
-   * @throws ConflictException listing every violated rule when the patched mapping is invalid
-   */
   @Override
   protected void prePatchEntity(FhirResourceMapping persisted, FhirResourceMapping patched)
       throws ConflictException {
     validateOrConflict(patched);
   }
 
-  /**
-   * Validates a mapping against every stored mapping except those with its UID, and rejects it when
-   * any rule is violated. The mapping itself is not modified.
-   *
-   * @param mapping the mapping about to be imported; its UID may be {@code null} on create
-   * @throws ConflictException whose message joins the messages of all violations with {@code "; "}
-   */
   private void validateOrConflict(FhirResourceMapping mapping) throws ConflictException {
     String uid = mapping.getUid();
     List<FhirResourceMapping> others =

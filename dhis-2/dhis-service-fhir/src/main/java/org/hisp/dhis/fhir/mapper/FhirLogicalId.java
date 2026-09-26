@@ -31,58 +31,26 @@ package org.hisp.dhis.fhir.mapper;
 
 import static java.util.stream.Collectors.joining;
 
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
-import javax.annotation.CheckForNull;
-import javax.annotation.Nonnull;
+import javax.annotation.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 
 /**
- * Logical id of a FHIR resource derived from a Tracker event. Every segment is a DHIS2 UID, an
- * alphanumeric string of 11 characters starting with a letter, and segments are joined by {@code
- * -}:
- *
- * <ul>
- *   <li>{@code Encounter}: {@code {enrollmentUid}-{eventUid}}, 2 segments and 23 characters.
- *   <li>{@code Immunization} and {@code Observation}: {@code
- *       {enrollmentUid}-{eventUid}-{dataElementUid}}, 3 segments and 35 characters.
- * </ul>
- *
- * <p>{@code Patient} ids are plain tracked entity UIDs and are not represented by this type.
- *
- * <p>Example:
- *
- * <pre>{@code
- * String id = FhirLogicalId.encounter(enrollmentUid, eventUid).compose();
- * Optional<FhirLogicalId> parsed = FhirLogicalId.parse(FhirResourceType.ENCOUNTER, id);
- * }</pre>
- *
- * @param enrollment the enrollment UID, always present
- * @param event the event UID, present for every event-derived resource
- * @param dataElement the data element UID, present for {@code Immunization} and {@code Observation}
- *     ids only
+ * Logical id of an event-derived FHIR resource: DHIS2 UIDs joined by {@code -}, {@code
+ * {enrollmentUid}-{eventUid}} for {@code Encounter} and {@code
+ * {enrollmentUid}-{eventUid}-{dataElementUid}} for {@code Immunization} and {@code Observation}.
  */
 public record FhirLogicalId(
     @Nonnull String enrollment, @CheckForNull String event, @CheckForNull String dataElement) {
-
   private static final Pattern UID_SEGMENT = Pattern.compile("^[A-Za-z][A-Za-z0-9]{10}$");
-
   private static final String SEPARATOR = "-";
-
   private static final int UID_LENGTH = 11;
-
   private static final int ENCOUNTER_SEGMENTS = 2;
-
   private static final int PER_DATA_ELEMENT_SEGMENTS = 3;
 
-  /**
-   * Creates a logical id.
-   *
-   * @throws NullPointerException if {@code enrollment} is {@code null}
-   * @throws IllegalArgumentException if {@code dataElement} is given without {@code event}
-   */
+  /** Rejects a {@code dataElement} segment without an {@code event} segment. */
   public FhirLogicalId {
     Objects.requireNonNull(enrollment, "enrollment must not be null");
     if (dataElement != null && event == null) {
@@ -90,38 +58,18 @@ public record FhirLogicalId(
     }
   }
 
-  /**
-   * Creates the logical id of an {@code Encounter}.
-   *
-   * @param enrollment the enrollment UID
-   * @param event the event UID
-   * @return the id {@code {enrollment}-{event}}
-   */
   @Nonnull
   public static FhirLogicalId encounter(@Nonnull String enrollment, @Nonnull String event) {
     return new FhirLogicalId(enrollment, event, null);
   }
 
-  /**
-   * Creates the logical id of an {@code Immunization} or {@code Observation}.
-   *
-   * @param enrollment the enrollment UID
-   * @param event the event UID
-   * @param dataElement the data element UID
-   * @return the id {@code {enrollment}-{event}-{dataElement}}
-   */
   @Nonnull
   public static FhirLogicalId perDataElement(
       @Nonnull String enrollment, @Nonnull String event, @Nonnull String dataElement) {
     return new FhirLogicalId(enrollment, event, dataElement);
   }
 
-  /**
-   * Returns the FHIR logical id string: the present segments in the order {@code enrollment},
-   * {@code event}, {@code dataElement}, joined by {@code -}.
-   *
-   * @return the composed id
-   */
+  /** Returns the present segments joined by {@code -}. */
   @Nonnull
   public String compose() {
     return Stream.of(enrollment, event, dataElement)
@@ -130,18 +78,8 @@ public record FhirLogicalId(
   }
 
   /**
-   * Parses a logical id of the given resource type.
-   *
-   * <p>{@code ENCOUNTER} ids must have exactly 2 segments, {@code IMMUNIZATION} and {@code
-   * OBSERVATION} ids exactly 3. Each segment must be a UID, matched exactly as given, without
-   * trimming or case folding. The result is empty when the type is {@code null} or {@code PATIENT},
-   * when the id is {@code null} or empty, when the segment count differs, and when any segment,
-   * including an empty one from a leading, trailing or doubled {@code -}, is not a UID. This method
-   * never throws.
-   *
-   * @param type the resource type the id belongs to
-   * @param id the logical id from the request
-   * @return the parsed id, or empty when the id is not a well-formed id of that type
+   * Parses an id of the given type; empty, without throwing, when the type is {@code null} or
+   * {@code PATIENT}, or the id is not exactly 2 UID segments for {@code ENCOUNTER} and 3 otherwise.
    */
   @Nonnull
   public static Optional<FhirLogicalId> parse(
@@ -149,7 +87,6 @@ public record FhirLogicalId(
     if (type == null || id == null || id.isEmpty()) {
       return Optional.empty();
     }
-
     int expectedSegments =
         switch (type) {
           case PATIENT -> 0;
@@ -160,7 +97,6 @@ public record FhirLogicalId(
         || id.length() != expectedSegments * UID_LENGTH + (expectedSegments - 1)) {
       return Optional.empty();
     }
-
     String[] segments = id.split(SEPARATOR, -1);
     if (segments.length != expectedSegments) {
       return Optional.empty();
@@ -170,7 +106,6 @@ public record FhirLogicalId(
         return Optional.empty();
       }
     }
-
     return Optional.of(
         expectedSegments == ENCOUNTER_SEGMENTS
             ? encounter(segments[0], segments[1])

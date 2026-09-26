@@ -31,98 +31,60 @@ package org.hisp.dhis.fhir.mapping;
 
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.EnumSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
+import java.util.Objects;
+import java.util.function.*;
+import java.util.stream.*;
 import javax.annotation.CheckForNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.hisp.dhis.common.IdentifiableObjectManager;
-import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
-import org.hisp.dhis.feedback.ErrorReport;
-import org.hisp.dhis.program.Program;
-import org.hisp.dhis.program.ProgramStage;
+import org.hisp.dhis.feedback.*;
+import org.hisp.dhis.program.*;
 import org.hisp.dhis.schema.SchemaService;
-import org.hisp.dhis.trackedentity.TrackedEntityAttribute;
-import org.hisp.dhis.trackedentity.TrackedEntityType;
+import org.hisp.dhis.trackedentity.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Registers the {@link FhirResourceMapping} schema and resolves stored mappings into detached,
- * validated {@link ResolvedMapping} records.
- *
- * <p>Mappings and the metadata they reference are read without applying the current user's sharing.
- * A stored mapping is resolved only when it passes {@link FhirResourceMappingValidator} and no
- * other valid mapping resolved with it holds its {@link
- * FhirResourceMappingValidator#uniquenessKey(FhirResourceMapping) uniqueness key}; every other
- * mapping is ignored and logged at {@code WARN}.
- */
+/** Registers the {@link FhirResourceMapping} schema and resolves valid stored mappings. */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class FhirResourceMappingService {
   private final FhirResourceMappingStore store;
-
   private final FhirResourceMappingValidator validator;
-
   private final SchemaService schemaService;
-
   private final IdentifiableObjectManager manager;
 
-  /** Registers the {@link FhirResourceMappingSchemaDescriptor} with the schema service. */
   @PostConstruct
   void init() {
     schemaService.register(new FhirResourceMappingSchemaDescriptor());
   }
 
-  /**
-   * Returns the valid, non-conflicting mappings of the type; invalid and duplicated mappings are
-   * ignored and logged.
-   *
-   * @param type the FHIR resource type
-   * @return an unmodifiable list ordered by mapping UID; empty when the type has no usable mapping
-   */
+  /** Returns the valid, non-conflicting mappings of the type, ordered by UID. */
   @Transactional(readOnly = true)
   public List<ResolvedMapping> resolve(FhirResourceType type) {
     return guard(store.getByResourceTypeNoAcl(type));
   }
 
-  /**
-   * Returns the valid, non-conflicting mappings of every resource type; invalid and duplicated
-   * mappings are ignored and logged.
-   *
-   * @return an unmodifiable list ordered by mapping UID; empty when no mapping is usable
-   */
+  /** Returns the valid, non-conflicting mappings of every resource type, ordered by UID. */
   @Transactional(readOnly = true)
   public List<ResolvedMapping> resolveAll() {
     return guard(store.getAllNoAcl());
   }
 
-  /**
-   * Drops every mapping with validation errors, then every mapping whose uniqueness key another
-   * remaining mapping also holds, and converts the rest into records ordered by UID.
-   */
   private List<ResolvedMapping> guard(List<FhirResourceMapping> stored) {
+    List<FhirResourceMapping> candidates = stored.stream().filter(Objects::nonNull).toList();
+    BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata =
+        metadata(candidates);
     Map<String, List<FhirResourceMapping>> byKey = new LinkedHashMap<>();
     List<FhirResourceMapping> usable = new ArrayList<>();
-    for (FhirResourceMapping mapping : stored) {
-      if (mapping == null) {
-        continue;
-      }
-      List<ErrorReport> reports = validator.validate(mapping, List.of());
+    for (FhirResourceMapping mapping : candidates) {
+      List<ErrorReport> reports = validator.validate(mapping, List.of(), metadata);
       if (!reports.isEmpty()) {
-        log.warn(
-            "Ignoring invalid FHIR resource mapping {} with error codes {}",
-            mapping.getUid(),
+        logIgnored(
+            escapedUids(List.of(mapping)),
             reports.stream().map(ErrorReport::getErrorCode).toList());
         continue;
       }
@@ -138,25 +100,123 @@ public class FhirResourceMappingService {
           if (mappings.size() == 1) {
             usable.add(mappings.get(0));
           } else {
-            log.warn(
-                "Ignoring FHIR resource mappings {} that share the uniqueness key {}",
-                mappings.stream().map(FhirResourceMapping::getUid).toList(),
-                key);
+            logIgnored(escapedUids(mappings), List.of(ErrorCode.E5003));
           }
         });
     return usable.stream()
-        .map(this::toResolved)
+        .map(mapping -> toResolved(mapping, metadata))
         .sorted(
             Comparator.comparing(
                 ResolvedMapping::uid, Comparator.nullsLast(Comparator.naturalOrder())))
         .toList();
   }
 
-  /**
-   * Converts a mapping into a record, resolving the value type of each attribute and data element
-   * source and the search constraints of each attribute source.
-   */
-  private ResolvedMapping toResolved(FhirResourceMapping mapping) {
+  void logIgnored(List<String> uids, List<ErrorCode> errorCodes) {
+    log.warn("Ignoring FHIR resource mappings {} with error codes {}", uids, errorCodes);
+  }
+
+  private static List<String> escapedUids(List<FhirResourceMapping> mappings) {
+    return mappings.stream().map(mapping -> escapeControlCharacters(mapping.getUid())).toList();
+  }
+
+  @CheckForNull
+  static String escapeControlCharacters(@CheckForNull String value) {
+    if (value == null) {
+      return null;
+    }
+    StringBuilder escaped = new StringBuilder(value.length());
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      int type = Character.getType(c);
+      if (type == Character.CONTROL
+          || type == Character.LINE_SEPARATOR
+          || type == Character.PARAGRAPH_SEPARATOR) {
+        escaped.append(String.format("\\u%04X", (int) c));
+      } else {
+        escaped.append(c);
+      }
+    }
+    return escaped.toString();
+  }
+
+  private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata(
+      List<FhirResourceMapping> mappings) {
+    Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded =
+        new HashMap<>();
+    load(
+        loaded,
+        TrackedEntityType.class,
+        TrackedEntityType::getUid,
+        mappings.stream()
+            .map(FhirResourceMapping::getTrackedEntityType)
+            .filter(Objects::nonNull)
+            .map(TrackedEntityType::getUid));
+    load(
+        loaded,
+        Program.class,
+        Program::getUid,
+        mappings.stream()
+            .map(FhirResourceMapping::getProgram)
+            .filter(Objects::nonNull)
+            .map(Program::getUid));
+    load(
+        loaded,
+        ProgramStage.class,
+        ProgramStage::getUid,
+        mappings.stream()
+            .map(FhirResourceMapping::getProgramStage)
+            .filter(Objects::nonNull)
+            .map(ProgramStage::getUid));
+    load(
+        loaded,
+        TrackedEntityAttribute.class,
+        TrackedEntityAttribute::getUid,
+        sources(mappings, FhirSourceType.ATTRIBUTE));
+    load(
+        loaded,
+        DataElement.class,
+        DataElement::getUid,
+        sources(mappings, FhirSourceType.DATA_ELEMENT));
+    return (klass, uid) -> {
+      Map<String, IdentifiableObject> byUid = loaded.get(klass);
+      return byUid != null && byUid.containsKey(uid)
+          ? byUid.get(uid)
+          : manager.getNoAcl(klass, uid);
+    };
+  }
+
+  private <T extends IdentifiableObject> void load(
+      Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded,
+      Class<T> klass,
+      Function<T, String> uidOf,
+      Stream<String> uids) {
+    Set<String> requested = uids.filter(CodeGenerator::isValidUid).collect(Collectors.toSet());
+    if (requested.isEmpty()) {
+      return;
+    }
+    Map<String, IdentifiableObject> byUid = new HashMap<>();
+    requested.forEach(uid -> byUid.put(uid, null));
+    for (T object : manager.getNoAcl(klass, requested)) {
+      if (object != null) {
+        byUid.put(uidOf.apply(object), object);
+      }
+    }
+    loaded.put(klass, byUid);
+  }
+
+  private static Stream<String> sources(
+      List<FhirResourceMapping> mappings, FhirSourceType sourceType) {
+    return mappings.stream()
+        .map(FhirResourceMapping::getFieldMappings)
+        .filter(Objects::nonNull)
+        .flatMap(List::stream)
+        .filter(entry -> entry != null && entry.getSourceType() == sourceType)
+        .map(FhirFieldMapping::getSource);
+  }
+
+  private ResolvedMapping toResolved(
+      FhirResourceMapping mapping,
+      BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata) {
     Map<String, ValueType> valueTypes = new LinkedHashMap<>();
     Map<String, Set<QueryOperator>> blockedSearchOperators = new LinkedHashMap<>();
     Map<String, Integer> minCharactersToSearch = new LinkedHashMap<>();
@@ -166,18 +226,16 @@ public class FhirResourceMappingService {
         continue;
       }
       if (entry.getSourceType() == FhirSourceType.ATTRIBUTE) {
-        TrackedEntityAttribute attribute = manager.getNoAcl(TrackedEntityAttribute.class, source);
-        if (attribute != null) {
+        if (metadata.apply(TrackedEntityAttribute.class, source)
+            instanceof TrackedEntityAttribute attribute) {
           putValueType(valueTypes, source, attribute.getValueType());
           Set<QueryOperator> blocked = attribute.getBlockedSearchOperators();
           blockedSearchOperators.put(source, blocked == null ? Set.of() : blocked);
           minCharactersToSearch.put(source, attribute.getMinCharactersToSearch());
         }
-      } else if (entry.getSourceType() == FhirSourceType.DATA_ELEMENT) {
-        DataElement dataElement = manager.getNoAcl(DataElement.class, source);
-        if (dataElement != null) {
-          putValueType(valueTypes, source, dataElement.getValueType());
-        }
+      } else if (entry.getSourceType() == FhirSourceType.DATA_ELEMENT
+          && metadata.apply(DataElement.class, source) instanceof DataElement dataElement) {
+        putValueType(valueTypes, source, dataElement.getValueType());
       }
     }
     TrackedEntityType trackedEntityType = mapping.getTrackedEntityType();
@@ -203,23 +261,7 @@ public class FhirResourceMappingService {
     }
   }
 
-  /**
-   * A validated mapping detached from persistence: references are UIDs and every collection is an
-   * unmodifiable copy made on construction.
-   *
-   * @param uid the mapping UID
-   * @param resourceType the FHIR resource type the mapping produces
-   * @param trackedEntityType the UID of the mapping's tracked entity type
-   * @param program the UID of the mapping's program, or {@code null} when it has none
-   * @param programStage the UID of the mapping's program stage, or {@code null} when it has none
-   * @param entries copies of the field mapping entries, in stored order
-   * @param valueTypes the value type of each attribute and data element source, by source UID
-   * @param blockedSearchOperators the blocked search operators of each attribute source, by
-   *     attribute UID; an empty set when none are blocked
-   * @param minCharactersToSearch the minimum number of characters to search of each attribute
-   *     source, by attribute UID
-   * @param lastUpdated when the mapping was last updated, or {@code null} when unknown
-   */
+  /** A validated, unmodifiable mapping detached from persistence, with UID references. */
   public record ResolvedMapping(
       String uid,
       FhirResourceType resourceType,
@@ -231,10 +273,12 @@ public class FhirResourceMappingService {
       Map<String, Set<QueryOperator>> blockedSearchOperators,
       Map<String, Integer> minCharactersToSearch,
       @CheckForNull Instant lastUpdated) {
-
-    /** Replaces every collection with an unmodifiable copy; {@code null} becomes empty. */
+    /** Replaces each collection and entry with an unmodifiable copy; {@code null} becomes empty. */
     public ResolvedMapping {
-      entries = entries == null ? List.of() : entries.stream().map(FhirFieldMapping::new).toList();
+      entries =
+          entries == null
+              ? List.of()
+              : entries.stream().map(FhirFieldMapping::unmodifiableCopy).toList();
       valueTypes = copy(valueTypes);
       Map<String, Set<QueryOperator>> operators = new LinkedHashMap<>();
       if (blockedSearchOperators != null) {
@@ -244,22 +288,11 @@ public class FhirResourceMappingService {
       minCharactersToSearch = copy(minCharactersToSearch);
     }
 
-    /**
-     * Returns the entries with the given target.
-     *
-     * @param target the FHIR target field
-     * @return an unmodifiable list in stored order; empty when no entry has the target
-     */
     public List<FhirFieldMapping> entries(FhirTargetField target) {
       return entries.stream().filter(e -> e.getTarget() == target).toList();
     }
 
-    /**
-     * Returns the first entry with the given target.
-     *
-     * @param target the FHIR target field
-     * @return the first such entry in stored order, or empty when no entry has the target
-     */
+    /** Returns the first entry with the given target, in stored order. */
     public Optional<FhirFieldMapping> entry(FhirTargetField target) {
       return entries.stream().filter(e -> e.getTarget() == target).findFirst();
     }

@@ -5,31 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>FHIR resource mappings</title>
     <style>
-      :root { --fhir-text: #212934; --fhir-border: #6c7a89; --fhir-surface: #f3f5f7; --fhir-accent: #0d5ea6; --fhir-gap: 0.5rem; }
-      *, *::before, *::after { box-sizing: border-box; }
+      :root { --fhir-text: #212934; --fhir-border: #6c7a89; --fhir-surface: #f3f5f7; --fhir-accent: #0d5ea6; --fhir-error: #b3261e; --fhir-gap: 0.5rem; }
+      *, *::before, *::after { box-sizing: border-box; } main { max-width: 80rem; margin: 0 auto; } h1 { font-size: 1.5rem; } h2, h3 { font-size: 1.125rem; }
       body { margin: 0; padding: 1.5rem; color: var(--fhir-text); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-      main { max-width: 80rem; margin: 0 auto; }
-      h1 { font-size: 1.5rem; }
-      h2, h3 { font-size: 1.125rem; }
       .notice:not(:empty) { padding: var(--fhir-gap); margin-block-end: 1rem; border: 1px solid var(--fhir-border); background: var(--fhir-surface); overflow-wrap: break-word; }
-      .table-wrap { overflow-x: auto; }
-      table { border-collapse: collapse; width: 100%; }
-      caption { text-align: start; font-weight: 600; padding-block-end: var(--fhir-gap); }
+      .table-wrap { overflow-x: auto; } table { border-collapse: collapse; width: 100%; } caption { text-align: start; font-weight: 600; padding-block-end: var(--fhir-gap); }
       th, td { border: 1px solid var(--fhir-border); padding: 0.25rem var(--fhir-gap); text-align: start; vertical-align: top; overflow-wrap: break-word; }
-      .editor { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
-      .editor > form { flex: 3 1 28rem; min-width: 0; }
+      .editor { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; } .editor > form { flex: 3 1 28rem; min-width: 0; }
       .editor > .notice { flex: 2 1 16rem; min-width: 0; position: sticky; inset-block-start: 1rem; }
       .field { display: flex; flex-direction: column; gap: 0.25rem; margin-block-end: 0.75rem; }
-      fieldset { border: 1px solid var(--fhir-border); margin: 0 0 0.75rem; min-width: 0; }
+      fieldset { border: 1px solid var(--fhir-border); margin: 0 0 0.75rem; min-width: 0; } fieldset.plain { border: 0; padding: 0; margin: 0; }
       .mapping-row, .pair, .actions { display: flex; flex-wrap: wrap; gap: var(--fhir-gap) 1rem; align-items: flex-end; }
-      .mapping-row > .field, .pair > .field { flex: 1 1 12rem; margin: 0; }
-      .mapping-row > .value-map { flex: 1 1 100%; margin: 0; }
+      .mapping-row > .field, .pair > .field { flex: 1 1 12rem; margin: 0; } .mapping-row > .value-map { flex: 1 1 100%; margin: 0; }
       .pairs { display: flex; flex-direction: column; gap: var(--fhir-gap); margin-block-end: var(--fhir-gap); }
       input, select, button { font: inherit; min-height: 2rem; max-width: 100%; padding: 0.25rem var(--fhir-gap); border: 1px solid var(--fhir-border); }
-      button { background: var(--fhir-surface); color: var(--fhir-text); cursor: pointer; }
-      button[type="submit"] { background: var(--fhir-accent); color: #ffffff; }
-      :focus-visible { outline: 3px solid var(--fhir-accent); outline-offset: 2px; }
-      [hidden] { display: none; }
+      button { background: var(--fhir-surface); color: var(--fhir-text); cursor: pointer; } button[type="submit"] { background: var(--fhir-accent); color: #ffffff; }
+      button:hover:not(:disabled) { border-color: var(--fhir-accent); filter: brightness(0.9); } button:active:not(:disabled) { filter: brightness(0.8); }
+      :is(input, select, button):disabled { opacity: 0.6; cursor: not-allowed; } [aria-invalid="true"] { border: 2px solid var(--fhir-error); padding: calc(0.25rem - 1px) calc(var(--fhir-gap) - 1px); }
+      :focus-visible { outline: 3px solid var(--fhir-accent); outline-offset: 2px; } [hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -37,23 +30,14 @@
       <h1>FHIR resource mappings</h1>
       <p id="fhir-status" class="notice" aria-live="polite">Checking FHIR API status</p>
       <div id="fhir-messages" class="notice" aria-live="polite"></div>
+      <p id="fhir-live" role="status"></p>
       <section aria-labelledby="fhir-mappings-heading">
         <h2 id="fhir-mappings-heading">Mappings</h2>
         <div class="table-wrap" role="region" aria-labelledby="fhir-mappings-caption" tabindex="0">
           <table>
             <caption id="fhir-mappings-caption">Stored FHIR resource mappings</caption>
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Resource type</th>
-                <th scope="col">Tracked entity type</th>
-                <th scope="col">Program</th>
-                <th scope="col">Program stage</th>
-                <th scope="col">Field mappings</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="fhir-mapping-rows"></tbody>
+            <thead><tr><th scope="col">Name</th><th scope="col">Resource type</th><th scope="col">Tracked entity type</th><th scope="col">Program</th><th scope="col">Program stage</th><th scope="col">Field mappings</th><th scope="col">Actions</th></tr></thead>
+            <tbody id="fhir-mapping-rows"><tr><td colspan="7">Loading mappings…</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -62,51 +46,45 @@
         <p id="fhir-editing">New mapping</p>
         <div class="editor">
           <form id="fhir-mapping-form">
-            <div class="field">
-              <label for="fhir-name">Name (required)</label>
-              <input type="text" id="fhir-name" required>
-            </div>
-            <div class="field">
-              <label for="fhir-resource-type">Resource type</label>
-              <select id="fhir-resource-type">
-                <option value="PATIENT" selected>PATIENT</option>
-                <option value="ENCOUNTER">ENCOUNTER</option>
-                <option value="IMMUNIZATION">IMMUNIZATION</option>
-                <option value="OBSERVATION">OBSERVATION</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="fhir-tracked-entity-type">Tracked entity type (required)</label>
-              <select id="fhir-tracked-entity-type" required>
-                <option value="">Select a tracked entity type</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="fhir-program">Program<span id="fhir-program-required"></span></label>
-              <select id="fhir-program">
-                <option value="">(none)</option>
-              </select>
-            </div>
-            <div class="field" id="fhir-program-stage-field" hidden>
-              <label for="fhir-program-stage">Program stage (required)</label>
-              <select id="fhir-program-stage">
-                <option value="">Select a program stage</option>
-              </select>
-            </div>
-            <h3>Field mappings</h3>
-            <div id="fhir-field-mappings"></div>
-            <div class="actions">
-              <button type="button" id="fhir-add-row">Add field mapping</button>
-              <button type="submit">Save</button>
-              <button type="button" id="fhir-cancel-edit" hidden>Cancel edit</button>
-            </div>
+            <fieldset id="fhir-form-body" class="plain" aria-labelledby="fhir-editing">
+              <div class="field">
+                <label for="fhir-name">Name (required)</label>
+                <input type="text" id="fhir-name" required>
+              </div>
+              <div class="field">
+                <label for="fhir-resource-type">Resource type</label>
+                <select id="fhir-resource-type"><option selected>PATIENT</option><option>ENCOUNTER</option><option>IMMUNIZATION</option><option>OBSERVATION</option></select>
+              </div>
+              <div class="field">
+                <label for="fhir-tracked-entity-type">Tracked entity type (required)</label>
+                <select id="fhir-tracked-entity-type" required disabled><option value="">Loading tracked entity types…</option></select>
+              </div>
+              <div class="field">
+                <label for="fhir-program">Program<span id="fhir-program-required"></span></label>
+                <select id="fhir-program"><option value="">(none)</option></select>
+              </div>
+              <div class="field" id="fhir-program-stage-field" hidden>
+                <label for="fhir-program-stage">Program stage (required)</label>
+                <select id="fhir-program-stage"><option value="">Select a program first</option></select>
+              </div>
+              <h3>Field mappings</h3>
+              <div id="fhir-field-mappings"></div>
+              <div class="actions">
+                <button type="button" id="fhir-add-row">Add field mapping</button>
+                <button type="submit" disabled>Save</button>
+                <button type="button" id="fhir-cancel-edit" hidden>Cancel edit</button>
+              </div>
+            </fieldset>
           </form>
           <div id="fhir-form-errors" class="notice" aria-live="polite"></div>
         </div>
       </section>
     </main>
-    <script>
+    <script type="module">
       const API = location.pathname.replace(/fhirResourceMappings\/settings\/?$/, '');
+      const TIMEOUT_MS = 30000;
+      const CHUNK_SIZE = 200;
+      const UNCERTAIN = 'No answer arrived within ' + TIMEOUT_MS / 1000 + ' seconds; the change may or may not have been saved.';
       const TEXTUAL = ['TEXT', 'LONG_TEXT', 'LETTER'];
       const INTEGERS = ['INTEGER', 'INTEGER_POSITIVE', 'INTEGER_NEGATIVE', 'INTEGER_ZERO_OR_POSITIVE'];
       const CODING = ['system', 'code', 'display'];
@@ -124,8 +102,7 @@
         ENCOUNTER_TYPE: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT', 'CONSTANT'], required: false,
           inputs: {DATA_ELEMENT: ['system'], CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: TEXTUAL},
         ENCOUNTER_REASON: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
-        IMMUNIZATION_ADMINISTERED: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: true, inputs: {}, requiredInputs: [],
-          valueTypes: ['BOOLEAN', 'TRUE_ONLY', 'TEXT']},
+        IMMUNIZATION_ADMINISTERED: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: true, inputs: {}, requiredInputs: [], valueTypes: ['BOOLEAN', 'TRUE_ONLY', 'TEXT']},
         IMMUNIZATION_VACCINE_CODE: {resource: 'IMMUNIZATION', sources: ['CONSTANT'], required: true, inputs: {CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: []},
         IMMUNIZATION_LOT_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
         IMMUNIZATION_DOSE_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: [...INTEGERS, 'TEXT']},
@@ -133,188 +110,181 @@
           requiredInputs: ['code'], valueTypes: ['TEXT', 'LONG_TEXT', 'MULTI_TEXT', 'LETTER', 'PHONE_NUMBER', 'EMAIL', 'BOOLEAN', 'TRUE_ONLY', 'DATE',
             'DATETIME', 'TIME', 'NUMBER', 'UNIT_INTERVAL', 'PERCENTAGE', ...INTEGERS, 'USERNAME', 'AGE', 'URL']}
       };
-      const RESOURCE_TYPES = ['PATIENT', 'ENCOUNTER', 'IMMUNIZATION', 'OBSERVATION'];
       const TEXT_INPUTS = {system: 'System', code: 'Code', display: 'Display', unit: 'Unit'};
       const WITH_SOURCE = ['ATTRIBUTE', 'DATA_ELEMENT'];
       const GENDERS = ['male', 'female', 'other', 'unknown'];
-
       const byId = (id) => document.getElementById(id);
-      const form = byId('fhir-mapping-form');
-      const nameInput = byId('fhir-name');
-      const resourceSelect = byId('fhir-resource-type');
-      const typeSelect = byId('fhir-tracked-entity-type');
-      const programSelect = byId('fhir-program');
-      const stageField = byId('fhir-program-stage-field');
-      const stageSelect = byId('fhir-program-stage');
-      const rowsBox = byId('fhir-field-mappings');
-      const cancelButton = byId('fhir-cancel-edit');
-      const messages = byId('fhir-messages');
-      const formErrors = byId('fhir-form-errors');
-      const state = {editing: null, types: new Map(), programs: [], programsFor: '', programLoad: 0, editLoad: 0, rows: [], rowCount: 0, pairCount: 0};
-
-      function text(value) {
-        return value === null || value === undefined ? '' : String(value);
-      }
-
+      const form = byId('fhir-mapping-form'), formBody = byId('fhir-form-body'), nameInput = byId('fhir-name'), resourceSelect = byId('fhir-resource-type');
+      const typeSelect = byId('fhir-tracked-entity-type'), programSelect = byId('fhir-program'), stageField = byId('fhir-program-stage-field'), stageSelect = byId('fhir-program-stage');
+      const rowsBox = byId('fhir-field-mappings'), cancelButton = byId('fhir-cancel-edit'), saveButton = form.querySelector('button[type="submit"]'), messages = byId('fhir-messages');
+      const formErrors = byId('fhir-form-errors'), tableBody = byId('fhir-mapping-rows'), live = byId('fhir-live');
+      const state = {editing: null, saving: false, types: new Map(), programs: [], programsFor: '', programsPending: false, typesLoading: true, programLoad: 0, editLoad: 0, listLoad: 0, rows: [], rowCount: 0, pairCount: 0};
+      const text = (value) => (value === null || value === undefined ? '' : String(value));
+      const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const list = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
+      const count = (size, one, many) => size + ' ' + (size === 1 ? one : many);
+      const announce = (message) => { live.textContent = message; };
       function el(tag, attributes, content) {
         const node = document.createElement(tag);
         Object.entries(attributes || {}).forEach(([name, value]) => node.setAttribute(name, value));
         if (content !== undefined) node.textContent = content;
         return node;
       }
-
       function field(id, labelText, control) {
-        const wrapper = el('div', {class: 'field'});
-        const label = wrapper.appendChild(el('label', {for: id}, labelText));
+        const wrapper = el('div', {class: 'field'}), label = wrapper.appendChild(el('label', {for: id}, labelText));
         wrapper.appendChild(control);
         return {wrapper, label};
       }
-
       function fillSelect(select, placeholder, items) {
-        const options = items.map(([value, label]) => el('option', {value}, label));
-        if (placeholder !== null) options.unshift(el('option', {value: ''}, placeholder));
-        select.replaceChildren(...options);
+        const options = document.createDocumentFragment();
+        if (placeholder !== null) options.appendChild(el('option', {value: ''}, placeholder));
+        items.forEach(([value, label]) => options.appendChild(el('option', {value}, label)));
+        select.replaceChildren(options);
+        unflag(select);
       }
-
-      function setValue(select, value) {
+      const isMissing = (select) => Boolean(select.selectedOptions[0] && select.selectedOptions[0].hasAttribute('data-missing'));
+      function setValue(select, value, preserve) {
         const wanted = text(value);
-        select.value = Array.from(select.options).some((option) => option.value === wanted) ? wanted : '';
+        const known = Array.from(select.options).some((option) => option.value === wanted);
+        if (!known && preserve && wanted) {
+          select.appendChild(el('option', {value: wanted, 'data-missing': ''}, 'Unavailable: ' + wanted));
+          flag(select);
+        }
+        select.value = known || (preserve && wanted) ? wanted : '';
       }
-
+      function missingChoices() {
+        return Array.from(form.querySelectorAll('select')).filter((select) => isMissing(select) && !select.closest('[hidden]')).map((select) => {
+          const row = select.closest('.mapping-row');
+          const label = (row ? row.firstChild.textContent + ', ' : '') + text(select.labels[0] && select.labels[0].textContent).replace(' (required)', '');
+          return label + ': "' + select.value + '" is not available; choose a value explicitly.';
+        });
+      }
+      function csrfToken() {
+        const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='));
+        return cookie ? decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)) : '';
+      }
+      const parseJson = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch (error) { return null; } };
       async function api(method, path, body) {
-        const headers = {Accept: 'application/json'};
-        const init = {method, credentials: 'same-origin', headers};
-        if (body !== undefined) {
-          headers['Content-Type'] = 'application/json';
-          init.body = JSON.stringify(body);
-        }
-        let response;
-        let json = null;
+        const headers = {Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(body === undefined ? {} : {'Content-Type': 'application/json'})};
+        const token = method === 'GET' ? '' : csrfToken();
+        if (token) headers['X-XSRF-TOKEN'] = token;
+        const init = {method, credentials: 'same-origin', headers, signal: AbortSignal.timeout(TIMEOUT_MS), body: body === undefined ? undefined : JSON.stringify(body)};
         try {
-          response = await fetch(API + path, init);
+          const response = await fetch(API + path, init);
+          const json = (response.headers.get('Content-Type') || '').includes('json') ? parseJson(await response.text()) : null;
+          return {status: response.status, ok: response.ok && !response.redirected, json};
         } catch (error) {
-          return {status: 0, ok: false, json: null};
+          return {status: 0, ok: false, timedOut: error.name === 'TimeoutError' || error.name === 'AbortError', json: null};
         }
-        if ((response.headers.get('Content-Type') || '').includes('json')) {
-          try {
-            const raw = await response.text();
-            json = raw ? JSON.parse(raw) : null;
-          } catch (error) {
-            json = null;
-          }
-        }
-        return {status: response.status, ok: response.ok, json};
       }
-
-      function succeeded(result) {
-        return result.ok && !(result.json && result.json.status === 'ERROR');
-      }
-
+      const succeeded = (result) => result.ok && isObject(result.json) && result.json.status === 'OK';
       function errorText(result) {
-        const json = result.json;
-        const reports = json && json.response && json.response.errorReports;
+        const json = isObject(result.json) ? result.json : {};
+        const reports = isObject(json.response) ? json.response.errorReports : undefined;
+        if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again and reload this page.'];
         if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
-        if (json && json.message) return [text(json.message)];
-        return ['HTTP ' + result.status];
+        if (json.message) return [text(json.message)];
+        if (result.timedOut) return ['No answer arrived within ' + TIMEOUT_MS / 1000 + ' seconds.'];
+        if (result.status === 0) return ['The server could not be reached. Check the connection and try again.'];
+        return [(result.status >= 200 && result.status < 300 ? 'Unexpected response' : 'Request failed') + ' (HTTP ' + result.status + ')'];
       }
-
-      function showMessage(message) {
-        messages.replaceChildren(el('p', {}, message));
+      const showMessage = (message) => messages.replaceChildren(el('p', {}, message));
+      const showError = (result) => showMessage('Error: ' + errorText(result).join('; '));
+      function showFormErrors(problems) {
+        formErrors.replaceChildren(el('p', {}, 'Error:'), el('ul'));
+        problems.forEach((message) => formErrors.lastChild.appendChild(el('li', {}, message)));
       }
-
-      function showError(result) {
-        showMessage('Error: ' + errorText(result).join('; '));
+      const guard = (handler) => async (...args) => {
+        try { await handler(...args); } catch (error) { showMessage('Error: ' + text(error && error.message ? error.message : error)); }
+      };
+      function collection(result, key) {
+        const json = result.ok && isObject(result.json) ? result.json : null;
+        if (json && Array.isArray(json[key])) return list(json[key]);
+        if (json) showMessage('Error: Malformed response: "' + key + '" is not a list.');
+        else showError(result);
+        return null;
       }
-
-      function showFormErrors(list) {
-        const items = el('ul');
-        list.forEach((message) => items.appendChild(el('li', {}, message)));
-        formErrors.replaceChildren(el('p', {}, 'Error:'), items);
-      }
-
       async function loadStatus() {
         const result = await api('GET', 'fhir/metadata');
-        byId('fhir-status').textContent = result.status === 200 ? 'FHIR API enabled'
-          : result.status === 404 ? 'FHIR API disabled (fhir.api.enabled)'
-          : 'FHIR API status unknown (HTTP ' + result.status + ')';
+        const enabled = result.status === 200 && isObject(result.json) && result.json.resourceType === 'CapabilityStatement';
+        byId('fhir-status').textContent = enabled ? 'FHIR API enabled'
+          : result.status === 404 ? 'FHIR API disabled (fhir.api.enabled)' : 'FHIR API status unknown (HTTP ' + result.status + ')';
+        if (!enabled && result.status !== 404) showError(result);
       }
-
       async function loadTrackedEntityTypes() {
+        announce('Loading tracked entity types…');
         const result = await api('GET', 'trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false');
-        if (!result.ok || !result.json) return showError(result);
-        state.types = new Map((result.json.trackedEntityTypes || []).map((type) => [type.id, type]));
-        fillSelect(typeSelect, 'Select a tracked entity type', Array.from(state.types.values()).map((type) => [type.id, text(type.displayName)]));
+        const types = collection(result, 'trackedEntityTypes');
+        state.types = new Map((types || []).map((type) => [text(type.id), type]));
+        const placeholder = !types ? 'Tracked entity types could not be loaded' : types.length ? 'Select a tracked entity type' : 'No tracked entity types available';
+        fillSelect(typeSelect, placeholder, (types || []).map((type) => [text(type.id), text(type.displayName)]));
+        typeSelect.disabled = state.typesLoading = false;
+        saveButton.disabled = state.programsPending;
+        announce(types ? count(types.length, 'tracked entity type', 'tracked entity types') + ' available.' : placeholder + '.');
       }
-
+      function setProgramsPending(pending) {
+        state.programsPending = programSelect.disabled = stageSelect.disabled = pending; saveButton.disabled = pending || state.typesLoading;
+      }
       async function loadPrograms(typeId) {
         const token = ++state.programLoad;
         let programs = [];
+        Object.assign(state, {programs: [], programsFor: ''});
         if (typeId) {
+          fillSelect(programSelect, 'Loading programs…', []);
+          fillStages();
+          setProgramsPending(true);
+          announce('Loading programs…');
           const result = await api('GET', 'programs?filter=programType:eq:WITH_REGISTRATION&filter=trackedEntityType.id:eq:' + encodeURIComponent(typeId) + '&fields=id,displayName,programTrackedEntityAttributes[trackedEntityAttribute[id,displayName,valueType]],programStages[id,displayName,programStageDataElements[dataElement[id,displayName,valueType]]]&paging=false');
           if (token !== state.programLoad) return;
-          if (result.ok && result.json) programs = result.json.programs || [];
-          else showError(result);
+          programs = collection(result, 'programs');
+          announce(programs ? count(programs.length, 'program', 'programs') + ' available for the selected tracked entity type.' : 'Programs could not be loaded.');
         }
-        state.programs = programs;
+        setProgramsPending(false);
+        state.programs = programs || [];
         state.programsFor = typeId;
-        fillSelect(programSelect, '(none)', programs.map((program) => [program.id, text(program.displayName)]));
+        const placeholder = !programs ? '(none: programs could not be loaded)' : typeId && !programs.length ? '(none: no program with registration for this type)' : '(none)';
+        fillSelect(programSelect, placeholder, state.programs.map((program) => [text(program.id), text(program.displayName)]));
         fillStages();
       }
-
-      function currentProgram() {
-        return state.programs.find((program) => program.id === programSelect.value);
-      }
-
-      function currentStage() {
-        const program = currentProgram();
-        return program ? (program.programStages || []).find((stage) => stage.id === stageSelect.value) : undefined;
-      }
-
+      const currentProgram = () => state.programs.find((program) => program.id === programSelect.value);
+      const currentStage = () => list((currentProgram() || {}).programStages).find((stage) => stage.id === stageSelect.value);
       function fillStages() {
         const program = currentProgram();
-        fillSelect(stageSelect, 'Select a program stage', (program ? program.programStages || [] : []).map((stage) => [stage.id, text(stage.displayName)]));
+        const stages = program ? list(program.programStages) : [];
+        fillSelect(stageSelect, !program ? 'Select a program first' : stages.length ? 'Select a program stage' : 'This program has no stages',
+          stages.map((stage) => [text(stage.id), text(stage.displayName)]));
       }
-
       function applyResourceType() {
         const eventDerived = resourceSelect.value !== 'PATIENT';
-        programSelect.required = eventDerived;
+        programSelect.required = stageSelect.required = eventDerived;
         byId('fhir-program-required').textContent = eventDerived ? ' (required)' : '';
         stageField.hidden = !eventDerived;
-        stageSelect.required = eventDerived;
       }
-
       function sourceItems(sourceType) {
         if (sourceType === 'ATTRIBUTE') {
           const items = new Map();
           const type = state.types.get(typeSelect.value);
           const program = currentProgram();
-          [...(type ? type.trackedEntityTypeAttributes || [] : []), ...(program ? program.programTrackedEntityAttributes || [] : [])]
-            .map((link) => link && link.trackedEntityAttribute)
-            .filter((attribute) => attribute && !items.has(attribute.id))
+          [...list(type && type.trackedEntityTypeAttributes), ...list(program && program.programTrackedEntityAttributes)]
+            .map((link) => link.trackedEntityAttribute)
+            .filter((attribute) => isObject(attribute) && !items.has(attribute.id))
             .forEach((attribute) => items.set(attribute.id, attribute));
           return Array.from(items.values());
         }
         const stage = sourceType === 'DATA_ELEMENT' ? currentStage() : undefined;
-        return (stage ? stage.programStageDataElements || [] : []).map((link) => link && link.dataElement).filter((element) => element);
+        return list(stage && stage.programStageDataElements).map((link) => link.dataElement).filter(isObject);
       }
-
-      function rowInputs(row) {
-        const target = TARGETS[row.target.value];
-        return target ? target.inputs[row.sourceType.value] || [] : [];
-      }
-
+      const rowInputs = (row) => (TARGETS[row.target.value] ? TARGETS[row.target.value].inputs[row.sourceType.value] || [] : []);
       function rebuildSources(row) {
         const target = TARGETS[row.target.value];
         const selected = row.source.value;
+        const missing = isMissing(row.source);
         const items = target ? sourceItems(row.sourceType.value).filter((item) => target.valueTypes.includes(item.valueType)) : [];
-        fillSelect(row.source, 'Select a source', items.map((item) => [item.id, text(item.displayName)]));
-        setValue(row.source, selected);
+        const placeholder = !target ? 'Select a target first' : items.length ? 'Select a source' : 'No compatible source available';
+        fillSelect(row.source, placeholder, items.map((item) => [text(item.id), text(item.displayName)]));
+        setValue(row.source, selected, missing);
       }
-
-      function rebuildAllSources() {
-        state.rows.forEach(rebuildSources);
-      }
-
+      const rebuildAllSources = () => state.rows.forEach(rebuildSources);
       function updateRow(row) {
         const target = TARGETS[row.target.value];
         const inputs = rowInputs(row);
@@ -329,7 +299,6 @@
         row.valueMap.hidden = !inputs.includes('valueMap');
         rebuildSources(row);
       }
-
       function changeTarget(row) {
         const target = TARGETS[row.target.value];
         const sources = target ? target.sources : [];
@@ -337,44 +306,32 @@
         if (sources.length === 1) row.sourceType.value = sources[0];
         updateRow(row);
       }
-
       function addPair(row, key, value) {
         const id = row.id + '-vm' + ++state.pairCount;
         const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value'}), code: el('select', {id: id + '-code'}),
           remove: el('button', {type: 'button'}, 'Remove value')};
         pair.key.value = text(key);
         fillSelect(pair.code, null, GENDERS.map((gender) => [gender, gender]));
-        if (value !== undefined) setValue(pair.code, value);
-        pair.remove.addEventListener('click', () => {
+        if (value !== undefined) setValue(pair.code, value, true);
+        pair.remove.addEventListener('click', guard(() => {
           row.pairList = row.pairList.filter((other) => other !== pair);
           pair.node.remove();
-          renumberPairs(row);
+          renumberPairs(row); duplicateKeys();
           row.addPair.focus();
-        });
-        pair.node.appendChild(field(id + '-value', 'DHIS2 value', pair.key).wrapper);
-        pair.node.appendChild(field(id + '-code', 'FHIR gender', pair.code).wrapper);
-        pair.node.appendChild(pair.remove);
+        }));
+        pair.node.append(field(id + '-value', 'DHIS2 value', pair.key).wrapper, field(id + '-code', 'FHIR gender', pair.code).wrapper, pair.remove);
         row.pairList.push(pair);
         row.pairs.appendChild(pair.node);
         renumberPairs(row);
       }
-
-      function renumberPairs(row) {
-        row.pairList.forEach((pair, index) => pair.remove.setAttribute('aria-label', 'Remove value ' + (index + 1)));
-      }
-
+      const renumberPairs = (row) => row.pairList.forEach((pair, index) => pair.remove.setAttribute('aria-label', 'Remove value ' + (index + 1)));
       function renumberRows() {
         state.rows.forEach((row, index) => {
           row.legend.textContent = 'Field mapping ' + (index + 1);
           row.remove.setAttribute('aria-label', 'Remove field mapping ' + (index + 1));
         });
       }
-
-      function removeRows() {
-        state.rows = [];
-        rowsBox.replaceChildren();
-      }
-
+      const removeRows = () => { state.rows = []; rowsBox.replaceChildren(); };
       function addRow(entry) {
         const id = 'fm' + ++state.rowCount;
         const row = {id, inputs: {}, pairList: [], fieldset: el('fieldset', {class: 'mapping-row'}), legend: el('legend'),
@@ -383,66 +340,66 @@
           pairs: el('div', {class: 'pairs'}), remove: el('button', {type: 'button'}, 'Remove'), addPair: el('button', {type: 'button'}, 'Add value')};
         fillSelect(row.target, 'Select a target', Object.entries(TARGETS).filter(([, target]) => target.resource === resourceSelect.value)
           .map(([name, target]) => [name, name + (target.required ? ' (required)' : '')]));
-        row.fieldset.appendChild(row.legend);
-        row.fieldset.appendChild(field(id + '-target', 'Target', row.target).wrapper);
-        row.fieldset.appendChild(field(id + '-source-type', 'Source type', row.sourceType).wrapper);
-        row.sourceField = row.fieldset.appendChild(field(id + '-source', 'Source', row.source).wrapper);
+        row.sourceField = field(id + '-source', 'Source', row.source).wrapper;
+        row.fieldset.append(row.legend, field(id + '-target', 'Target', row.target).wrapper, field(id + '-source-type', 'Source type', row.sourceType).wrapper, row.sourceField);
         Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
           const input = el('input', {type: 'text', id: id + '-' + key});
-          const control = field(id + '-' + key, labelText, input);
-          row.inputs[key] = {input, wrapper: control.wrapper, label: control.label};
-          row.fieldset.appendChild(control.wrapper);
+          row.inputs[key] = {input, ...field(id + '-' + key, labelText, input)};
+          row.fieldset.appendChild(row.inputs[key].wrapper);
         });
-        row.valueMap.appendChild(el('legend', {}, 'Gender value map'));
-        row.valueMap.appendChild(row.pairs);
-        row.valueMap.appendChild(row.addPair);
-        row.fieldset.appendChild(row.valueMap);
-        row.fieldset.appendChild(row.remove);
-        row.addPair.addEventListener('click', () => addPair(row, '', undefined));
-        row.target.addEventListener('change', () => changeTarget(row));
-        row.sourceType.addEventListener('change', () => updateRow(row));
-        row.remove.addEventListener('click', () => {
+        row.valueMap.append(el('legend', {}, 'Gender value map'), row.pairs, row.addPair);
+        row.fieldset.append(row.valueMap, row.remove);
+        row.addPair.addEventListener('click', guard(() => addPair(row, '', undefined)));
+        row.target.addEventListener('change', guard(() => changeTarget(row)));
+        row.sourceType.addEventListener('change', guard(() => updateRow(row)));
+        row.remove.addEventListener('click', guard(() => {
           state.rows = state.rows.filter((other) => other !== row);
           row.fieldset.remove();
           renumberRows();
           byId('fhir-add-row').focus();
-        });
+        }));
         state.rows.push(row);
         rowsBox.appendChild(row.fieldset);
         renumberRows();
-        setValue(row.target, entry.target);
+        setValue(row.target, entry.target, true);
         changeTarget(row);
         if (entry.sourceType) {
-          setValue(row.sourceType, entry.sourceType);
+          setValue(row.sourceType, entry.sourceType, true);
           updateRow(row);
         }
-        setValue(row.source, entry.source);
-        Object.entries(row.inputs).forEach(([key, control]) => {
-          control.input.value = text(entry[key]);
-        });
-        Object.entries(entry.valueMap || {}).forEach(([key, value]) => addPair(row, key, value));
+        setValue(row.source, entry.source, true);
+        Object.entries(row.inputs).forEach(([key, control]) => { control.input.value = text(entry[key]); });
+        Object.entries(isObject(entry.valueMap) ? entry.valueMap : {}).forEach(([key, value]) => addPair(row, key, value));
       }
-
       function entryOf(row) {
         const entry = {};
         const inputs = rowInputs(row);
         if (row.target.value) entry.target = row.target.value;
         if (row.sourceType.value) entry.sourceType = row.sourceType.value;
         if (WITH_SOURCE.includes(row.sourceType.value) && row.source.value) entry.source = row.source.value;
-        Object.keys(TEXT_INPUTS).filter((key) => inputs.includes(key)).forEach((key) => {
-          const value = row.inputs[key].input.value.trim();
-          if (value) entry[key] = value;
-        });
+        Object.keys(TEXT_INPUTS).filter((key) => inputs.includes(key) && row.inputs[key].input.value.trim()).forEach((key) => { entry[key] = row.inputs[key].input.value.trim(); });
         if (inputs.includes('valueMap')) {
-          const valueMap = {};
-          row.pairList.filter((pair) => pair.key.value.trim()).forEach((pair) => {
-            valueMap[pair.key.value.trim()] = pair.code.value;
-          });
+          const valueMap = Object.fromEntries(row.pairList.filter((pair) => pair.key.value.trim()).map((pair) => [pair.key.value, pair.code.value]));
           if (Object.keys(valueMap).length > 0) entry.valueMap = valueMap;
         }
         return entry;
       }
-
+      const flag = (control) => { control.setAttribute('aria-invalid', 'true'); control.setAttribute('aria-describedby', 'fhir-form-errors'); };
+      const unflag = (control) => ['aria-invalid', 'aria-describedby'].forEach((name) => control.removeAttribute(name));
+      function duplicateKeys() {
+        const problems = [];
+        rowsBox.querySelectorAll('.pair input[aria-invalid]').forEach(unflag);
+        state.rows.filter((row) => rowInputs(row).includes('valueMap')).forEach((row) => {
+          const byKey = new Map();
+          row.pairList.filter((pair) => pair.key.value.trim()).forEach((pair) => byKey.set(pair.key.value, [...(byKey.get(pair.key.value) || []), pair.key]));
+          byKey.forEach((inputs, key) => {
+            if (inputs.length < 2) return;
+            inputs.forEach(flag);
+            problems.push(row.legend.textContent + ': DHIS2 value "' + key + '" is entered more than once.');
+          });
+        });
+        return problems;
+      }
       function mappingBody() {
         const body = {name: nameInput.value.trim(), resourceType: resourceSelect.value, trackedEntityType: {id: typeSelect.value}};
         if (programSelect.value) body.program = {id: programSelect.value};
@@ -452,25 +409,52 @@
         if (state.editing && state.editing.sharing !== null && state.editing.sharing !== undefined) body.sharing = state.editing.sharing;
         return body;
       }
-
+      function formProblems() {
+        const problems = [...missingChoices(), ...duplicateKeys()];
+        if (state.programsPending) problems.unshift('Programs for the selected tracked entity type are still loading; wait for them before saving.');
+        if (state.typesLoading) problems.unshift('Tracked entity types are still loading; wait for them before saving.');
+        if (!nameInput.value.trim()) {
+          flag(nameInput);
+          problems.unshift('Name must not be blank.');
+        }
+        return problems;
+      }
+      function setSaving(saving) {
+        state.saving = formBody.disabled = saving;
+        tableBody.querySelectorAll('button').forEach((button) => { button.disabled = saving; });
+        if (!saving && document.activeElement === document.body) saveButton.focus();
+      }
       async function save(event) {
         event.preventDefault();
+        if (state.saving) return;
         formErrors.replaceChildren();
         const name = nameInput.value.trim();
-        const result = state.editing
-          ? await api('PUT', 'fhirResourceMappings/' + encodeURIComponent(state.editing.id), mappingBody())
-          : await api('POST', 'fhirResourceMappings', mappingBody());
-        if (succeeded(result)) {
-          showMessage('Saved mapping "' + name + '".');
-          await loadMappings();
-          resetForm();
-        } else if (result.ok || result.status === 409 || result.status === 400) {
-          showFormErrors(errorText(result));
-        } else {
-          showFormErrors([result.json && result.json.message ? text(result.json.message) : 'HTTP ' + result.status]);
+        const problems = formProblems();
+        if (problems.length > 0) {
+          showFormErrors(problems);
+          return form.querySelector('[aria-invalid="true"]')?.focus();
+        }
+        state.editLoad++;
+        try {
+          setSaving(true);
+          const result = state.editing
+            ? await api('PUT', 'fhirResourceMappings/' + encodeURIComponent(state.editing.id), mappingBody())
+            : await api('POST', 'fhirResourceMappings', mappingBody());
+          if (succeeded(result)) {
+            showMessage('Saved mapping "' + name + '".');
+            await loadMappings();
+            resetForm();
+          } else if (result.timedOut) {
+            showFormErrors([UNCERTAIN + ' Your edits are kept; check the reloaded list before saving again.']);
+            guard(loadMappings)();
+          } else {
+            showFormErrors(errorText(result));
+          }
+        } finally {
+          setSaving(false);
         }
       }
-
+      const messageRow = (message) => { const row = el('tr'); row.appendChild(el('td', {colspan: '7'}, message)); return row; };
       function mappingRow(mapping) {
         const name = text(mapping.displayName);
         const reference = (object) => text(object && object.displayName);
@@ -478,55 +462,79 @@
         const actions = el('div', {class: 'actions'});
         const edit = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Edit ' + name}, 'Edit'));
         const remove = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Delete ' + name}, 'Delete'));
-        edit.addEventListener('click', () => editMapping(mapping.id));
-        remove.addEventListener('click', () => deleteMapping(mapping.id, name));
+        edit.disabled = remove.disabled = state.saving;
+        edit.addEventListener('click', guard(() => editMapping(mapping.id)));
+        remove.addEventListener('click', guard(() => deleteMapping(mapping.id, name)));
         row.appendChild(el('th', {scope: 'row'}, name));
         [text(mapping.resourceType), reference(mapping.trackedEntityType), reference(mapping.program), reference(mapping.programStage),
-          String(Array.isArray(mapping.fieldMappings) ? mapping.fieldMappings.length : 0)]
-          .forEach((value) => row.appendChild(el('td', {}, value)));
+          Array.isArray(mapping.fieldMappings) ? String(mapping.fieldMappings.length) : 'Unknown'].forEach((value) => row.appendChild(el('td', {}, value)));
         row.appendChild(el('td')).appendChild(actions);
         return row;
       }
-
       async function loadMappings() {
+        const token = ++state.listLoad;
+        tableBody.replaceChildren(messageRow('Loading mappings…'));
+        announce('Loading mappings…');
         const result = await api('GET', 'fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false');
-        if (!result.ok || !result.json) return showError(result);
-        byId('fhir-mapping-rows').replaceChildren(...(result.json.fhirResourceMappings || []).map(mappingRow));
+        if (token !== state.listLoad) return;
+        const mappings = collection(result, 'fhirResourceMappings');
+        if (!mappings) {
+          tableBody.replaceChildren(messageRow('Mappings could not be loaded.'));
+          return announce('Mappings could not be loaded.');
+        }
+        if (mappings.length === 0) tableBody.replaceChildren(messageRow('No mappings are stored yet.'));
+        for (let start = 0; start < mappings.length; start += CHUNK_SIZE) {
+          if (start > 0) await new Promise((resolve) => setTimeout(resolve));
+          if (token !== state.listLoad) return;
+          const rows = document.createDocumentFragment();
+          mappings.slice(start, start + CHUNK_SIZE).forEach((mapping) => rows.appendChild(mappingRow(mapping)));
+          if (start === 0) tableBody.replaceChildren(rows);
+          else tableBody.appendChild(rows);
+        }
+        announce(count(mappings.length, 'mapping', 'mappings') + ' loaded.');
       }
-
       async function editMapping(id) {
+        if (state.saving) return;
         const token = ++state.editLoad;
         const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing');
         if (token !== state.editLoad) return;
-        if (!result.ok || !result.json) return showError(result);
+        if (!result.ok || !isObject(result.json)) return showError(result);
         const mapping = result.json;
+        if (!Array.isArray(mapping.fieldMappings)) return showMessage('Error: Malformed response: "fieldMappings" is not a list.');
         clearForm();
         state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing};
         nameInput.value = text(mapping.name);
-        resourceSelect.value = RESOURCE_TYPES.includes(mapping.resourceType) ? mapping.resourceType : 'PATIENT';
+        setValue(resourceSelect, mapping.resourceType, true);
         applyResourceType();
         byId('fhir-editing').textContent = 'Editing: ' + text(mapping.name);
         cancelButton.hidden = false;
-        setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id);
+        setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id, true);
         await loadPrograms(typeSelect.value);
         if (token !== state.editLoad) return;
-        setValue(programSelect, mapping.program && mapping.program.id);
+        setValue(programSelect, mapping.program && mapping.program.id, true);
         fillStages();
-        setValue(stageSelect, mapping.programStage && mapping.programStage.id);
-        (Array.isArray(mapping.fieldMappings) ? mapping.fieldMappings : []).forEach((entry) => addRow(entry || {}));
+        setValue(stageSelect, mapping.programStage && mapping.programStage.id, true);
+        mapping.fieldMappings.forEach((entry) => addRow(isObject(entry) ? entry : {}));
       }
-
       async function deleteMapping(id, name) {
-        if (!window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
-        const result = await api('DELETE', 'fhirResourceMappings/' + encodeURIComponent(id));
-        if (!succeeded(result)) return showError(result);
-        if (state.editing && state.editing.id === id) resetForm();
-        showMessage('Deleted mapping "' + name + '".');
-        await loadMappings();
+        if (state.saving || !window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
+        setSaving(true);
+        try {
+          const result = await api('DELETE', 'fhirResourceMappings/' + encodeURIComponent(id));
+          if (result.timedOut) {
+            showMessage('Error: ' + UNCERTAIN + ' Check the reloaded list.');
+            return guard(loadMappings)();
+          }
+          if (!succeeded(result)) return showError(result);
+          if (state.editing && state.editing.id === id) resetForm();
+          showMessage('Deleted mapping "' + name + '".');
+          await loadMappings();
+        } finally { setSaving(false); }
       }
-
       function clearForm() {
         state.editing = null;
+        form.querySelectorAll('option[data-missing]').forEach((option) => option.remove());
+        form.querySelectorAll('[aria-invalid]').forEach(unflag);
         nameInput.value = '';
         resourceSelect.value = 'PATIENT';
         applyResourceType();
@@ -537,35 +545,27 @@
         byId('fhir-editing').textContent = 'New mapping';
         cancelButton.hidden = true;
       }
-
-      function resetForm() {
-        state.editLoad++;
-        clearForm();
-      }
-
-      resourceSelect.addEventListener('change', () => {
-        applyResourceType();
-        removeRows();
-      });
-      typeSelect.addEventListener('change', async () => {
+      const resetForm = () => { state.editLoad++; clearForm(); };
+      resourceSelect.addEventListener('change', guard(() => { applyResourceType(); removeRows(); }));
+      typeSelect.addEventListener('change', guard(async () => {
         await loadPrograms(typeSelect.value);
         rebuildAllSources();
-      });
-      programSelect.addEventListener('change', () => {
-        if (programSelect.value) setValue(typeSelect, state.programsFor);
+      }));
+      programSelect.addEventListener('change', guard(() => {
+        if (programSelect.value && !state.programsPending && state.programsFor) setValue(typeSelect, state.programsFor);
         fillStages();
         rebuildAllSources();
-      });
-      stageSelect.addEventListener('change', rebuildAllSources);
-      byId('fhir-add-row').addEventListener('click', () => addRow({}));
-      cancelButton.addEventListener('click', () => {
-        resetForm();
-        nameInput.focus();
-      });
-      form.addEventListener('submit', save);
+      }));
+      stageSelect.addEventListener('change', guard(rebuildAllSources));
+      byId('fhir-add-row').addEventListener('click', guard(() => addRow({})));
+      cancelButton.addEventListener('click', guard(() => { resetForm(); nameInput.focus(); }));
+      form.addEventListener('input', guard(({target}) => {
+        unflag(target);
+        if (target.tagName === 'SELECT') target.querySelectorAll('option[data-missing]:not(:checked)').forEach((option) => option.remove());
+      }));
+      form.addEventListener('submit', guard(save));
       applyResourceType();
-
-      (async () => {
+      guard(async () => {
         await loadStatus();
         await loadTrackedEntityTypes();
         await loadMappings();
@@ -573,4 +573,3 @@
     </script>
   </body>
 </html>
-

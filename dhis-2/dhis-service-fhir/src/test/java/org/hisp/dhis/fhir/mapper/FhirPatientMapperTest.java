@@ -29,241 +29,131 @@
  */
 package org.hisp.dhis.fhir.mapper;
 
-import static org.hisp.dhis.common.ValueType.AGE;
-import static org.hisp.dhis.common.ValueType.DATE;
-import static org.hisp.dhis.common.ValueType.EMAIL;
-import static org.hisp.dhis.common.ValueType.INTEGER;
-import static org.hisp.dhis.common.ValueType.PHONE_NUMBER;
-import static org.hisp.dhis.common.ValueType.TEXT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.IDENTIFIER_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.UPDATED;
-import static org.hisp.dhis.fhir.FhirTestFixtures.attribute;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.resolved;
-import static org.hisp.dhis.fhir.FhirTestFixtures.trackedEntity;
+import static java.util.stream.Collectors.toSet;
+import static org.hisp.dhis.common.ValueType.*;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.PATIENT;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.ATTRIBUTE;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_ADDRESS_TEXT;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_BIRTH_DATE;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_EMAIL;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_FAMILY_NAME;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_GENDER;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_GIVEN_NAME;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_IDENTIFIER;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_PHONE;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.hl7.fhir.r4.model.Enumerations.AdministrativeGender.*;
+import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.fhir.FhirR4Validation;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.fhir.mapping.FhirFieldMapping;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.webapi.controller.tracker.view.Attribute;
-import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
-import org.hl7.fhir.r4.model.Base;
-import org.hl7.fhir.r4.model.ContactPoint;
-import org.hl7.fhir.r4.model.ContactPoint.ContactPointSystem;
-import org.hl7.fhir.r4.model.Enumerations.AdministrativeGender;
-import org.hl7.fhir.r4.model.HumanName;
-import org.hl7.fhir.r4.model.Identifier;
-import org.hl7.fhir.r4.model.Patient;
-import org.hl7.fhir.r4.model.Property;
+import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.Test;
 
-/**
- * Unit tests of {@link FhirPatientMapper}: every Patient target of the mapping, the single name,
- * the gender value map, the omission of unmapped and missing values, the structural-only output of
- * a mapping without entries, and FHIR R4 validity of the mapped Patients.
- */
+/** Unit tests of {@link FhirPatientMapper}. */
 class FhirPatientMapperTest {
   private static final String TE_UID = "TePatient01";
-
-  private static final String OTHER_TE_UID = "TePatient02";
-
   private static final String TRACKED_ENTITY_TYPE = "TetPerson01";
-
   private static final String TEA_NATIONAL_ID = "TeaNationId";
-
   private static final String TEA_INTEGER = "TeaIntegerA";
-
   private static final String TEA_FAMILY = "TeaFamilyNm";
-
   private static final String TEA_GIVEN = "TeaGivenNam";
-
   private static final String TEA_GENDER = "TeaGenderCd";
-
   private static final String TEA_BIRTH = "TeaBirthDat";
-
   private static final String TEA_AGE = "TeaAgeValue";
-
   private static final String TEA_PHONE = "TeaPhoneNum";
-
   private static final String TEA_EMAIL = "TeaEmailAdr";
-
   private static final String TEA_ADDRESS = "TeaAddressT";
-
-  private static final String TEA_UNMAPPED = "TeaUnmapped";
-
   private static final Map<String, ValueType> VALUE_TYPES =
-      Map.ofEntries(
-          Map.entry(TEA_NATIONAL_ID, TEXT),
-          Map.entry(TEA_INTEGER, INTEGER),
-          Map.entry(TEA_FAMILY, TEXT),
-          Map.entry(TEA_GIVEN, TEXT),
-          Map.entry(TEA_GENDER, TEXT),
-          Map.entry(TEA_BIRTH, DATE),
-          Map.entry(TEA_AGE, AGE),
-          Map.entry(TEA_PHONE, PHONE_NUMBER),
-          Map.entry(TEA_EMAIL, EMAIL),
-          Map.entry(TEA_ADDRESS, TEXT),
-          Map.entry(TEA_UNMAPPED, TEXT));
-
+      Map.of(
+          TEA_INTEGER, INTEGER,
+          TEA_BIRTH, DATE,
+          TEA_AGE, AGE,
+          TEA_PHONE, PHONE_NUMBER,
+          TEA_EMAIL, EMAIL);
   private static final String INTEGER_IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:integer-attr";
-
   private static final String NATIONAL_ID = "NID-1985-0412";
-
   private static final String INTEGER_ID = "70";
-
   private static final String FAMILY = "Nordmann";
-
   private static final String GIVEN = "Kari";
-
   private static final String BIRTH_DATE = "1985-04-12";
-
   private static final String PHONE = "+4722334455";
-
-  private static final String EMAIL_ADDRESS = "kari.nordmann@example.org";
-
+  private static final String EMAIL_ADDR = "kari.nordmann@example.org";
   private static final String ADDRESS = "Storgata 1, 0155 Oslo";
-
+  private static final List<Attribute> EMPTY_MAPPING_VALUES =
+      List.of(
+          teaValue(TEA_NATIONAL_ID, "EMPTY-ID"), teaValue(TEA_FAMILY, "EMPTY-FAMILY"),
+          teaValue(TEA_GIVEN, "EMPTY-GIVEN"), teaValue(TEA_GENDER, "EMPTY-GENDER"),
+          teaValue(TEA_BIRTH, "1971-01-01"), teaValue(TEA_PHONE, "+4799887766"),
+          teaValue(TEA_EMAIL, "empty@example.org"), teaValue(TEA_ADDRESS, "EMPTY-ADDRESS"));
   private final FhirPatientMapper mapper = new FhirPatientMapper(new FhirValueConverter());
 
   @Test
   void mapsEveryPatientTarget() {
     Patient patient = mapFullPatient();
-
     assertEquals(TE_UID, patient.getIdElement().getIdPart());
     assertEquals(UPDATED, patient.getMeta().getLastUpdated().toInstant());
-
-    List<Identifier> identifiers = patient.getIdentifier();
-    assertEquals(2, identifiers.size());
-    assertEquals(IDENTIFIER_SYSTEM, identifiers.get(0).getSystem());
-    assertEquals(NATIONAL_ID, identifiers.get(0).getValue());
-    assertEquals(INTEGER_IDENTIFIER_SYSTEM, identifiers.get(1).getSystem());
-    assertEquals(INTEGER_ID, identifiers.get(1).getValue());
-
-    assertEquals(1, patient.getName().size());
-    HumanName name = patient.getName().get(0);
-    assertEquals(FAMILY, name.getFamily());
-    assertEquals(1, name.getGiven().size());
-    assertEquals(GIVEN, name.getGiven().get(0).getValue());
-
-    assertEquals(AdministrativeGender.FEMALE, patient.getGender());
-    assertEquals(BIRTH_DATE, patient.getBirthDateElement().getValueAsString());
-
-    assertEquals(2, patient.getTelecom().size());
     assertEquals(
-        Set.of(
-            ContactPointSystem.PHONE + "|" + PHONE, ContactPointSystem.EMAIL + "|" + EMAIL_ADDRESS),
-        patient.getTelecom().stream()
-            .map(FhirPatientMapperTest::systemAndValue)
-            .collect(Collectors.toSet()));
-
-    assertEquals(1, patient.getAddress().size());
-    assertEquals(ADDRESS, patient.getAddress().get(0).getText());
-
+        List.of(
+            IDENTIFIER_SYSTEM + "|" + NATIONAL_ID, INTEGER_IDENTIFIER_SYSTEM + "|" + INTEGER_ID),
+        patient.getIdentifier().stream().map(id -> id.getSystem() + "|" + id.getValue()).toList());
+    assertEquals(List.of(FAMILY + "|" + GIVEN), names(patient));
+    assertEquals(FEMALE, patient.getGender());
+    assertEquals(BIRTH_DATE, patient.getBirthDateElement().getValueAsString());
+    assertEquals(
+        List.of("PHONE|" + PHONE, "EMAIL|" + EMAIL_ADDR),
+        patient.getTelecom().stream().map(c -> c.getSystem() + "|" + c.getValue()).toList());
+    assertEquals(List.of(ADDRESS), patient.getAddress().stream().map(Address::getText).toList());
     Patient byAge =
-        mapper.map(
-            trackedEntity(
-                OTHER_TE_UID, TRACKED_ENTITY_TYPE, UPDATED, teaValue(TEA_AGE, "2019-05-17")),
-            patientMapping(Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_AGE)));
-    assertEquals(OTHER_TE_UID, byAge.getIdElement().getIdPart());
+        map(patientMapping(attr(PATIENT_BIRTH_DATE, TEA_AGE)), teaValue(TEA_AGE, "2019-05-17"));
     assertEquals("2019-05-17", byAge.getBirthDateElement().getValueAsString());
   }
 
   @Test
   void singleGivenName() {
-    Patient patient =
-        mapper.map(
-            trackedEntity(
-                TE_UID,
-                TRACKED_ENTITY_TYPE,
-                UPDATED,
-                teaValue(TEA_FAMILY, FAMILY),
-                teaValue(TEA_GIVEN, GIVEN),
-                teaValue(TEA_GIVEN, "Ola")),
-            patientMapping(
-                Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-                Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN)));
-
-    assertEquals(1, patient.getName().size());
-    HumanName name = patient.getName().get(0);
-    assertEquals(FAMILY, name.getFamily());
-    assertEquals(1, name.getGiven().size());
-    assertEquals(GIVEN, name.getGiven().get(0).getValue());
+    ResolvedMapping mapping =
+        patientMapping(attr(PATIENT_FAMILY_NAME, TEA_FAMILY), attr(PATIENT_GIVEN_NAME, TEA_GIVEN));
+    Attribute[] values = {
+      teaValue(TEA_FAMILY, FAMILY), teaValue(TEA_GIVEN, GIVEN), teaValue(TEA_GIVEN, "Ola")
+    };
+    assertEquals(List.of(FAMILY + "|" + GIVEN), names(map(mapping, values)));
   }
 
   @Test
   void genderValueMapAndUnknownValues() {
     ResolvedMapping mapping =
-        patientMapping(
-            Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER)
-                .valueMap(
-                    Map.of(
-                        "M",
-                        "male",
-                        "F",
-                        "female",
-                        "O",
-                        "other",
-                        "U",
-                        "unknown",
-                        "Q",
-                        "nonbinary")));
-    Map<String, AdministrativeGender> expected = new LinkedHashMap<>();
-    expected.put("M", AdministrativeGender.MALE);
-    expected.put("F", AdministrativeGender.FEMALE);
-    expected.put("O", AdministrativeGender.OTHER);
-    expected.put("U", AdministrativeGender.UNKNOWN);
-
-    for (String source : expected.keySet()) {
-      Patient patient = mapper.map(genderTrackedEntity(source), mapping);
-      assertEquals(expected.get(source), patient.getGender(), "gender of source value " + source);
-    }
-
-    for (String source : List.of("X", "f", "Q")) {
-      Patient patient = mapper.map(genderTrackedEntity(source), mapping);
-      assertFalse(patient.hasGender(), "gender of source value " + source);
+        genderMapping(
+            Map.of("M", "male", "F", "female", "O", "other", "U", "unknown", "Q", "nonbinary"));
+    Map.of("M", MALE, "F", FEMALE, "O", OTHER, "U", UNKNOWN, "f", FEMALE, "m", MALE)
+        .forEach((source, expected) -> assertEquals(expected, gender(mapping, source), source));
+    List.of("X", "Q").forEach(source -> assertNull(gender(mapping, source), source));
+    Map<String, String> caseDistinct = new LinkedHashMap<>(Map.of("F", "female"));
+    caseDistinct.put("f", "other");
+    assertEquals(OTHER, gender(genderMapping(caseDistinct), "f"));
+    ResolvedMapping dottedAndGreek = genderMapping(Map.of("i", "other", "οδοσ", "unknown"));
+    assertEquals(OTHER, gender(dottedAndGreek, "İ"));
+    assertEquals(UNKNOWN, gender(dottedAndGreek, "ΟΔΟΣ"));
+    ResolvedMapping capitalI = genderMapping(Map.of("I", "male"));
+    Locale locale = Locale.getDefault();
+    try {
+      Locale.setDefault(Locale.ENGLISH);
+      assertEquals(MALE, gender(capitalI, "i"));
+      assertNull(gender(capitalI, "ı"));
+      Locale.setDefault(Locale.forLanguageTag("tr"));
+      assertEquals(MALE, gender(capitalI, "ı"));
+      assertNull(gender(capitalI, "i"));
+    } finally {
+      Locale.setDefault(locale);
     }
   }
 
   @Test
   void omitsUnmappedAndMissingValues() {
-    Patient patient =
-        mapper.map(
-            trackedEntity(
-                TE_UID,
-                TRACKED_ENTITY_TYPE,
-                UPDATED,
-                teaValue(TEA_FAMILY, FAMILY),
-                teaValue(TEA_BIRTH, "not-a-date"),
-                teaValue(TEA_UNMAPPED, "UNMAPPED-VALUE")),
-            patientMapping(
-                Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-                Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
-                Entry.field(PATIENT_PHONE, ATTRIBUTE, TEA_PHONE),
-                Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH)));
-
-    assertEquals(1, patient.getName().size());
-    assertEquals(FAMILY, patient.getName().get(0).getFamily());
-    assertFalse(patient.getName().get(0).hasGiven());
+    ResolvedMapping mapping =
+        patientMapping(
+            attr(PATIENT_FAMILY_NAME, TEA_FAMILY), attr(PATIENT_GIVEN_NAME, TEA_GIVEN),
+            attr(PATIENT_PHONE, TEA_PHONE), attr(PATIENT_BIRTH_DATE, TEA_BIRTH));
+    Attribute family = teaValue(TEA_FAMILY, FAMILY);
+    Attribute unmapped = teaValue("TeaUnmapped", "UNMAPPED-VALUE");
+    Patient patient = map(mapping, family, teaValue(TEA_BIRTH, "not-a-date"), unmapped);
+    assertEquals(List.of(FAMILY + "|"), names(patient));
     assertFalse(patient.hasTelecom());
     assertFalse(patient.hasBirthDate());
     assertFalse(FhirR4Validation.encode(patient).contains("UNMAPPED-VALUE"));
@@ -272,114 +162,83 @@ class FhirPatientMapperTest {
   @Test
   void emptyMappingYieldsOnlyStructuralElements() {
     Patient patient = mapEmptyMappingPatient();
-
-    assertEquals(TE_UID, patient.getIdElement().getIdPart());
-    assertEquals(UPDATED, patient.getMeta().getLastUpdated().toInstant());
     assertEquals(Set.of("id", "meta"), populatedElements(patient));
     assertEquals(Set.of("lastUpdated"), populatedElements(patient.getMeta()));
-    assertFalse(patient.hasIdentifier());
-    assertFalse(patient.hasName());
-    assertFalse(patient.hasGender());
-    assertFalse(patient.hasBirthDate());
-    assertFalse(patient.hasTelecom());
-    assertFalse(patient.hasAddress());
-
     String json = FhirR4Validation.encode(patient);
-    for (Attribute attribute : emptyMappingAttributes()) {
-      assertFalse(json.contains(attribute.getValue()), "encoded value " + attribute.getValue());
-    }
+    EMPTY_MAPPING_VALUES.forEach(a -> assertFalse(json.contains(a.getValue()), a.getValue()));
   }
 
   @Test
   void outputIsValidR4() {
-    Patient full = mapFullPatient();
-    assertTrue(full.hasIdentifier() && full.hasName() && full.hasTelecom() && full.hasAddress());
-
-    FhirR4Validation.assertValid(full);
+    FhirR4Validation.assertValid(mapFullPatient());
     FhirR4Validation.assertValid(mapEmptyMappingPatient());
   }
 
-  /** Maps a tracked entity with a value for every Patient target through a full mapping. */
+  private Patient map(ResolvedMapping mapping, Attribute... attributes) {
+    return mapper.map(trackedEntity(TE_UID, TRACKED_ENTITY_TYPE, UPDATED, attributes), mapping);
+  }
+
   private Patient mapFullPatient() {
-    return mapper.map(
-        trackedEntity(
-            TE_UID,
-            TRACKED_ENTITY_TYPE,
-            UPDATED,
-            teaValue(TEA_NATIONAL_ID, NATIONAL_ID),
-            teaValue(TEA_INTEGER, INTEGER_ID),
-            teaValue(TEA_FAMILY, FAMILY),
-            teaValue(TEA_GIVEN, GIVEN),
-            teaValue(TEA_GENDER, "F"),
-            teaValue(TEA_BIRTH, BIRTH_DATE),
-            teaValue(TEA_PHONE, PHONE),
-            teaValue(TEA_EMAIL, EMAIL_ADDRESS),
-            teaValue(TEA_ADDRESS, ADDRESS)),
+    ResolvedMapping mapping =
         patientMapping(
-            Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_NATIONAL_ID).system(IDENTIFIER_SYSTEM),
-            Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_INTEGER)
-                .system(INTEGER_IDENTIFIER_SYSTEM),
-            Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-            Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
-            Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER)
-                .valueMap(Map.of("F", "female", "M", "male")),
-            Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH),
-            Entry.field(PATIENT_PHONE, ATTRIBUTE, TEA_PHONE),
-            Entry.field(PATIENT_EMAIL, ATTRIBUTE, TEA_EMAIL),
-            Entry.field(PATIENT_ADDRESS_TEXT, ATTRIBUTE, TEA_ADDRESS)));
+            attr(PATIENT_IDENTIFIER, TEA_NATIONAL_ID).system(IDENTIFIER_SYSTEM),
+            attr(PATIENT_IDENTIFIER, TEA_INTEGER).system(INTEGER_IDENTIFIER_SYSTEM),
+            attr(PATIENT_FAMILY_NAME, TEA_FAMILY),
+            attr(PATIENT_GIVEN_NAME, TEA_GIVEN),
+            attr(PATIENT_GENDER, TEA_GENDER).valueMap(Map.of("F", "female", "M", "male")),
+            attr(PATIENT_BIRTH_DATE, TEA_BIRTH),
+            attr(PATIENT_PHONE, TEA_PHONE),
+            attr(PATIENT_EMAIL, TEA_EMAIL),
+            attr(PATIENT_ADDRESS_TEXT, TEA_ADDRESS));
+    Attribute[] values = {
+      teaValue(TEA_NATIONAL_ID, NATIONAL_ID), teaValue(TEA_INTEGER, INTEGER_ID),
+      teaValue(TEA_FAMILY, FAMILY), teaValue(TEA_GIVEN, GIVEN),
+      teaValue(TEA_GENDER, "F"), teaValue(TEA_BIRTH, BIRTH_DATE),
+      teaValue(TEA_PHONE, PHONE), teaValue(TEA_EMAIL, EMAIL_ADDR),
+      teaValue(TEA_ADDRESS, ADDRESS)
+    };
+    return map(mapping, values);
   }
 
-  /** Maps a tracked entity with distinctive attribute values through a mapping without entries. */
   private Patient mapEmptyMappingPatient() {
-    return mapper.map(
-        trackedEntity(
-            TE_UID,
-            TRACKED_ENTITY_TYPE,
-            UPDATED,
-            emptyMappingAttributes().toArray(Attribute[]::new)),
-        resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, List.of(), Map.of()));
+    return map(
+        resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, List.of(), Map.of()),
+        EMPTY_MAPPING_VALUES.toArray(Attribute[]::new));
   }
 
-  private static List<Attribute> emptyMappingAttributes() {
-    return List.of(
-        teaValue(TEA_NATIONAL_ID, "EMPTY-MAPPING-NATIONAL-ID"),
-        teaValue(TEA_FAMILY, "EMPTY-MAPPING-FAMILY"),
-        teaValue(TEA_GIVEN, "EMPTY-MAPPING-GIVEN"),
-        teaValue(TEA_GENDER, "EMPTY-MAPPING-GENDER"),
-        teaValue(TEA_BIRTH, "1971-01-01"),
-        teaValue(TEA_PHONE, "+4799887766"),
-        teaValue(TEA_EMAIL, "empty.mapping@example.org"),
-        teaValue(TEA_ADDRESS, "EMPTY-MAPPING-ADDRESS"));
+  private static ResolvedMapping genderMapping(Map<String, String> valueMap) {
+    return patientMapping(attr(PATIENT_GENDER, TEA_GENDER).valueMap(valueMap));
   }
 
-  private static TrackedEntity genderTrackedEntity(String source) {
-    return trackedEntity(TE_UID, TRACKED_ENTITY_TYPE, UPDATED, teaValue(TEA_GENDER, source));
+  private Enumerations.AdministrativeGender gender(ResolvedMapping mapping, String source) {
+    return map(mapping, teaValue(TEA_GENDER, source)).getGender();
   }
 
-  /** Builds a PATIENT mapping whose value types are those of the entries' attributes. */
   private static ResolvedMapping patientMapping(Entry... fields) {
     List<FhirFieldMapping> built = entries(fields);
-    Map<String, ValueType> valueTypes = new LinkedHashMap<>();
-    for (FhirFieldMapping entry : built) {
-      valueTypes.put(entry.getSource(), VALUE_TYPES.get(entry.getSource()));
-    }
-    return resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, built, valueTypes);
+    var types = new LinkedHashMap<String, ValueType>();
+    built.forEach(e -> types.put(e.getSource(), VALUE_TYPES.getOrDefault(e.getSource(), TEXT)));
+    return resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, built, types);
   }
 
-  /** Builds an attribute DTO carrying the value type the attribute has in {@link #VALUE_TYPES}. */
   private static Attribute teaValue(String tea, String value) {
-    return attribute(tea, VALUE_TYPES.get(tea), value);
+    return attribute(tea, VALUE_TYPES.getOrDefault(tea, TEXT), value);
   }
 
-  private static String systemAndValue(ContactPoint contactPoint) {
-    return contactPoint.getSystem() + "|" + contactPoint.getValue();
+  private static Entry attr(FhirTargetField target, String tea) {
+    return Entry.field(target, ATTRIBUTE, tea);
   }
 
-  /** Returns the names of the element's child properties that hold a non-empty value. */
   private static Set<String> populatedElements(Base element) {
     return element.children().stream()
         .filter(Property::hasValues)
         .map(Property::getName)
-        .collect(Collectors.toSet());
+        .collect(toSet());
+  }
+
+  private static List<String> names(Patient patient) {
+    return patient.getName().stream()
+        .map(name -> name.getFamily() + "|" + name.getGivenAsSingleString())
+        .toList();
   }
 }

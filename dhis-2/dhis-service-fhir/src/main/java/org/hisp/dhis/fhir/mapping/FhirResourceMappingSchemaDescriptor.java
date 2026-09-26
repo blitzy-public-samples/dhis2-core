@@ -30,17 +30,12 @@
 package org.hisp.dhis.fhir.mapping;
 
 import java.util.List;
-import org.hisp.dhis.schema.Schema;
-import org.hisp.dhis.schema.SchemaDescriptor;
-import org.hisp.dhis.security.Authority;
-import org.hisp.dhis.security.AuthorityType;
+import org.hisp.dhis.schema.*;
+import org.hisp.dhis.security.*;
 
-/** Schema descriptor for {@link FhirResourceMapping}. */
 public class FhirResourceMappingSchemaDescriptor implements SchemaDescriptor {
   public static final String SINGULAR = "fhirResourceMapping";
-
   public static final String PLURAL = "fhirResourceMappings";
-
   public static final String API_ENDPOINT = "/" + PLURAL;
 
   @Override
@@ -48,14 +43,12 @@ public class FhirResourceMappingSchemaDescriptor implements SchemaDescriptor {
     Schema schema = new Schema(FhirResourceMapping.class, SINGULAR, PLURAL);
     schema.setRelativeApiEndpoint(API_ENDPOINT);
     schema.setOrder(1530);
-
     schema.add(
         new Authority(AuthorityType.CREATE_PUBLIC, List.of("F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD")));
     schema.add(
         new Authority(
             AuthorityType.CREATE_PRIVATE, List.of("F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD")));
     schema.add(new Authority(AuthorityType.DELETE, List.of("F_FHIR_RESOURCE_MAPPING_DELETE")));
-
     return schema;
   }
 }

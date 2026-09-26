@@ -33,16 +33,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.*;
+import java.util.regex.*;
 import javax.annotation.CheckForNull;
 import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.QueryFilter;
@@ -51,37 +43,17 @@ import org.hisp.dhis.common.UID;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.FhirLogicalId;
-import org.hisp.dhis.fhir.mapping.FhirFieldMapping;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.fhir.mapping.FhirResourceType;
-import org.hisp.dhis.fhir.mapping.FhirTargetField;
-import org.hisp.dhis.setting.SystemSettings;
-import org.hisp.dhis.setting.SystemSettingsProvider;
+import org.hisp.dhis.setting.*;
 import org.hl7.fhir.r4.model.Enumerations;
 import org.springframework.stereotype.Component;
 
-/**
- * Parses and validates the query parameters of every FHIR R4 operation under {@code /api/fhir}.
- *
- * <p>The query is read from {@link HttpServletRequest#getParameterMap()} only. Every rejection is a
- * {@link FhirApiException#invalidParameter(String, String) 400 invalid} naming exactly one
- * parameter. {@link #parse} checks, in this order: parameter names and repeats in parameter-map
- * order; values in {@link Operation#allowed()} order; the Patient search page size against the
- * {@code KeyTrackedEntityMaxLimit} system setting; and, for event searches, the presence of {@code
- * patient}, {@code subject} or {@code _id}. {@link #checkAttributeFilter} validates each Tracker
- * attribute filter derived from a Patient search against the attribute's search constraints.
- *
- * <pre>{@code
- * ParsedSearch parsed = parameters.parse(Operation.PATIENT_SEARCH, request, patientMapping);
- * parameters.checkFormatOnly(Operation.READ, request);
- * }</pre>
- */
+/** Parses and validates FHIR query parameters; each rejection is a 400 naming one parameter. */
 @Component
 @RequiredArgsConstructor
 public class FhirSearchParameters {
-  /** The parameter names; the values each accepts are listed on {@link #parse}. */
   public static final String ID = "_id";
-
   public static final String COUNT = "_count";
   public static final String PAGE = "_page";
   public static final String FORMAT = "_format";
@@ -93,19 +65,14 @@ public class FhirSearchParameters {
   public static final String PATIENT = "patient";
   public static final String SUBJECT = "subject";
   public static final String CODE = "code";
-
-  /** The page size and page number used when {@code _count} or {@code _page} is absent. */
   public static final int DEFAULT_COUNT = 50;
-
   public static final int DEFAULT_PAGE = 1;
-
-  /** The accepted {@code _format} values, matched exactly. */
+  public static final int MAX_OR_VALUES = 100;
+  public static final int MAX_OR_LENGTH = 4096;
   public static final Set<String> FORMATS =
       Set.of("json", "application/json", "application/fhir+json");
-
-  /** The accepted {@code gender} values: the FHIR administrative-gender codes. */
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
-
+  private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
   private static final String OR_SEPARATOR = ",";
   private static final char TOKEN_SEPARATOR = '|';
@@ -116,14 +83,9 @@ public class FhirSearchParameters {
   private static final Pattern ISO_DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
   private static final String TRUE = "true";
   private static final String FALSE = "false";
-
   private final SystemSettingsProvider settingsProvider;
 
-  /**
-   * A FHIR operation and the query parameters it accepts: {@link #READ} ({@code GET /{Type}/{id}}),
-   * {@link #EVERYTHING} ({@code GET /Patient/{id}/$everything}), {@link #METADATA} ({@code GET
-   * /metadata}) and one search-type operation per resource type.
-   */
+  /** A FHIR operation and the query parameters it accepts, in validation order. */
   public enum Operation {
     READ(null, List.of(FORMAT)),
     EVERYTHING(null, List.of(FORMAT)),
@@ -136,9 +98,7 @@ public class FhirSearchParameters {
     IMMUNIZATION_SEARCH(FhirResourceType.IMMUNIZATION, List.of(PATIENT, ID, COUNT, PAGE, FORMAT)),
     OBSERVATION_SEARCH(
         FhirResourceType.OBSERVATION, List.of(PATIENT, SUBJECT, ID, CODE, COUNT, PAGE, FORMAT));
-
     @CheckForNull private final FhirResourceType resourceType;
-
     private final List<String> allowed;
 
     Operation(@CheckForNull FhirResourceType resourceType, List<String> allowed) {
@@ -146,36 +106,21 @@ public class FhirSearchParameters {
       this.allowed = allowed;
     }
 
-    /**
-     * @return the accepted parameter names, unmodifiable, in the order their values are validated
-     */
+    /** Returns the accepted parameter names, unmodifiable, in validation order. */
     public List<String> allowed() {
       return allowed;
     }
 
-    /**
-     * @return the searched resource type, or {@code null} for {@link #READ}, {@link #EVERYTHING}
-     *     and {@link #METADATA}
-     */
+    /** Returns the searched resource type; {@code null} for read, everything and metadata. */
     @CheckForNull
     public FhirResourceType resourceType() {
       return resourceType;
     }
 
-    /**
-     * @return {@code true} for the {@code *_SEARCH} operations
-     */
     public boolean isSearch() {
       return resourceType != null;
     }
 
-    /**
-     * Returns the search operation of a resource type.
-     *
-     * @param type the searched resource type
-     * @return the matching {@code *_SEARCH} operation
-     * @throws NullPointerException if {@code type} is {@code null}
-     */
     public static Operation search(FhirResourceType type) {
       Objects.requireNonNull(type, "type");
       return switch (type) {
@@ -187,11 +132,7 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * The attribute-backed Patient search parameters, each with the Patient target it searches and
-   * the Tracker filter operator it uses by default. Declaration order is the order in which Tracker
-   * filters are built and validated.
-   */
+  /** The attribute-backed Patient search parameters, in Tracker filter build order. */
   public enum PatientParameter {
     IDENTIFIER(
         FhirSearchParameters.IDENTIFIER, FhirTargetField.PATIENT_IDENTIFIER, QueryOperator.EQ),
@@ -199,11 +140,8 @@ public class FhirSearchParameters {
     GIVEN(FhirSearchParameters.GIVEN, FhirTargetField.PATIENT_GIVEN_NAME, QueryOperator.SW),
     BIRTHDATE(FhirSearchParameters.BIRTHDATE, FhirTargetField.PATIENT_BIRTH_DATE, QueryOperator.EQ),
     GENDER(FhirSearchParameters.GENDER, FhirTargetField.PATIENT_GENDER, QueryOperator.EQ);
-
     private final String parameter;
-
     private final FhirTargetField target;
-
     private final QueryOperator defaultOperator;
 
     PatientParameter(String parameter, FhirTargetField target, QueryOperator defaultOperator) {
@@ -212,48 +150,28 @@ public class FhirSearchParameters {
       this.defaultOperator = defaultOperator;
     }
 
-    /**
-     * @return the FHIR search parameter name, for example {@code family}
-     */
     public String parameter() {
       return parameter;
     }
 
-    /**
-     * @return the Patient target whose attribute the parameter searches
-     */
     public FhirTargetField target() {
       return target;
     }
 
-    /**
-     * @return the Tracker filter operator of the parameter; {@link #BIRTHDATE} replaces it with the
-     *     operator of its prefix
-     */
+    /** Returns the Tracker filter operator; {@link #BIRTHDATE} uses the operator of its prefix. */
     public QueryOperator defaultOperator() {
       return defaultOperator;
     }
   }
 
-  /**
-   * A FHIR token value split at its first {@code |}.
-   *
-   * @param system {@code null} when the input has no {@code |}; the empty string when the input
-   *     starts with {@code |}; otherwise the text before the first {@code |}
-   * @param value the text after the first {@code |}, or the whole input when it has none
-   */
+  /** A FHIR token split at its only {@code |}; {@code system} is {@code null} without one. */
   public record Token(@CheckForNull String system, String value) {
     public Token {
       Objects.requireNonNull(value, "value");
     }
   }
 
-  /**
-   * The {@code identifier} criterion of a Patient search.
-   *
-   * @param entry the one {@link FhirTargetField#PATIENT_IDENTIFIER} entry the request selects
-   * @param value the identifier value
-   */
+  /** The {@code identifier} criterion of a Patient search and the entry it selects. */
   public record IdentifierCriterion(FhirFieldMapping entry, String value) {
     public IdentifierCriterion {
       Objects.requireNonNull(entry, "entry");
@@ -261,13 +179,7 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * The {@code birthdate} criterion of a Patient search.
-   *
-   * @param operator one of {@link QueryOperator#EQ}, {@link QueryOperator#GE}, {@link
-   *     QueryOperator#LE}, {@link QueryOperator#GT} and {@link QueryOperator#LT}
-   * @param date a valid calendar date formatted {@code yyyy-MM-dd}
-   */
+  /** The {@code birthdate} criterion of a Patient search: a prefix operator and a date. */
   public record DateCriterion(QueryOperator operator, String date) {
     public DateCriterion {
       Objects.requireNonNull(operator, "operator");
@@ -275,23 +187,7 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * The validated query of one FHIR operation. Absent parameters leave their component empty,
-   * {@code null} or at its default.
-   *
-   * @param operation the operation the query was parsed for
-   * @param trackedEntityIds the tracked entity UIDs of a Patient search {@code _id}
-   * @param logicalIds the logical ids of an event search {@code _id}
-   * @param patient the tracked entity UID of an event search {@code patient} or {@code subject}
-   * @param identifier the Patient search {@code identifier} criterion
-   * @param family the raw Patient search {@code family} value
-   * @param given the raw Patient search {@code given} value
-   * @param birthdate the Patient search {@code birthdate} criterion
-   * @param genders the Patient search {@code gender} codes
-   * @param codes the Observation search {@code code} tokens
-   * @param count the page size, {@link #DEFAULT_COUNT} when {@code _count} is absent
-   * @param page the page number, {@link #DEFAULT_PAGE} when {@code _page} is absent
-   */
+  /** The validated query of one FHIR operation; absent parameters stay empty, null or default. */
   public record ParsedSearch(
       Operation operation,
       List<String> trackedEntityIds,
@@ -305,14 +201,6 @@ public class FhirSearchParameters {
       List<Token> codes,
       int count,
       int page) {
-
-    /**
-     * Replaces every list with an unmodifiable copy without duplicates, keeping the first
-     * occurrence of each element in input order; {@code null} becomes empty.
-     *
-     * @throws NullPointerException if {@code operation} or a list element is {@code null}
-     * @throws IllegalArgumentException if {@code count} or {@code page} is not positive
-     */
     public ParsedSearch {
       Objects.requireNonNull(operation, "operation");
       if (count < 1 || page < 1) {
@@ -329,42 +217,7 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * Parses and validates the query of an operation.
-   *
-   * <p>Accepted values:
-   *
-   * <ul>
-   *   <li>{@code _format}: one of {@link #FORMATS}.
-   *   <li>{@code _id}: comma-separated UIDs for Patient searches; comma-separated logical ids of
-   *       the searched type (see {@link FhirLogicalId#parse}) for event searches.
-   *   <li>{@code patient}, {@code subject}: a UID, optionally prefixed with {@code Patient/}; the
-   *       two cannot be combined, which is reported on {@code subject}.
-   *   <li>{@code identifier}: {@code [system|]value}. With a system, including the empty system of
-   *       a leading {@code |}, exactly one configured identifier entry must have that system;
-   *       without one, exactly one identifier entry must be configured.
-   *   <li>{@code family}, {@code given}: any text, kept as given.
-   *   <li>{@code birthdate}: {@code yyyy-MM-dd}, a valid calendar date, with an optional prefix
-   *       {@code eq}, {@code ge}, {@code le}, {@code gt} or {@code lt}; no prefix means {@code eq}.
-   *   <li>{@code gender}: comma-separated codes of {@link #GENDER_CODES}.
-   *   <li>{@code code}: comma-separated {@code [system|]code} tokens with a non-blank code.
-   *   <li>{@code _count}, {@code _page}: a positive integer within the {@code int} range, where
-   *       {@code (_page - 1) * _count} must also fit. The Patient search page size, given or
-   *       defaulted, must not exceed a positive {@code KeyTrackedEntityMaxLimit} system setting.
-   * </ul>
-   *
-   * <p>{@code identifier}, {@code family}, {@code given}, {@code birthdate} and {@code gender} are
-   * rejected when the Patient mapping has no entry for their {@link PatientParameter#target()}.
-   *
-   * @param operation the operation whose parameters are accepted
-   * @param request the request whose parameter map is read
-   * @param patientMapping the resolved Patient mapping; required for {@link
-   *     Operation#PATIENT_SEARCH} and ignored for every other operation
-   * @return the validated query
-   * @throws FhirApiException {@code 400 invalid} naming the first offending parameter
-   * @throws IllegalArgumentException if {@code patientMapping} is {@code null} for a Patient search
-   * @throws NullPointerException if {@code operation} or {@code request} is {@code null}
-   */
+  /** Parses and validates the query of an operation; a Patient search requires its mapping. */
   public ParsedSearch parse(
       Operation operation,
       HttpServletRequest request,
@@ -374,7 +227,6 @@ public class FhirSearchParameters {
     if (operation == Operation.PATIENT_SEARCH && patientMapping == null) {
       throw new IllegalArgumentException("A Patient mapping is required to parse a Patient search");
     }
-
     Map<String, String> query = readQuery(operation, request);
     ParseState state = new ParseState();
     for (String name : operation.allowed()) {
@@ -383,11 +235,9 @@ public class FhirSearchParameters {
         parseValue(operation, name, value, query, patientMapping, state);
       }
     }
-
     if (operation == Operation.PATIENT_SEARCH && !query.containsKey(COUNT)) {
       checkPatientPageSize(state.count, false);
     }
-
     FhirResourceType type = operation.resourceType();
     if (type != null
         && type.isEventDerived()
@@ -400,7 +250,6 @@ public class FhirSearchParameters {
               ? "patient, subject or _id is required"
               : "patient or _id is required");
     }
-
     return new ParsedSearch(
         operation,
         state.trackedEntityIds,
@@ -416,17 +265,7 @@ public class FhirSearchParameters {
         state.page);
   }
 
-  /**
-   * Validates the query of an operation that accepts only {@code _format}: a missing {@code
-   * _format} or one of {@link #FORMATS} is accepted; every other parameter, another {@code _format}
-   * value and a repeated {@code _format} are rejected.
-   *
-   * @param operation {@link Operation#READ}, {@link Operation#EVERYTHING} or {@link
-   *     Operation#METADATA}
-   * @param request the request whose parameter map is read
-   * @throws FhirApiException {@code 400 invalid} naming the offending parameter
-   * @throws IllegalArgumentException if {@code operation} is a search operation
-   */
+  /** Validates the query of a non-search operation, which accepts only {@code _format}. */
   public void checkFormatOnly(Operation operation, HttpServletRequest request) {
     Objects.requireNonNull(operation, "operation");
     if (operation.isSearch()) {
@@ -435,12 +274,6 @@ public class FhirSearchParameters {
     parse(operation, request, null);
   }
 
-  /**
-   * Returns the single value of every query parameter, keyed by name in the iteration order of the
-   * parameter map. A parameter without a value maps to the empty string.
-   *
-   * @throws FhirApiException for the first name the operation does not accept or that is repeated
-   */
   private static Map<String, String> readQuery(Operation operation, HttpServletRequest request) {
     Map<String, String> query = new LinkedHashMap<>();
     Map<String, String[]> parameterMap = request.getParameterMap();
@@ -465,7 +298,6 @@ public class FhirSearchParameters {
     return query;
   }
 
-  /** Validates one present parameter value and stores what it contributes to the query. */
   private void parseValue(
       Operation operation,
       String name,
@@ -521,12 +353,21 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * Splits a comma-separated OR value into its elements, rejecting blank elements; returns every
-   * other value as its single element, rejecting a comma in it.
-   */
   private static List<String> elements(String name, String value) {
     if (OR_PARAMETERS.contains(name)) {
+      if (value.length() > MAX_OR_LENGTH) {
+        throw FhirApiException.invalidParameter(
+            name, "must not be longer than " + MAX_OR_LENGTH + " characters");
+      }
+      int count = 1;
+      for (int separator = value.indexOf(OR_SEPARATOR);
+          separator >= 0;
+          separator = value.indexOf(OR_SEPARATOR, separator + 1)) {
+        if (++count > MAX_OR_VALUES) {
+          throw FhirApiException.invalidParameter(
+              name, "must not contain more than " + MAX_OR_VALUES + " values");
+        }
+      }
       List<String> elements = List.of(value.split(OR_SEPARATOR, -1));
       if (elements.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");
@@ -539,7 +380,6 @@ public class FhirSearchParameters {
     return List.of(value);
   }
 
-  /** Parses {@code _id}: UIDs for Patient searches, logical ids of the type for event searches. */
   private static void parseId(Operation operation, List<String> elements, ParseState state) {
     FhirResourceType type = operation.resourceType();
     if (type == null || !type.isEventDerived()) {
@@ -563,7 +403,6 @@ public class FhirSearchParameters {
     state.logicalIds = logicalIds;
   }
 
-  /** Returns the UID of a {@code {uid}} or {@code Patient/{uid}} reference. */
   private static String patientReference(String name, String value) {
     String uid =
         value.startsWith(PATIENT_REFERENCE_PREFIX)
@@ -576,13 +415,12 @@ public class FhirSearchParameters {
     return uid;
   }
 
-  /** Selects the identifier entry of an {@code identifier} value. */
   private static IdentifierCriterion identifier(String value, ResolvedMapping mapping) {
     List<FhirFieldMapping> entries = mapping.entries(FhirTargetField.PATIENT_IDENTIFIER);
     if (entries.isEmpty()) {
       throw FhirApiException.invalidParameter(IDENTIFIER, "is not configured");
     }
-    Token token = token(value);
+    Token token = token(IDENTIFIER, value);
     if (token.value().isBlank()) {
       throw FhirApiException.invalidParameter(IDENTIFIER, "must have a value");
     }
@@ -601,7 +439,6 @@ public class FhirSearchParameters {
     return new IdentifierCriterion(entries.get(0), token.value());
   }
 
-  /** Parses a {@code birthdate} value into its operator and date. */
   private static DateCriterion birthdate(String value, ResolvedMapping mapping) {
     requireConfigured(PatientParameter.BIRTHDATE, mapping);
     Matcher matcher = BIRTHDATE_VALUE.matcher(value);
@@ -616,7 +453,6 @@ public class FhirSearchParameters {
     return new DateCriterion(operator, matcher.group(2));
   }
 
-  /** Validates the {@code gender} codes. */
   private static List<String> genders(List<String> elements, ResolvedMapping mapping) {
     requireConfigured(PatientParameter.GENDER, mapping);
     for (String element : elements) {
@@ -628,11 +464,10 @@ public class FhirSearchParameters {
     return elements;
   }
 
-  /** Parses the {@code code} tokens. */
   private static List<Token> codes(List<String> elements) {
     List<Token> tokens = new ArrayList<>(elements.size());
     for (String element : elements) {
-      Token token = token(element);
+      Token token = token(CODE, element);
       if (token.value().isBlank()) {
         throw FhirApiException.invalidParameter(CODE, "must contain only [system|]code tokens");
       }
@@ -641,15 +476,17 @@ public class FhirSearchParameters {
     return tokens;
   }
 
-  /** Splits a value at its first {@code |}. */
-  private static Token token(String value) {
+  private static Token token(String name, String value) {
     int separator = value.indexOf(TOKEN_SEPARATOR);
-    return separator < 0
-        ? new Token(null, value)
-        : new Token(value.substring(0, separator), value.substring(separator + 1));
+    if (separator < 0) {
+      return new Token(null, value);
+    }
+    if (value.indexOf(TOKEN_SEPARATOR, separator + 1) >= 0) {
+      throw FhirApiException.invalidParameter(name, "must contain at most one |");
+    }
+    return new Token(value.substring(0, separator), value.substring(separator + 1));
   }
 
-  /** Parses a positive integer within the {@code int} range. */
   private static int positiveInteger(String name, String value) {
     if (POSITIVE_INTEGER.matcher(value).matches()) {
       try {
@@ -661,31 +498,23 @@ public class FhirSearchParameters {
     throw FhirApiException.invalidParameter(name, "must be a positive integer");
   }
 
-  /**
-   * Rejects a Patient search page size above a positive {@code KeyTrackedEntityMaxLimit} system
-   * setting.
-   *
-   * @param count the page size
-   * @param explicit whether the page size was given as {@code _count}
-   */
   private void checkPatientPageSize(int count, boolean explicit) {
     SystemSettings settings = settingsProvider.getCurrentSettings();
     int limit = settings == null ? 0 : settings.getTrackedEntityMaxLimit();
-    if (limit > 0 && count > limit) {
+    int ceiling = limit > 0 ? Math.min(limit, MAX_PATIENT_COUNT) : MAX_PATIENT_COUNT;
+    if (count > ceiling) {
       throw FhirApiException.invalidParameter(
           COUNT,
-          explicit ? "must not exceed " + limit : "must be given and must not exceed " + limit);
+          explicit ? "must not exceed " + ceiling : "must be given and must not exceed " + ceiling);
     }
   }
 
-  /** Returns whether a value is a valid calendar date formatted {@code yyyy-MM-dd}. */
   private static boolean isIsoDate(String value) {
     if (!ISO_DATE.matcher(value).matches()) {
       return false;
     }
     try {
-      LocalDate.parse(value);
-      return true;
+      return LocalDate.parse(value).getYear() >= 1;
     } catch (DateTimeParseException e) {
       return false;
     }
@@ -695,40 +524,13 @@ public class FhirSearchParameters {
     return Objects.requireNonNull(patientMapping, "patientMapping");
   }
 
-  /** Rejects a Patient search parameter whose target the mapping does not configure. */
   private static void requireConfigured(PatientParameter parameter, ResolvedMapping mapping) {
     if (mapping.entries(parameter.target()).isEmpty()) {
       throw FhirApiException.invalidParameter(parameter.parameter(), "is not configured");
     }
   }
 
-  /**
-   * Validates one Tracker attribute filter derived from a Patient search, in this order:
-   *
-   * <ol>
-   *   <li>The operator must not be among the attribute's blocked search operators.
-   *   <li>For a binary operator, a positive minimum number of characters to search requires {@code
-   *       trackerValue} to be at least that long.
-   *   <li>For a binary operator, each lowercased value, split on {@link QueryFilter#OPTION_SEP} for
-   *       {@link QueryOperator#IN}, must parse for the attribute's value type: an integer for the
-   *       integer types, a decimal for {@code NUMBER}, {@code PERCENTAGE} and {@code
-   *       UNIT_INTERVAL}, a {@code yyyy-MM-dd} date for {@code DATE} and {@code AGE}, and {@code
-   *       true} or {@code false} for {@code BOOLEAN} and {@code TRUE_ONLY}. Other value types, and
-   *       attributes without a known value type, accept any value.
-   * </ol>
-   *
-   * <p>The diagnostics name the FHIR parameter only; they contain no attribute UID.
-   *
-   * @param parameter the FHIR parameter the filter is derived from
-   * @param teaUid the UID of the filtered tracked entity attribute
-   * @param operator the Tracker filter operator
-   * @param trackerValue the unescaped filter value exactly as Tracker receives it; ignored for
-   *     unary operators
-   * @param mapping the resolved Patient mapping holding the attribute's search constraints
-   * @throws FhirApiException {@code 400 invalid} naming {@code parameter}
-   * @throws NullPointerException if an argument other than {@code trackerValue} is {@code null}, or
-   *     if {@code trackerValue} is {@code null} for a binary operator
-   */
+  /** Validates a Tracker attribute filter against the attribute's search constraints. */
   public void checkAttributeFilter(
       String parameter,
       String teaUid,
@@ -739,7 +541,6 @@ public class FhirSearchParameters {
     Objects.requireNonNull(teaUid, "teaUid");
     Objects.requireNonNull(operator, "operator");
     Objects.requireNonNull(mapping, "mapping");
-
     if (blockedOperators(mapping, teaUid).contains(operator)) {
       throw FhirApiException.invalidParameter(
           parameter,
@@ -751,13 +552,11 @@ public class FhirSearchParameters {
       return;
     }
     Objects.requireNonNull(trackerValue, "trackerValue");
-
     Integer minCharacters = mapping.minCharactersToSearch().get(teaUid);
     if (minCharacters != null && minCharacters > 0 && trackerValue.length() < minCharacters) {
       throw FhirApiException.invalidParameter(
           parameter, "at least " + minCharacters + " characters are required");
     }
-
     ValueType valueType = mapping.valueTypes().get(teaUid);
     if (valueType == null) {
       return;
@@ -773,14 +572,6 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * Returns the attribute-backed Patient search parameters the mapping supports: those whose {@link
-   * PatientParameter#target()} has at least one entry with a source attribute that does not block
-   * the parameter's {@link PatientParameter#defaultOperator()}.
-   *
-   * @param patientMapping the resolved Patient mapping
-   * @return an unmodifiable list of parameter names in {@link PatientParameter} order
-   */
   public List<String> configuredAttributeParameters(ResolvedMapping patientMapping) {
     Objects.requireNonNull(patientMapping, "patientMapping");
     List<String> parameters = new ArrayList<>();
@@ -800,25 +591,6 @@ public class FhirSearchParameters {
     return List.copyOf(parameters);
   }
 
-  /**
-   * Returns the search parameters a resource type supports with the given mappings, excluding the
-   * control parameters {@code _count}, {@code _page} and {@code _format}:
-   *
-   * <ul>
-   *   <li>{@code Patient}: {@code _id}, then every parameter of {@link
-   *       #configuredAttributeParameters} of any of the mappings, in {@link PatientParameter}
-   *       order.
-   *   <li>{@code Encounter}: {@code _id}, {@code patient}, {@code subject}.
-   *   <li>{@code Immunization}: {@code _id}, {@code patient}.
-   *   <li>{@code Observation}: {@code _id}, {@code patient}, {@code subject}, {@code code}.
-   * </ul>
-   *
-   * @param type the resource type
-   * @param mappings the usable mappings of the type; only read for {@code Patient}, {@code null} is
-   *     treated as empty
-   * @return an unmodifiable list of parameter names without duplicates
-   * @throws NullPointerException if {@code type} is {@code null}
-   */
   public List<String> supportedParameters(
       FhirResourceType type, @CheckForNull List<ResolvedMapping> mappings) {
     Objects.requireNonNull(type, "type");
@@ -830,15 +602,6 @@ public class FhirSearchParameters {
     };
   }
 
-  /**
-   * Returns the FHIR search parameter type of a search parameter.
-   *
-   * @param parameter a search parameter name: {@code _id}, {@code identifier}, {@code gender} and
-   *     {@code code} are tokens; {@code family} and {@code given} strings; {@code birthdate} a
-   *     date; {@code patient} and {@code subject} references
-   * @return the search parameter type
-   * @throws IllegalArgumentException if {@code parameter} is not one of these names
-   */
   public static Enumerations.SearchParamType typeOf(String parameter) {
     if (parameter == null) {
       throw new IllegalArgumentException("A search parameter name is required");
@@ -852,7 +615,6 @@ public class FhirSearchParameters {
     };
   }
 
-  /** Returns {@code _id} followed by the attribute parameters any Patient mapping supports. */
   private List<String> patientParameters(@CheckForNull List<ResolvedMapping> mappings) {
     Set<String> configured = new LinkedHashSet<>();
     if (mappings != null) {
@@ -877,7 +639,6 @@ public class FhirSearchParameters {
     return blocked == null ? Set.of() : blocked;
   }
 
-  /** Returns whether a lowercased filter value parses for a value type. */
   private static boolean matchesValueType(ValueType valueType, String value) {
     if (valueType.isInteger()) {
       try {
@@ -904,7 +665,6 @@ public class FhirSearchParameters {
     return true;
   }
 
-  /** The values collected while one query is parsed. */
   private static final class ParseState {
     private List<String> trackedEntityIds = List.of();
     private List<FhirLogicalId> logicalIds = List.of();

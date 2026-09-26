@@ -30,46 +30,20 @@
 package org.hisp.dhis.webapi.controller.tracker.export.enrollment;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.hisp.dhis.feedback.BadRequestException;
-import org.hisp.dhis.feedback.ForbiddenException;
+import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
 import org.hisp.dhis.webapi.controller.tracker.view.FilteredPage;
 import org.springframework.stereotype.Component;
 
-/**
- * Delegates enrollment list reads to the list handler of {@link EnrollmentsExportController}.
- *
- * <p>The request parameters and the current HTTP request are passed through unchanged, and the
- * controller's result and exceptions are returned or propagated as they are. Request parameter
- * validation, sharing and data-read checks, org-unit scoping, program ownership and the filtering
- * of nested events and data values are all performed by the controller's export path.
- */
+/** Delegates enrollment list reads to the list handler of {@link EnrollmentsExportController}. */
 @Component
 public final class FhirEnrollmentExportAdapter {
   private final EnrollmentsExportController controller;
 
-  /**
-   * Creates the adapter.
-   *
-   * @param controller the enrollment export controller whose list handler serves every read
-   */
   public FhirEnrollmentExportAdapter(EnrollmentsExportController controller) {
     this.controller = controller;
   }
 
-  /**
-   * Finds enrollments through the enrollment export controller's list handler.
-   *
-   * @param params the enrollment request parameters, including the requested fields, passed to the
-   *     controller as they are
-   * @param request the current HTTP request, used by the controller to build pager links when
-   *     paging is enabled
-   * @return the page of enrollment view DTOs and the requested fields, as returned by the
-   *     controller
-   * @throws BadRequestException if the controller rejects the request parameters
-   * @throws ForbiddenException if the controller denies the current user access to the requested
-   *     program, its tracked entity type, org units or org unit selection mode
-   */
   public FilteredPage<Enrollment> find(EnrollmentRequestParams params, HttpServletRequest request)
       throws BadRequestException, ForbiddenException {
     return controller.getEnrollments(params, request);

@@ -34,32 +34,16 @@ import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.service.FhirCapabilityStatementService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * FHIR R4 capabilities interaction: serves the server's CapabilityStatement at {@code
- * /api/fhir/metadata}.
- *
- * <p>The handler passes the whole request to {@link FhirCapabilityStatementService}, which accepts
- * only the {@code _format} parameter and derives the statement from the usable resource mappings,
- * and returns the statement as FHIR JSON through {@link FhirResourceSerializer}.
- */
+/** Serves the FHIR R4 CapabilityStatement at {@code /api/fhir/metadata}. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir")
 public class FhirCapabilityStatementController {
   private final FhirCapabilityStatementService capabilityStatementService;
-
   private final FhirResourceSerializer serializer;
 
-  /**
-   * Creates the controller.
-   *
-   * @param capabilityStatementService builds the CapabilityStatement from the resource mappings
-   * @param serializer encodes the CapabilityStatement as FHIR JSON
-   */
   public FhirCapabilityStatementController(
       FhirCapabilityStatementService capabilityStatementService,
       FhirResourceSerializer serializer) {
@@ -67,7 +51,10 @@ public class FhirCapabilityStatementController {
     this.serializer = serializer;
   }
 
-  /** Returns the CapabilityStatement of the FHIR API, built from the usable resource mappings. */
+  @OpenApi.Response(
+      value = FhirOpenApi.FhirCapabilityStatementResource.class,
+      mediaTypes = FhirOpenApi.FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
   @GetMapping("/metadata")
   public ResponseEntity<String> readCapabilityStatement(HttpServletRequest request) {
     return serializer.ok(capabilityStatementService.capabilities(request));

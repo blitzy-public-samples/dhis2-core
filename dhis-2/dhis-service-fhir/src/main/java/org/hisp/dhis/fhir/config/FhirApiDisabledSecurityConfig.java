@@ -30,48 +30,30 @@
 package org.hisp.dhis.fhir.config;
 
 import jakarta.servlet.Filter;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.*;
+import java.io.IOException;
 import java.util.regex.Pattern;
-import org.hisp.dhis.external.conf.ConfigurationKey;
-import org.hisp.dhis.external.conf.DhisConfigurationProvider;
-import org.hisp.dhis.fhir.FhirApiException;
-import org.hisp.dhis.fhir.FhirResourceSerializer;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import org.hisp.dhis.external.conf.*;
+import org.hisp.dhis.fhir.*;
+import org.hisp.dhis.user.CurrentUserUtil;
+import org.springframework.context.annotation.*;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.security.web.DefaultSecurityFilterChain;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.*;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.UrlPathHelper;
 
 /**
- * Security configuration of the FHIR R4 API while it is disabled: every request under {@code
- * /api/fhir/**} or {@code /api/{version}/fhir/**}, with any HTTP method and from any caller, is
- * answered with {@code 404} and a not-found {@code OperationOutcome} before authentication, as long
- * as {@link ConfigurationKey#FHIR_API_ENABLED} is off. While the flag is on, the chain matches no
- * request.
+ * Answers FHIR requests with 404 while {@code fhir.api.enabled} is off, before authentication and
+ * again at the handler, where a request without an authenticated user gets the same answer.
  */
 @Configuration
 public class FhirApiDisabledSecurityConfig {
-
-  /** The FHIR R4 API paths within the application: {@code /api/fhir} and everything below it. */
   static final Pattern FHIR_PATH = Pattern.compile("^/api/(?:\\d+/)?fhir(?:/.*)?$");
 
-  /**
-   * Creates the highest-precedence security filter chain that answers FHIR R4 API requests with
-   * {@code 404} and a not-found {@code OperationOutcome} while {@link
-   * ConfigurationKey#FHIR_API_ENABLED} is off.
-   *
-   * <p>The chain reads the flag on every request, then matches the request when its path within the
-   * application, as sent or URL-decoded, matches {@link #FHIR_PATH}. Its single filter writes the
-   * error response and never continues the filter chain.
-   *
-   * @param config the DHIS2 configuration holding {@code fhir.api.enabled}
-   * @param serializer the serializer writing the {@code OperationOutcome} response
-   * @return the security filter chain of the disabled FHIR R4 API
-   */
+  /** Creates the highest-precedence chain matching {@link #FHIR_PATH}, as sent or URL-decoded. */
   @Bean
   @Order(Ordered.HIGHEST_PRECEDENCE)
   public SecurityFilterChain fhirApiDisabledFilterChain(
@@ -84,10 +66,27 @@ public class FhirApiDisabledSecurityConfig {
     return new DefaultSecurityFilterChain(matcher, filter);
   }
 
-  /**
-   * Tells whether the path of the request within the application, either as sent or URL-decoded
-   * with {@code ;} content removed, matches {@link #FHIR_PATH}.
-   */
+  /** Answers requests reaching a FHIR handler with 404 unless the API is on and a user is set. */
+  @Bean
+  public MappedInterceptor fhirApiRequestGuard(
+      DhisConfigurationProvider config, FhirResourceSerializer serializer) {
+    HandlerInterceptor guard =
+        new HandlerInterceptor() {
+          @Override
+          public boolean preHandle(
+              HttpServletRequest request, HttpServletResponse response, Object handler)
+              throws IOException {
+            if (config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)
+                && CurrentUserUtil.hasCurrentUser()) {
+              return true;
+            }
+            serializer.writeError(response, FhirApiException.notFound());
+            return false;
+          }
+        };
+    return new MappedInterceptor(new String[] {"/api/fhir", "/api/fhir/**"}, null, guard);
+  }
+
   private static boolean isFhirPath(HttpServletRequest request) {
     String requestUri = request.getRequestURI();
     if (requestUri == null) {
@@ -101,10 +100,6 @@ public class FhirApiDisabledSecurityConfig {
     return decodedPath != null && FHIR_PATH.matcher(decodedPath).matches();
   }
 
-  /**
-   * Returns the request URI without the context path, or {@code null} when the URI does not start
-   * with the context path.
-   */
   private static String rawPathWithinApplication(String requestUri, String contextPath) {
     if (contextPath == null || contextPath.isEmpty()) {
       return requestUri;
@@ -112,10 +107,6 @@ public class FhirApiDisabledSecurityConfig {
     return requestUri.startsWith(contextPath) ? requestUri.substring(contextPath.length()) : null;
   }
 
-  /**
-   * Returns the URL-decoded path within the application with {@code ;} content removed, or {@code
-   * null} when the request URI holds an invalid percent-encoding.
-   */
   private static String decodedPathWithinApplication(HttpServletRequest request) {
     try {
       return UrlPathHelper.defaultInstance.getPathWithinApplication(request);

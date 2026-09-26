@@ -29,75 +29,36 @@
  */
 package org.hisp.dhis.fhir.search;
 
-import static org.hisp.dhis.common.QueryOperator.EQ;
-import static org.hisp.dhis.common.QueryOperator.GE;
-import static org.hisp.dhis.common.QueryOperator.GT;
-import static org.hisp.dhis.common.QueryOperator.IN;
-import static org.hisp.dhis.common.QueryOperator.LE;
-import static org.hisp.dhis.common.QueryOperator.LT;
-import static org.hisp.dhis.common.QueryOperator.SW;
-import static org.hisp.dhis.common.ValueType.DATE;
-import static org.hisp.dhis.common.ValueType.INTEGER;
-import static org.hisp.dhis.common.ValueType.NUMBER;
-import static org.hisp.dhis.common.ValueType.TEXT;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.resolved;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.ENCOUNTER;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.IMMUNIZATION;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.OBSERVATION;
-import static org.hisp.dhis.fhir.mapping.FhirResourceType.PATIENT;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.ATTRIBUTE;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.ENCOUNTER_CLASS;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.IMMUNIZATION_ADMINISTERED;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.IMMUNIZATION_VACCINE_CODE;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.OBSERVATION_VALUE;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_BIRTH_DATE;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_FAMILY_NAME;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_GENDER;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_GIVEN_NAME;
-import static org.hisp.dhis.fhir.mapping.FhirTargetField.PATIENT_IDENTIFIER;
-import static org.hisp.dhis.fhir.search.FhirSearchParameters.DEFAULT_COUNT;
-import static org.hisp.dhis.fhir.search.FhirSearchParameters.DEFAULT_PAGE;
-import static org.hisp.dhis.fhir.search.FhirSearchTranslator.EVENT_FIELDS;
-import static org.hisp.dhis.fhir.search.FhirSearchTranslator.PATIENT_FIELDS;
-import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.when;
+import static java.util.Map.entry;
+import static org.hisp.dhis.common.QueryOperator.*;
+import static org.hisp.dhis.common.ValueType.*;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.hisp.dhis.fhir.search.FhirSearchTranslator.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
-import org.hisp.dhis.common.QueryFilter;
-import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.common.UID;
-import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.feedback.BadRequestException;
 import org.hisp.dhis.fhir.FhirApiException;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.fhir.mapping.FhirFieldMapping;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.hisp.dhis.fhir.search.FhirSearchParameters.Operation;
-import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
+import org.hisp.dhis.fhir.service.FhirTrackerReader;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.FhirSearchOrigin;
-import org.hisp.dhis.setting.SystemSettings;
-import org.hisp.dhis.setting.SystemSettingsProvider;
+import org.hisp.dhis.setting.*;
+import org.hisp.dhis.tracker.export.fieldfiltering.*;
+import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.controller.tracker.export.FilterParser;
-import org.hisp.dhis.webapi.controller.tracker.export.enrollment.EnrollmentRequestParams;
-import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.TrackedEntityRequestParams;
+import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
+import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.*;
 import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.function.Executable;
 import org.mockito.Mock;
@@ -105,12 +66,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 
-/**
- * Tests that {@link FhirSearchParameters} validates the query of every FHIR operation, rejecting
- * each offending parameter with a {@code 400 invalid} that names only that parameter, and that
- * {@link FhirSearchTranslator} turns validated queries and read ids into Tracker export request
- * parameters.
- */
+/** Tests {@link FhirSearchParameters} validation and {@link FhirSearchTranslator} translation. */
 @ExtendWith(MockitoExtension.class)
 class FhirSearchTranslatorTest {
   private static final String TYPE = "TeType00001";
@@ -135,16 +91,21 @@ class FhirSearchTranslatorTest {
   private static final String LOINC = "http://loinc.org";
   private static final String HEIGHT = "8302-2";
   private static final String WEIGHT = "29463-7";
-  private static final List<String> JSON_FORMATS =
-      List.of("json", "application/json", "application/fhir+json");
   private static final List<FhirResourceType> EVENT_TYPES =
       List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION);
   private static final Map<String, ValueType> PATIENT_VALUE_TYPES =
       Map.of(TEA_IDENT, TEXT, TEA_FAMILY, TEXT, TEA_GIVEN, TEXT, TEA_BIRTH, DATE, TEA_GENDER, TEXT);
-
+  private static final ResolvedMapping FULL_MAPPING = patientMapping(null, Map.of(), Map.of());
+  private static final Fields EXPECTED_PATIENT_FIELDS =
+      FieldsParser.parse("trackedEntity,trackedEntityType,updatedAt,attributes");
+  private static final Fields EXPECTED_EVENT_FIELDS =
+      FieldsParser.parse(
+          "enrollment,trackedEntity,program,updatedAt,events[event,programStage,status,occurredAt,scheduledAt,updatedAt,dataValues[dataElement,value]]");
   @Mock private SystemSettingsProvider settingsProvider;
   @Mock private SystemSettings settings;
-
+  @Mock private FhirTrackedEntityExportAdapter trackedEntityAdapter;
+  @Mock private FhirEnrollmentExportAdapter enrollmentAdapter;
+  @Mock private TrackerExportTimeout timeout;
   private FhirSearchParameters parameters;
   private FhirSearchTranslator translator;
 
@@ -156,32 +117,26 @@ class FhirSearchTranslatorTest {
     translator = new FhirSearchTranslator(parameters);
   }
 
-  /** The Patient mapping on {@link #TYPE} with an entry for every attribute search parameter. */
   private static ResolvedMapping patientMapping(
       String program, Map<String, Set<QueryOperator>> blocked, Map<String, Integer> minChars) {
-    return resolved(
-        PATIENT,
-        TYPE,
-        program,
-        null,
+    List<FhirFieldMapping> fields =
         entries(
             Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT).system("urn:test:ident"),
             Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
             Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
             Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH),
             Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER)
-                .valueMap(Map.of("M", "male", "F", "female", "O", "other", "X", "other"))),
-        PATIENT_VALUE_TYPES,
-        blocked,
-        minChars);
-  }
-
-  private static ResolvedMapping fullMapping() {
-    return patientMapping(null, Map.of(), Map.of());
+                .valueMap(Map.of("M", "male", "F", "female", "O", "other", "X", "other")));
+    return resolved(PATIENT, TYPE, program, null, fields, PATIENT_VALUE_TYPES, blocked, minChars);
   }
 
   private static ResolvedMapping patientWith(Map<String, ValueType> valueTypes, Entry... fields) {
     return resolved(PATIENT, TYPE, null, null, entries(fields), valueTypes);
+  }
+
+  private static ResolvedMapping genderMapping(Map<String, String> valueMap) {
+    Entry gender = Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER).valueMap(valueMap);
+    return patientWith(PATIENT_VALUE_TYPES, gender);
   }
 
   private static ResolvedMapping eventMapping(FhirResourceType type) {
@@ -201,29 +156,23 @@ class FhirSearchTranslatorTest {
     return resolved(type, TYPE, PROGRAM, STAGE, fields, Map.of(DE_1, INTEGER, DE_2, NUMBER));
   }
 
-  /** Builds a GET request holding every {@code name=value} pair of the {@code &}-joined query. */
   private static MockHttpServletRequest request(String query) {
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/fhir");
-    if (!query.isEmpty()) {
-      request.setQueryString(query);
-      for (String pair : query.split("&")) {
-        String[] nameValue = pair.split("=", 2);
-        request.addParameter(nameValue[0], nameValue.length == 2 ? nameValue[1] : "");
-      }
+    for (String pair : query.isEmpty() ? new String[0] : query.split("&")) {
+      String[] nameValue = pair.split("=", 2);
+      request.addParameter(nameValue[0], nameValue.length == 2 ? nameValue[1] : "");
     }
     return request;
   }
 
   private TranslatedSearch translatePatient(ResolvedMapping mapping, String query) {
     return translator.toTrackedEntityParams(
-        parameters.parse(Operation.PATIENT_SEARCH, request(query), mapping), mapping);
+        parameters.parse(Operation.search(PATIENT), request(query), mapping), mapping);
   }
 
   private TranslatedSearch translateEvents(FhirResourceType type, String query) {
-    return translator.toEnrollmentParams(
-        parameters.parse(Operation.search(type), request(query), null),
-        List.of(eventMapping(type)),
-        PROGRAM);
+    var parsed = parameters.parse(Operation.search(type), request(query), null);
+    return translator.toEnrollmentParams(parsed, List.of(eventMapping(type)), PROGRAM);
   }
 
   private Map<UID, List<QueryFilter>> patientFilters(ResolvedMapping mapping, String query)
@@ -236,54 +185,44 @@ class FhirSearchTranslatorTest {
     return FilterParser.parseFilters(params.getFilter());
   }
 
-  /**
-   * Asserts a {@code 400 invalid} naming {@code parameter} whose diagnostics omit {@code others}.
-   */
-  private static void assertInvalid(String parameter, Executable call, String... others) {
+  private static String assertInvalid(String parameter, Executable call, String... others) {
     FhirApiException exception = assertThrows(FhirApiException.class, call, parameter);
     String diagnostics = exception.getDiagnostics();
     assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus(), diagnostics);
     assertEquals(IssueType.INVALID, exception.getIssueType(), diagnostics);
     assertTrue(diagnostics.startsWith("Invalid parameter '" + parameter + "': "), diagnostics);
     assertTrue(Stream.of(others).noneMatch(diagnostics::contains), diagnostics);
+    return diagnostics;
   }
 
-  /**
-   * Asserts that each whitespace-separated query is rejected with a {@code 400} naming the first
-   * parameter of that query.
-   */
   private static void assertAllInvalid(Consumer<String> call, String queries) {
     assertAll(
         Stream.of(queries.strip().split("\\s+"))
             .map(q -> () -> assertInvalid(q.split("=")[0], () -> call.accept(q))));
   }
 
-  /** Asserts a {@code 400} on {@code query} naming {@code parameter} and no other of its names. */
   private static void assertOnlyNamed(String parameter, String query, Consumer<String> call) {
     String[] others =
-        Stream.of(query.split("&"))
-            .map(pair -> pair.split("=")[0])
-            .filter(name -> !name.equals(parameter))
-            .toArray(String[]::new);
+        Stream.of(query.split("=[^&]*&?")).filter(n -> !n.equals(parameter)).toArray(String[]::new);
     assertInvalid(parameter, () -> call.accept(query), others);
   }
 
-  /** Asserts that the attribute has exactly one filter, with the operator and unescaped value. */
+  private static void assertOrBounds(String name, String element, Consumer<String> call) {
+    String copies = name + "=" + String.join(",", Collections.nCopies(100, element));
+    assertDoesNotThrow(() -> call.accept(copies));
+    String tooMany = assertInvalid(name, () -> call.accept(copies + "," + element));
+    assertTrue(tooMany.endsWith("must not contain more than 100 values"), tooMany);
+    String tooLong = assertInvalid(name, () -> call.accept(name + "=" + ",".repeat(4097)));
+    assertTrue(tooLong.endsWith("must not be longer than 4096 characters"), tooLong);
+  }
+
   private static void assertFilter(
-      Map<UID, List<QueryFilter>> filters, String tea, QueryOperator operator, String value) {
+      Map<UID, List<QueryFilter>> filters, String tea, QueryOperator operator, String... values) {
     List<QueryFilter> onAttribute = filters.getOrDefault(UID.of(tea), List.of());
     assertEquals(1, onAttribute.size(), () -> tea + " in " + filters.keySet());
     assertEquals(operator, onAttribute.get(0).getOperator(), tea);
-    assertEquals(value, onAttribute.get(0).getFilter(), tea);
-  }
-
-  /** Asserts one {@code in} filter on the gender attribute over exactly {@code values}. */
-  private static void assertInFilter(TranslatedSearch search, Set<String> values)
-      throws BadRequestException {
-    List<QueryFilter> onGender = filters(search.trackedEntityParams()).get(UID.of(TEA_GENDER));
-    assertEquals(1, onGender.size());
-    assertEquals(IN, onGender.get(0).getOperator());
-    assertEquals(values, Set.of(onGender.get(0).getFilter().split(QueryFilter.OPTION_SEP)));
+    String[] actual = onAttribute.get(0).getFilter().split(QueryFilter.OPTION_SEP, -1);
+    assertEquals(Set.of(values), Set.of(actual), tea);
   }
 
   private void assertCodes(String query, boolean height, boolean weight) {
@@ -296,7 +235,7 @@ class FhirSearchTranslatorTest {
 
   @Test
   void patientIdTranslatesToTrackedEntitiesWithoutFilters() {
-    TranslatedSearch search = translatePatient(fullMapping(), "_id=" + TE_1 + "," + TE_2);
+    TranslatedSearch search = translatePatient(FULL_MAPPING, "_id=" + TE_1 + "," + TE_2);
     assertEquals(UID.of(TE_1, TE_2), search.trackedEntityParams().getTrackedEntities());
     assertNull(search.trackedEntityParams().getFilter());
     assertEquals(Map.of(), search.origin().attributeToParameter());
@@ -306,19 +245,12 @@ class FhirSearchTranslatorTest {
 
   @Test
   void attributeParametersTranslateToCombinedTrackerFilters() throws BadRequestException {
-    ResolvedMapping mapping = fullMapping();
     for (String identifier : List.of("urn:test:ident|ABC123", "ABC123")) {
-      Map<UID, List<QueryFilter>> filters = patientFilters(mapping, "identifier=" + identifier);
+      var filters = patientFilters(FULL_MAPPING, "identifier=" + identifier);
       assertEquals(Set.of(UID.of(TEA_IDENT)), filters.keySet());
       assertFilter(filters, TEA_IDENT, EQ, "ABC123");
     }
-    assertFilter(patientFilters(mapping, "family=rain"), TEA_FAMILY, SW, "rain");
-    assertFilter(patientFilters(mapping, "given=Fra"), TEA_GIVEN, SW, "Fra");
-
-    TrackedEntityRequestParams params =
-        translatePatient(mapping, "identifier=ABC123&family=rain&given=Fra").trackedEntityParams();
-    Map<UID, List<QueryFilter>> filters = filters(params);
-    assertEquals(3, params.getFilter().split(",").length);
+    var filters = patientFilters(FULL_MAPPING, "identifier=ABC123&family=rain&given=Fra");
     assertEquals(UID.of(TEA_IDENT, TEA_FAMILY, TEA_GIVEN), filters.keySet());
     assertFilter(filters, TEA_IDENT, EQ, "ABC123");
     assertFilter(filters, TEA_FAMILY, SW, "rain");
@@ -326,118 +258,120 @@ class FhirSearchTranslatorTest {
   }
 
   @Test
-  void birthdatePrefixesTranslateToOperators() {
-    Map<String, QueryOperator> prefixes =
-        Map.of("eq", EQ, "ge", GE, "le", LE, "gt", GT, "lt", LT, "", EQ);
-    assertAll(
-        prefixes.entrySet().stream()
-            .map(p -> () -> assertBirthdateFilter(p.getKey(), p.getValue())));
-  }
-
-  private void assertBirthdateFilter(String prefix, QueryOperator operator)
-      throws BadRequestException {
-    String query = "birthdate=" + prefix + "2000-01-15";
-    assertFilter(patientFilters(fullMapping(), query), TEA_BIRTH, operator, "2000-01-15");
+  void birthdatePrefixesTranslateToOperators() throws BadRequestException {
+    for (String date : List.of("2000-01-15", "0001-01-01")) {
+      for (var p : Map.of("eq", EQ, "ge", GE, "le", LE, "gt", GT, "lt", LT, "", EQ).entrySet()) {
+        String query = "birthdate=" + p.getKey() + date;
+        assertFilter(patientFilters(FULL_MAPPING, query), TEA_BIRTH, p.getValue(), date);
+      }
+    }
+    Entry birthDate = Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH);
+    ResolvedMapping age = patientWith(Map.of(TEA_BIRTH, AGE), birthDate);
+    Consumer<String> check =
+        date -> parameters.checkAttributeFilter("birthdate", TEA_BIRTH, EQ, date, age);
+    assertInvalid("birthdate", () -> check.accept("0000-01-01"));
+    assertDoesNotThrow(() -> check.accept("0001-01-01"));
   }
 
   @Test
   void genderTranslatesThroughValueMap() throws BadRequestException {
-    ResolvedMapping mapping = fullMapping();
-    assertFilter(patientFilters(mapping, "gender=male"), TEA_GENDER, EQ, "M");
-    assertInFilter(translatePatient(mapping, "gender=other"), Set.of("O", "X"));
-    assertInFilter(translatePatient(mapping, "gender=male,female"), Set.of("M", "F"));
-    assertFalse(translatePatient(mapping, "gender=male").empty());
-
-    TranslatedSearch unmapped = translatePatient(mapping, "gender=unknown&family=rain");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=male"), TEA_GENDER, EQ, "M");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=other"), TEA_GENDER, IN, "O", "X");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=male,female"), TEA_GENDER, IN, "M", "F");
+    assertFalse(translatePatient(FULL_MAPPING, "gender=male").empty());
+    TranslatedSearch unmapped = translatePatient(FULL_MAPPING, "gender=unknown&family=rain");
     assertTrue(unmapped.empty());
     assertEquals(Set.of(UID.of(TEA_FAMILY)), filters(unmapped.trackedEntityParams()).keySet());
+    for (var bad : List.of(Map.of("", "male"), Map.of("A;B", "male", "C", "male", "F", "female"))) {
+      ResolvedMapping invalid = genderMapping(bad);
+      assertThrows(IllegalArgumentException.class, () -> translatePatient(invalid, "gender=male"));
+    }
+    ResolvedMapping unrequested = genderMapping(Map.of("A;B", "male", "F", "female"));
+    assertFilter(patientFilters(unrequested, "gender=female"), TEA_GENDER, EQ, "F");
   }
 
   @Test
   void patientPagingFieldsAndFormatTranslate() {
-    ResolvedMapping mapping = fullMapping();
-    TranslatedSearch paged = translatePatient(mapping, "_count=10&_page=3");
+    TranslatedSearch paged = translatePatient(FULL_MAPPING, "_count=10&_page=3");
     TrackedEntityRequestParams params = paged.trackedEntityParams();
-    assertEquals(10, params.getPageSize());
-    assertEquals(3, params.getPage());
-    assertEquals(10, paged.count());
-    assertEquals(3, paged.page());
+    assertEquals(
+        List.of(10, 3, 10, 3),
+        List.of(params.getPageSize(), params.getPage(), paged.count(), paged.page()));
     assertFalse(params.isTotalPages());
-    assertEquals(PATIENT_FIELDS, params.getFields());
-    assertTrue(PATIENT_FIELDS.test("attributes"));
-    assertFalse(PATIENT_FIELDS.test("enrollments"));
-
-    TrackedEntityRequestParams defaults =
-        translatePatient(mapping, "family=rain").trackedEntityParams();
-    assertEquals(DEFAULT_COUNT, defaults.getPageSize());
-    assertEquals(DEFAULT_PAGE, defaults.getPage());
-    for (String format : JSON_FORMATS) {
-      assertDoesNotThrow(() -> translatePatient(mapping, "family=rain&_format=" + format));
-    }
+    assertEquals(EXPECTED_PATIENT_FIELDS, params.getFields());
+    var defaults = translatePatient(FULL_MAPPING, "family=rain").trackedEntityParams();
+    assertEquals(List.of(50, 1), List.of(defaults.getPageSize(), defaults.getPage()));
+    assertEquals(42949673, translatePatient(FULL_MAPPING, "_count=50&_page=42949673").page());
+    assertDoesNotThrow(() -> translatePatient(FULL_MAPPING, "family=rain&_format=json"));
   }
 
   @Test
   void filterValuesAreEscapedForTheTrackerFilterGrammar() throws BadRequestException {
-    TrackedEntityRequestParams params =
-        translatePatient(fullMapping(), "family=a/b:c").trackedEntityParams();
+    var params = translatePatient(FULL_MAPPING, "family=a/b:c").trackedEntityParams();
     assertEquals(TEA_FAMILY + ":sw:a//b/:c", params.getFilter());
     assertFilter(filters(params), TEA_FAMILY, SW, "a/b:c");
-
-    // escape() also escapes commas, which a parsed family value never contains.
-    String escaped = FhirSearchTranslator.escape("a/,b:c");
-    assertEquals("a///,b/:c", escaped);
-    assertFilter(
-        FilterParser.parseFilters(TEA_FAMILY + ":sw:" + escaped), TEA_FAMILY, SW, "a/,b:c");
+    String token = FhirSearchTranslator.escape("a/,b:c");
+    assertEquals("a///,b/:c", token);
+    assertFilter(FilterParser.parseFilters(TEA_FAMILY + ":sw:" + token), TEA_FAMILY, SW, "a/,b:c");
   }
 
   @Test
-  void patientOriginRecordsFilteredAttributesAndParameters() {
-    ResolvedMapping mapping = fullMapping();
-    FhirSearchOrigin origin =
-        translatePatient(mapping, "identifier=urn:test:ident|X&family=rain&given=Fra&_count=5")
-            .origin();
+  void patientOriginRecordsFilteredAttributesAndParameters() throws Exception {
+    String query = "identifier=urn:test:ident|X&family=rain&given=Fra&_count=5";
+    TranslatedSearch search = translatePatient(FULL_MAPPING, query);
+    FhirSearchOrigin origin = search.origin();
     assertEquals(
-        Map.of(TEA_IDENT, "identifier", TEA_FAMILY, "family", TEA_GIVEN, "given"),
-        origin.attributeToParameter());
+        List.of(
+            entry(TEA_IDENT, "identifier"), entry(TEA_FAMILY, "family"), entry(TEA_GIVEN, "given")),
+        List.copyOf(origin.attributeToParameter().entrySet()));
     assertEquals(List.of("identifier", "family", "given"), origin.suppliedAttributeParameters());
     List<String> configured = List.of("identifier", "family", "given", "birthdate", "gender");
     assertEquals(configured, origin.configuredAttributeParameters());
-    assertEquals(configured, parameters.configuredAttributeParameters(mapping));
-
+    assertEquals(configured, parameters.configuredAttributeParameters(FULL_MAPPING));
     ResolvedMapping blockedFamily = patientMapping(null, Map.of(TEA_FAMILY, Set.of(SW)), Map.of());
     assertEquals(
         List.of("identifier", "given", "birthdate", "gender"),
         parameters.configuredAttributeParameters(blockedFamily));
+    var params = search.trackedEntityParams();
+    var request = new MockHttpServletRequest();
+    var message = "Non-searchable attribute(s) can not be used during global search:  [%s, %s]";
+    when(trackedEntityAdapter.find(params, request))
+        .thenThrow(new IllegalQueryException(message.formatted(TEA_GIVEN, TEA_FAMILY)));
+    var reader = new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout);
+    assertInvalid("family, given", () -> reader.findTrackedEntities(params, request, origin));
   }
 
   @Test
   void patientCountRespectsPositiveTrackedEntityMaxLimit() {
-    ResolvedMapping mapping = fullMapping();
-    assertEquals(100, translatePatient(mapping, "_count=100").count());
-    assertInvalid("_count", () -> translatePatient(mapping, "_count=101"));
-
+    TranslatedSearch minimum = translatePatient(FULL_MAPPING, "_count=1");
+    assertEquals(1, minimum.count());
+    assertEquals(1, minimum.trackedEntityParams().getPageSize());
+    assertEquals(100, translatePatient(FULL_MAPPING, "_count=100").count());
+    assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "_count=101"));
     when(settings.getTrackedEntityMaxLimit()).thenReturn(10);
-    assertInvalid("_count", () -> translatePatient(mapping, "family=rain"), "family");
-
+    assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "family=rain"), "family");
     when(settings.getTrackedEntityMaxLimit()).thenReturn(0);
-    assertEquals(5000, translatePatient(mapping, "_count=5000").count());
+    assertEquals(2147483646, translatePatient(FULL_MAPPING, "_count=2147483646").count());
+    for (int limit : new int[] {0, Integer.MAX_VALUE}) {
+      when(settings.getTrackedEntityMaxLimit()).thenReturn(limit);
+      var max = assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "_count=2147483647"));
+      assertTrue(max.endsWith("must not exceed 2147483646"), max);
+    }
   }
 
   @Test
   void patientSearchRejectsInvalidParameters() throws BadRequestException {
     assertAllInvalid(
-        query -> translatePatient(fullMapping(), query),
+        query -> translatePatient(FULL_MAPPING, query),
         """
-        foo=1 family:exact=x patient=TrackedEnt1
-        _sort=family _include=Patient:organization _revinclude=Encounter:subject
-        _summary=true _elements=name _total=accurate _type=Patient
-        family=a&family=b family= family=a,b _id=bad _id=TrackedEnt1,
-        identifier=urn:other|1 identifier=|ABC123 identifier=urn:test:ident|
-        birthdate=2000-01 birthdate=2000 birthdate=ne2000-01-01 birthdate=sa2000-01-01
-        birthdate=ge2000-13-45 gender=bogus gender=male,
-        _count=0 _count=abc _count=101 _page=0 _page=abc _format=xml
+        foo=1 family:exact=x patient=TrackedEnt1 _sort=family _include=Patient:organization
+        _revinclude=Encounter:subject _summary=true _elements=name _total=accurate _type=Patient
+        family=a&family=b family= family=a,b _id=bad _id=TrackedEnt1, identifier=urn:other|1
+        identifier=|ABC123 identifier=urn:test:ident| identifier=urn:test:ident|X|Y
+        birthdate=0000-01-01 birthdate=ge0000-12-31 birthdate=2000-01 birthdate=2000
+        birthdate=ne2000-01-01 birthdate=sa2000-01-01 birthdate=ge2000-13-45 gender=bogus
+        gender=male, _count=0 _count=abc _count=101 _page=0 _page=abc _format=xml
         """);
-
     ResolvedMapping twoIdentifiers =
         patientWith(
             Map.of(TEA_IDENT, TEXT, TEA_IDENT_2, TEXT),
@@ -445,7 +379,6 @@ class FhirSearchTranslatorTest {
             Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT_2).system("urn:b"));
     assertAllInvalid(query -> translatePatient(twoIdentifiers, query), "identifier=1");
     assertFilter(patientFilters(twoIdentifiers, "identifier=urn:b|1"), TEA_IDENT_2, EQ, "1");
-
     ResolvedMapping familyOnly =
         patientWith(
             Map.of(TEA_FAMILY, TEXT), Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY));
@@ -459,53 +392,48 @@ class FhirSearchTranslatorTest {
 
   @Test
   void patientSelectorIsProgramOrTypeNeverBoth() {
-    ResolvedMapping byType = fullMapping();
-    ResolvedMapping byProgram = patientMapping(PROGRAM, Map.of(), Map.of());
-    for (TrackedEntityRequestParams params :
-        List.of(
-            translatePatient(byType, "family=rain").trackedEntityParams(),
-            translator.patientReadParams(TE_1, byType))) {
-      assertEquals(UID.of(TYPE), params.getTrackedEntityType());
-      assertNull(params.getProgram());
+    for (String program : Arrays.asList(null, PROGRAM)) {
+      ResolvedMapping mapping = patientMapping(program, Map.of(), Map.of());
+      var search = translatePatient(mapping, "family=rain").trackedEntityParams();
+      for (var params : List.of(search, translator.patientReadParams(TE_1, mapping))) {
+        assertEquals(program == null ? UID.of(TYPE) : null, params.getTrackedEntityType(), program);
+        assertEquals(program == null ? null : UID.of(program), params.getProgram(), program);
+      }
     }
-    for (TrackedEntityRequestParams params :
-        List.of(
-            translatePatient(byProgram, "family=rain").trackedEntityParams(),
-            translator.patientReadParams(TE_1, byProgram))) {
-      assertEquals(UID.of(PROGRAM), params.getProgram());
-      assertNull(params.getTrackedEntityType());
-    }
-
-    TrackedEntityRequestParams read = translator.patientReadParams(TE_1, byProgram);
+    var read = translator.patientReadParams(TE_1, patientMapping(PROGRAM, Map.of(), Map.of()));
     assertEquals(Set.of(UID.of(TE_1)), read.getTrackedEntities());
     assertEquals(1, read.getPageSize());
     assertFalse(read.isTotalPages());
-    assertEquals(PATIENT_FIELDS, read.getFields());
+    assertEquals(EXPECTED_PATIENT_FIELDS, read.getFields());
     assertNull(read.getFilter());
   }
 
   @Test
   void multiParameterRequestNamesOnlyOffendingParameter() {
-    Consumer<String> patient = query -> translatePatient(fullMapping(), query);
+    Consumer<String> patient = query -> translatePatient(FULL_MAPPING, query);
     assertOnlyNamed("birthdate", "family=rain&given=Fra&birthdate=2000-01", patient);
     assertOnlyNamed("_page", "_id=" + TE_1 + "&family=rain&_page=0", patient);
-    assertOnlyNamed(
-        "_id", "patient=" + TE_1 + "&_count=5&_id=bad", q -> translateEvents(ENCOUNTER, q));
-    assertOnlyNamed(
-        "_format",
-        "patient=" + TE_1 + "&_page=2&_format=xml",
-        q -> translateEvents(OBSERVATION, q));
+    assertOnlyNamed("_page", "_count=50&_page=2147483647", patient);
+    assertOnlyNamed("_page", "_count=50&_page=42949674", patient);
+    Consumer<String> encounter = q -> translateEvents(ENCOUNTER, q);
+    Consumer<String> observation = q -> translateEvents(OBSERVATION, q);
+    assertOnlyNamed("_id", "patient=" + TE_1 + "&_count=5&_id=bad", encounter);
+    assertOnlyNamed("_format", "patient=" + TE_1 + "&_page=2&_format=xml", observation);
+    Consumer<String> code = q -> observation.accept(q + "&patient=" + TE_1);
+    assertOrBounds("_id", TE_1, patient);
+    assertOrBounds("_id", ENCOUNTER_ID, encounter);
+    assertOrBounds("gender", "male", patient);
+    assertOrBounds("code", HEIGHT, code);
+    assertDoesNotThrow(() -> code.accept("code=" + "x".repeat(4096)));
   }
 
   @Test
   void attributeConstraintsNameOnlyOffendingParameter() throws BadRequestException {
     ResolvedMapping blockedFamily = patientMapping(null, Map.of(TEA_FAMILY, Set.of(SW)), Map.of());
     assertOnlyNamed("family", "family=rain&given=Frank", q -> translatePatient(blockedFamily, q));
-
     ResolvedMapping shortGiven = patientMapping(null, Map.of(), Map.of(TEA_GIVEN, 3));
     assertOnlyNamed("given", "family=rain&given=Fr", q -> translatePatient(shortGiven, q));
     assertFilter(patientFilters(shortGiven, "given=Fra"), TEA_GIVEN, SW, "Fra");
-
     ResolvedMapping integer =
         patientWith(
             Map.of(TEA_INTEGER, INTEGER, TEA_FAMILY, TEXT),
@@ -514,54 +442,45 @@ class FhirSearchTranslatorTest {
     String query = "identifier=urn:test:int|abc&family=rain";
     assertOnlyNamed("identifier", query, q -> translatePatient(integer, q));
     assertFilter(patientFilters(integer, "identifier=urn:test:int|42"), TEA_INTEGER, EQ, "42");
-
     ResolvedMapping shortGender = patientMapping(null, Map.of(), Map.of(TEA_GENDER, 2));
     assertOnlyNamed("gender", "gender=male&family=rain", q -> translatePatient(shortGender, q));
-    assertInFilter(translatePatient(shortGender, "gender=other"), Set.of("O", "X"));
+    assertFilter(patientFilters(shortGender, "gender=other"), TEA_GENDER, IN, "O", "X");
   }
 
   @Test
   void eventPatientAndSubjectTranslateToTrackedEntityOfOneProgram() {
-    List<TranslatedSearch> searches = new ArrayList<>();
+    var references = List.of("patient=", "patient=Patient/", "subject=", "subject=Patient/");
     for (FhirResourceType type : EVENT_TYPES) {
-      searches.add(translateEvents(type, "patient=" + TE_1));
-      searches.add(translateEvents(type, "patient=Patient/" + TE_1));
+      for (String reference : references.subList(0, type == IMMUNIZATION ? 2 : 4)) {
+        TranslatedSearch search = translateEvents(type, reference + TE_1);
+        EnrollmentRequestParams params = search.enrollmentParams();
+        assertEquals(UID.of(TE_1), params.getTrackedEntity());
+        assertEquals(Set.of(), params.getEnrollments());
+        assertEquals(UID.of(PROGRAM), params.getProgram());
+        assertFalse(params.isPaging());
+        assertFalse(params.isTotalPages());
+        assertEquals(EXPECTED_EVENT_FIELDS, params.getFields());
+        assertEquals(FhirSearchOrigin.empty(), search.origin());
+        assertFalse(search.empty());
+      }
     }
-    searches.add(translateEvents(ENCOUNTER, "subject=" + TE_1));
-    searches.add(translateEvents(OBSERVATION, "subject=Patient/" + TE_1));
-    for (TranslatedSearch search : searches) {
-      EnrollmentRequestParams params = search.enrollmentParams();
-      assertEquals(UID.of(TE_1), params.getTrackedEntity());
-      assertEquals(Set.of(), params.getEnrollments());
-      assertEquals(UID.of(PROGRAM), params.getProgram());
-      assertFalse(params.isPaging());
-      assertEquals(EVENT_FIELDS, params.getFields());
-      assertEquals(FhirSearchOrigin.empty(), search.origin());
-      assertFalse(search.empty());
-    }
-    assertTrue(EVENT_FIELDS.test("events"));
   }
 
   @Test
   void eventIdTranslatesToEnrollmentsAndLogicalIds() {
-    TranslatedSearch encounter = translateEvents(ENCOUNTER, "_id=" + ENCOUNTER_ID);
-    assertEquals(Set.of(UID.of(ENR)), encounter.enrollmentParams().getEnrollments());
-    assertNull(encounter.enrollmentParams().getTrackedEntity());
-    assertEquals(Set.of(ENCOUNTER_ID), encounter.logicalIds());
-    assertTrue(encounter.matchesId(ENCOUNTER_ID));
-    assertFalse(encounter.matchesId(ENR + "-EventUid002"));
-    for (FhirResourceType type : List.of(IMMUNIZATION, OBSERVATION)) {
-      TranslatedSearch perDataElement = translateEvents(type, "_id=" + PER_DE_ID);
-      assertEquals(Set.of(UID.of(ENR)), perDataElement.enrollmentParams().getEnrollments());
-      assertTrue(perDataElement.matchesId(PER_DE_ID));
-      assertFalse(perDataElement.matchesId(ENCOUNTER_ID + "-" + DE_2));
+    for (FhirResourceType type : EVENT_TYPES) {
+      String id = type == ENCOUNTER ? ENCOUNTER_ID : PER_DE_ID;
+      TranslatedSearch search = translateEvents(type, "_id=" + id);
+      assertEquals(Set.of(UID.of(ENR)), search.enrollmentParams().getEnrollments());
+      assertNull(search.enrollmentParams().getTrackedEntity());
+      assertEquals(Set.of(id), search.logicalIds());
+      assertTrue(search.matchesId(id));
+      assertFalse(search.matchesId(id.replaceFirst("1$", "2")));
     }
-
     String second = ENR_2 + "-" + EVT;
     TranslatedSearch two = translateEvents(ENCOUNTER, "_id=" + ENCOUNTER_ID + "," + second);
     assertEquals(UID.of(ENR, ENR_2), two.enrollmentParams().getEnrollments());
     assertEquals(Set.of(ENCOUNTER_ID, second), two.logicalIds());
-    assertTrue(translateEvents(ENCOUNTER, "patient=" + TE_1).matchesId(ENCOUNTER_ID));
   }
 
   @Test
@@ -580,12 +499,15 @@ class FhirSearchTranslatorTest {
     String withPatient = "&patient=" + TE_1;
     for (FhirResourceType type : EVENT_TYPES) {
       assertAllInvalid(
-          query -> translateEvents(type, query), "patient=Patient/bad patient=Group/TrackedEnt1");
+          query -> translateEvents(type, query),
+          "patient=Patient/bad patient=Group/TrackedEnt1 subject=Patient/bad");
       assertAllInvalid(
           query -> translateEvents(type, query + withPatient),
-          "_id=bad foo=1 family=rain _count=abc _count=0 _page=0 _format=xml");
+          "_id=bad foo=1 family=rain _count=abc _count=0 _page=0 _format=xml"
+              + " _page=2147483647&_count=50");
       assertInvalid("patient", () -> translateEvents(type, ""));
       assertInvalid("patient", () -> translateEvents(type, "_count=5"), "_count");
+      assertInvalid("subject", () -> translateEvents(type, "subject=" + TE_2 + withPatient));
     }
     assertAllInvalid(
         query -> translateEvents(ENCOUNTER, query + withPatient), "_id=" + PER_DE_ID + " code=x");
@@ -593,22 +515,21 @@ class FhirSearchTranslatorTest {
         query -> translateEvents(IMMUNIZATION, query), "_id=" + ENCOUNTER_ID + " subject=" + TE_1);
     assertAllInvalid(
         query -> translateEvents(OBSERVATION, query + withPatient),
-        "_id=" + ENCOUNTER_ID + " code=" + LOINC + "| code=" + HEIGHT + ",,");
-    assertInvalid("subject", () -> translateEvents(ENCOUNTER, "patient=" + TE_1 + "&subject=x"));
+        """
+        _id=Enrollment1-EventUid001 code=http://loinc.org| code=8302-2,,
+        code=http://loinc.org|8302-2|x code=29463-7,http://loinc.org|8302-2|x
+        """);
     assertInvalid("patient", () -> translateEvents(OBSERVATION, "code=" + HEIGHT), "code");
   }
 
   @Test
   void eventPagingStaysOutOfTheTrackerRequest() {
     TranslatedSearch paged = translateEvents(ENCOUNTER, "patient=" + TE_1 + "&_count=2&_page=3");
-    assertEquals(2, paged.count());
-    assertEquals(3, paged.page());
+    assertEquals(List.of(2, 3), List.of(paged.count(), paged.page()));
     assertNull(paged.enrollmentParams().getPageSize());
     assertNull(paged.enrollmentParams().getPage());
-
     TranslatedSearch defaults = translateEvents(OBSERVATION, "patient=" + TE_1);
-    assertEquals(DEFAULT_COUNT, defaults.count());
-    assertEquals(DEFAULT_PAGE, defaults.page());
+    assertEquals(List.of(50, 1), List.of(defaults.count(), defaults.page()));
   }
 
   @Test
@@ -622,7 +543,8 @@ class FhirSearchTranslatorTest {
     for (EnrollmentRequestParams params : List.of(read, everything)) {
       assertEquals(UID.of(PROGRAM), params.getProgram());
       assertFalse(params.isPaging());
-      assertEquals(EVENT_FIELDS, params.getFields());
+      assertFalse(params.isTotalPages());
+      assertEquals(EXPECTED_EVENT_FIELDS, params.getFields());
     }
   }
 
@@ -630,20 +552,12 @@ class FhirSearchTranslatorTest {
   void formatOnlyOperationsAcceptOnlyJsonFormat() {
     for (Operation operation : List.of(Operation.READ, Operation.EVERYTHING, Operation.METADATA)) {
       Consumer<String> check = query -> parameters.checkFormatOnly(operation, request(query));
-      assertDoesNotThrow(() -> check.accept(""));
-      JSON_FORMATS.forEach(format -> assertDoesNotThrow(() -> check.accept("_format=" + format)));
+      List.of("json", "application/json", "application/fhir+json")
+          .forEach(format -> assertDoesNotThrow(() -> check.accept("_format=" + format)));
       assertAllInvalid(check, "foo=1 _format=xml _format=json&_format=json _format= family=rain");
     }
     assertThrows(
         IllegalArgumentException.class,
         () -> parameters.checkFormatOnly(Operation.PATIENT_SEARCH, request("")));
-  }
-
-  @Test
-  void searchOperationMatchesResourceType() {
-    assertEquals(Operation.PATIENT_SEARCH, Operation.search(PATIENT));
-    assertEquals(Operation.ENCOUNTER_SEARCH, Operation.search(ENCOUNTER));
-    assertEquals(Operation.IMMUNIZATION_SEARCH, Operation.search(IMMUNIZATION));
-    assertEquals(Operation.OBSERVATION_SEARCH, Operation.search(OBSERVATION));
   }
 }

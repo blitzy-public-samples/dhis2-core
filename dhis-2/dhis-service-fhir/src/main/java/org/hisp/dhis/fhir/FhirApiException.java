@@ -33,37 +33,10 @@ import java.util.Objects;
 import org.hl7.fhir.r4.model.OperationOutcome;
 import org.springframework.http.HttpStatus;
 
-/**
- * The error raised by the FHIR R4 API under {@code /api/fhir/**}. Each instance carries the HTTP
- * status, the FHIR {@link OperationOutcome.IssueType issue type} and the diagnostics text of the
- * {@code OperationOutcome} issue (severity {@code error}) that is rendered for it.
- *
- * <p>Instances are created only through the four factories, each producing one fixed pairing of
- * status and issue type:
- *
- * <ul>
- *   <li>{@link #notFound()}: {@code 404}, {@code not-found}, fixed diagnostics.
- *   <li>{@link #forbidden()}: {@code 403}, {@code forbidden}, fixed diagnostics.
- *   <li>{@link #invalidParameter(String, String)}: {@code 400}, {@code invalid}, diagnostics naming
- *       the parameter and stating the detail.
- *   <li>{@link #notSupported(String)}: {@code 501}, {@code not-supported}, the given diagnostics.
- * </ul>
- *
- * <p>Usage:
- *
- * <pre>{@code
- * throw FhirApiException.invalidParameter("_count", "must be a positive integer");
- * }</pre>
- *
- * <p>The exception message ({@link #getMessage()}) equals {@link #getDiagnostics()}. Instances are
- * immutable.
- */
+/** FHIR R4 API error with the status, issue type and diagnostics of its {@code error} issue. */
 public final class FhirApiException extends RuntimeException {
-
   private final HttpStatus status;
-
   private final OperationOutcome.IssueType issueType;
-
   private final String diagnostics;
 
   private FhirApiException(
@@ -74,13 +47,7 @@ public final class FhirApiException extends RuntimeException {
     this.diagnostics = diagnostics;
   }
 
-  /**
-   * Creates the not-found error: HTTP {@code 404}, issue code {@code not-found}, diagnostics "The
-   * requested resource was not found". The diagnostics are identical for every call and contain no
-   * id or path.
-   *
-   * @return the not-found error
-   */
+  /** Creates the {@code 404 not-found} error with fixed diagnostics naming no id or path. */
   public static FhirApiException notFound() {
     return new FhirApiException(
         HttpStatus.NOT_FOUND,
@@ -88,13 +55,7 @@ public final class FhirApiException extends RuntimeException {
         "The requested resource was not found");
   }
 
-  /**
-   * Creates the forbidden error: HTTP {@code 403}, issue code {@code forbidden}, diagnostics
-   * "Access to the requested resource is not permitted". The diagnostics are identical for every
-   * call and contain no id, path or metadata name.
-   *
-   * @return the forbidden error
-   */
+  /** Creates the {@code 403 forbidden} error with fixed diagnostics naming no id or path. */
   public static FhirApiException forbidden() {
     return new FhirApiException(
         HttpStatus.FORBIDDEN,
@@ -102,17 +63,7 @@ public final class FhirApiException extends RuntimeException {
         "Access to the requested resource is not permitted");
   }
 
-  /**
-   * Creates the invalid-parameter error: HTTP {@code 400}, issue code {@code invalid}, diagnostics
-   * {@code Invalid parameter '<name>': <detail>}.
-   *
-   * @param name the offending FHIR search or control parameter name, for example {@code
-   *     identifier}, or several parameter names joined by {@code ", "} when one rejection concerns
-   *     several parameters
-   * @param detail what is wrong with the parameter; it names no parameter other than {@code name}
-   * @return the invalid-parameter error
-   * @throws NullPointerException if {@code name} or {@code detail} is {@code null}
-   */
+  /** Creates the {@code 400 invalid} error: {@code Invalid parameter '<name>': <detail>}. */
   public static FhirApiException invalidParameter(String name, String detail) {
     Objects.requireNonNull(name, "name");
     Objects.requireNonNull(detail, "detail");
@@ -122,39 +73,21 @@ public final class FhirApiException extends RuntimeException {
         "Invalid parameter '" + name + "': " + detail);
   }
 
-  /**
-   * Creates the not-supported error: HTTP {@code 501}, issue code {@code not-supported},
-   * diagnostics equal to {@code detail}.
-   *
-   * @param detail the diagnostics text, used verbatim, for example "Write interactions are not
-   *     supported"
-   * @return the not-supported error
-   * @throws NullPointerException if {@code detail} is {@code null}
-   */
+  /** Creates the {@code 501 not-supported} error with {@code detail} as its diagnostics. */
   public static FhirApiException notSupported(String detail) {
     Objects.requireNonNull(detail, "detail");
     return new FhirApiException(
         HttpStatus.NOT_IMPLEMENTED, OperationOutcome.IssueType.NOTSUPPORTED, detail);
   }
 
-  /**
-   * @return the HTTP status of the response: {@code 404}, {@code 403}, {@code 400} or {@code 501}
-   */
   public HttpStatus getStatus() {
     return status;
   }
 
-  /**
-   * @return the {@code OperationOutcome.issue.code}: {@code not-found}, {@code forbidden}, {@code
-   *     invalid} or {@code not-supported}
-   */
   public OperationOutcome.IssueType getIssueType() {
     return issueType;
   }
 
-  /**
-   * @return the {@code OperationOutcome.issue.diagnostics} text
-   */
   public String getDiagnostics() {
     return diagnostics;
   }

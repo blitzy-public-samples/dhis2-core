@@ -29,74 +29,32 @@
  */
 package org.hisp.dhis.fhir.service;
 
-import static org.hisp.dhis.fhir.FhirTestFixtures.CVX_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.CVX_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.ENCOUNTER_CLASS_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.IDENTIFIER_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_BODY_HEIGHT_CODE;
-import static org.hisp.dhis.fhir.FhirTestFixtures.LOINC_SYSTEM;
-import static org.hisp.dhis.fhir.FhirTestFixtures.entries;
-import static org.hisp.dhis.fhir.FhirTestFixtures.resolved;
-import static org.hisp.dhis.fhir.FhirTestFixtures.uid;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.ATTRIBUTE;
-import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.hl7.fhir.r4.model.CapabilityStatement.TypeRestfulInteraction.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.FhirR4Validation;
-import org.hisp.dhis.fhir.FhirTestFixtures.Entry;
-import org.hisp.dhis.fhir.mapping.FhirResourceMappingService;
+import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.fhir.mapping.FhirResourceType;
-import org.hisp.dhis.fhir.mapping.FhirTargetField;
 import org.hisp.dhis.fhir.search.FhirSearchParameters;
-import org.hisp.dhis.setting.SystemSettings;
-import org.hisp.dhis.setting.SystemSettingsProvider;
-import org.hl7.fhir.r4.model.CapabilityStatement;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementKind;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementRestComponent;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementRestResourceComponent;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementRestResourceOperationComponent;
-import org.hl7.fhir.r4.model.CapabilityStatement.CapabilityStatementRestResourceSearchParamComponent;
-import org.hl7.fhir.r4.model.CapabilityStatement.ResourceInteractionComponent;
-import org.hl7.fhir.r4.model.CapabilityStatement.RestfulCapabilityMode;
-import org.hl7.fhir.r4.model.CapabilityStatement.TypeRestfulInteraction;
-import org.hl7.fhir.r4.model.CodeType;
-import org.hl7.fhir.r4.model.Enumerations;
-import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.hisp.dhis.setting.*;
+import org.hl7.fhir.r4.model.*;
+import org.hl7.fhir.r4.model.CapabilityStatement.*;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 
-/**
- * Tests that {@link FhirCapabilityStatementService} derives the CapabilityStatement of {@code GET
- * /api/fhir/metadata} from the usable resource mappings: one resource per mapped type with the
- * {@code read} and {@code search-type} interactions, the search parameters the configured targets
- * support, the {@code Patient/$everything} operation, the fixed fields, the date of the latest
- * mapping update, and a query that accepts only {@code _format}. Every produced statement passes
- * FHIR R4 validation.
- */
+/** Tests the CapabilityStatement {@link FhirCapabilityStatementService} derives from mappings. */
 @ExtendWith(MockitoExtension.class)
 class FhirCapabilityStatementServiceTest {
   private static final String BASE = "https://fhir.example.org:8443/dhis";
@@ -108,11 +66,10 @@ class FhirCapabilityStatementServiceTest {
   private static final String TEA_IDENTIFIER = uid();
   private static final String TEA_FAMILY = uid();
   private static final String TEA_GIVEN = uid();
-
+  private static final String TEA_BIRTH_DATE = uid();
+  private static final String TEA_GENDER = uid();
   @Mock private FhirResourceMappingService mappingService;
-
   @Mock private SystemSettingsProvider settingsProvider;
-
   private FhirCapabilityStatementService service;
 
   @BeforeEach
@@ -125,64 +82,55 @@ class FhirCapabilityStatementServiceTest {
 
   @Test
   void listsOnlyMappedResourceTypesWithReadAndSearchInteractions() {
-    when(mappingService.resolveAll()).thenReturn(List.of(observation(T1), patient(T1)));
-
-    CapabilityStatement statement = capabilities(request());
-
-    assertEquals(List.of("Patient", "Observation"), resourceTypes(statement));
-    for (CapabilityStatementRestResourceComponent resource : rest(statement).getResource()) {
-      assertEquals(
-          List.of(TypeRestfulInteraction.READ, TypeRestfulInteraction.SEARCHTYPE),
-          resource.getInteraction().stream().map(ResourceInteractionComponent::getCode).toList(),
-          "interactions of " + resource.getType());
+    var resources = rest(statementFor(List.of(observation(T1), patient(T1)))).getResource();
+    assertEquals(
+        List.of("Patient", "Observation"), resources.stream().map(r -> r.getType()).toList());
+    for (CapabilityStatementRestResourceComponent resource : resources) {
+      var codes = resource.getInteraction().stream().map(ResourceInteractionComponent::getCode);
+      assertEquals(List.of(READ, SEARCHTYPE), codes.toList(), resource.getType());
     }
   }
 
   @Test
   void searchParametersFollowConfiguredTargets() {
-    when(mappingService.resolveAll()).thenReturn(allMappings());
-
-    CapabilityStatement statement = capabilities(request());
-
-    assertEquals(Set.of("_id", "identifier", "family"), searchParamNames(statement, "Patient"));
-    assertEquals(Set.of("_id", "patient", "subject"), searchParamNames(statement, "Encounter"));
-    assertEquals(Set.of("_id", "patient"), searchParamNames(statement, "Immunization"));
+    CapabilityStatement statement = statementFor(allMappings());
     assertEquals(
-        Set.of("_id", "patient", "subject", "code"), searchParamNames(statement, "Observation"));
-    for (CapabilityStatementRestResourceComponent resource : rest(statement).getResource()) {
-      for (CapabilityStatementRestResourceSearchParamComponent param : resource.getSearchParam()) {
-        assertEquals(
-            FhirSearchParameters.typeOf(param.getName()),
-            param.getType(),
-            resource.getType() + " search parameter " + param.getName());
-      }
-    }
+        List.of("_id:token", "identifier:token", "family:string"),
+        searchParams(statement, "Patient"));
+    assertEquals(
+        List.of("_id:token", "patient:reference", "subject:reference"),
+        searchParams(statement, "Encounter"));
+    assertEquals(
+        List.of("_id:token", "patient:reference"), searchParams(statement, "Immunization"));
+    assertEquals(
+        List.of("_id:token", "patient:reference", "subject:reference", "code:token"),
+        searchParams(statement, "Observation"));
+    List<String> text = List.of("_id:token", "identifier:token", "family:string", "given:string");
+    List<String> all = new ArrayList<>(text);
+    all.addAll(List.of("birthdate:date", "gender:token"));
+    assertEquals(all, searchParams(statementFor(List.of(configuredPatient(Map.of()))), "Patient"));
+    Set<QueryOperator> eq = Set.of(QueryOperator.EQ);
+    ResolvedMapping blocked = configuredPatient(Map.of(TEA_BIRTH_DATE, eq, TEA_GENDER, eq));
+    assertEquals(text, searchParams(statementFor(List.of(blocked)), "Patient"));
   }
 
   @Test
   void patientDeclaresEverythingOperation() {
-    when(mappingService.resolveAll()).thenReturn(allMappings());
-
-    CapabilityStatement statement = capabilities(request());
-
-    List<CapabilityStatementRestResourceOperationComponent> operations =
-        resource(statement, "Patient").getOperation();
-    assertEquals(1, operations.size());
-    assertEquals("everything", operations.get(0).getName());
+    CapabilityStatement statement = statementFor(allMappings());
+    var operations = resource(statement, "Patient").getOperation().stream();
     assertEquals(
-        "http://hl7.org/fhir/OperationDefinition/Patient-everything",
-        operations.get(0).getDefinition());
+        List.of("everything http://hl7.org/fhir/OperationDefinition/Patient-everything"),
+        operations
+            .map(operation -> operation.getName() + " " + operation.getDefinition())
+            .toList());
     for (String type : List.of("Encounter", "Immunization", "Observation")) {
-      assertTrue(resource(statement, type).getOperation().isEmpty(), type + " has no operation");
+      assertTrue(resource(statement, type).getOperation().isEmpty(), type);
     }
   }
 
   @Test
   void fixedFieldsAreSet() {
-    when(mappingService.resolveAll()).thenReturn(List.of(patient(T1)));
-
-    CapabilityStatement statement = capabilities(request());
-
+    CapabilityStatement statement = statementFor(List.of(patient(T1)));
     assertEquals(Enumerations.PublicationStatus.ACTIVE, statement.getStatus());
     assertEquals(CapabilityStatementKind.INSTANCE, statement.getKind());
     assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion());
@@ -195,164 +143,98 @@ class FhirCapabilityStatementServiceTest {
 
   @Test
   void dateIsLatestMappingUpdateOrRequestTime() {
-    when(mappingService.resolveAll())
-        .thenReturn(List.of(patient(T2), encounter(null), observation(T1)));
-
-    assertEquals(Date.from(T2), capabilities(request()).getDate());
-
-    when(mappingService.resolveAll()).thenReturn(List.of());
+    List<ResolvedMapping> mappings = List.of(patient(T2), encounter(null), observation(T1));
+    assertEquals(Date.from(T2), statementFor(mappings).getDate());
     Instant before = Instant.now().truncatedTo(ChronoUnit.MILLIS);
-    CapabilityStatement unmapped = capabilities(request());
+    CapabilityStatement unmapped = statementFor(List.of());
     Instant after = Instant.now();
-
     Instant date = unmapped.getDate().toInstant();
-    assertFalse(date.isBefore(before), date + " is not before " + before);
-    assertFalse(date.isAfter(after), date + " is not after " + after);
+    assertFalse(date.isBefore(before) || date.isAfter(after), date + " outside the request");
     assertTrue(rest(unmapped).getResource().isEmpty());
   }
 
-  @Test
-  void acceptsFormatAndRejectsOtherParameters() {
-    when(mappingService.resolveAll()).thenReturn(List.of(patient(T1)));
-
-    for (String format : List.of("json", "application/json", "application/fhir+json")) {
-      CapabilityStatement statement = capabilities(request("_format", format));
-      assertEquals(List.of("Patient"), resourceTypes(statement), "_format=" + format);
-    }
-
-    assertInvalid("_format", request("_format", "xml"));
-    assertInvalid("foo", request("foo", "bar"));
-    MockHttpServletRequest repeated = request();
-    repeated.addParameter("_format", "json", "json");
-    assertInvalid("_format", repeated);
-  }
-
-  /**
-   * Asserts that the request is rejected with {@code 400 invalid} naming the parameter, before any
-   * mapping is resolved.
-   */
-  private void assertInvalid(String parameter, MockHttpServletRequest request) {
-    clearInvocations(mappingService);
-    FhirApiException exception =
-        assertThrows(FhirApiException.class, () -> service.capabilities(request));
-    assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
-    assertEquals(IssueType.INVALID, exception.getIssueType());
-    assertTrue(
-        exception.getDiagnostics().contains("'" + parameter + "'"), exception.getDiagnostics());
-    verify(mappingService, never()).resolveAll();
-  }
-
-  /** Builds the statement and asserts that it is valid FHIR R4. */
-  private CapabilityStatement capabilities(MockHttpServletRequest request) {
-    CapabilityStatement statement = service.capabilities(request);
-    FhirR4Validation.assertValid(statement);
-    return statement;
-  }
-
-  /** Builds a request to {@code GET BASE/api/fhir/metadata} with the given name-value pairs. */
-  private static MockHttpServletRequest request(String... nameValuePairs) {
+  private CapabilityStatement statementFor(List<ResolvedMapping> mappings) {
+    when(mappingService.resolveAll()).thenReturn(mappings);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/dhis/api/fhir/metadata");
     request.setScheme("https");
     request.setServerName("fhir.example.org");
     request.setServerPort(8443);
     request.setContextPath("/dhis");
-    for (int i = 0; i < nameValuePairs.length; i += 2) {
-      request.addParameter(nameValuePairs[i], nameValuePairs[i + 1]);
-    }
-    return request;
+    CapabilityStatement statement = service.capabilities(request);
+    FhirR4Validation.assertValid(statement);
+    return statement;
   }
 
   private static CapabilityStatementRestComponent rest(CapabilityStatement statement) {
     return statement.getRest().get(0);
   }
 
-  private static List<String> resourceTypes(CapabilityStatement statement) {
-    return rest(statement).getResource().stream()
-        .map(CapabilityStatementRestResourceComponent::getType)
-        .toList();
-  }
-
   private static CapabilityStatementRestResourceComponent resource(
       CapabilityStatement statement, String type) {
     List<CapabilityStatementRestResourceComponent> matching =
         rest(statement).getResource().stream().filter(r -> type.equals(r.getType())).toList();
-    assertEquals(1, matching.size(), "resources of type " + type);
+    assertEquals(1, matching.size(), type);
     return matching.get(0);
   }
 
-  private static Set<String> searchParamNames(CapabilityStatement statement, String type) {
+  private static List<String> searchParams(CapabilityStatement statement, String type) {
     return resource(statement, type).getSearchParam().stream()
-        .map(CapabilityStatementRestResourceSearchParamComponent::getName)
-        .collect(Collectors.toSet());
+        .map(param -> param.getName() + ":" + param.getTypeElement().getValueAsString())
+        .toList();
   }
 
   private static List<ResolvedMapping> allMappings() {
     return List.of(patient(T1), encounter(T1), immunization(T1), observation(T1));
   }
 
-  /**
-   * A Patient mapping with an identifier, a family name and a given name whose attribute blocks the
-   * {@code sw} operator; birth date and gender are unmapped.
-   */
   private static ResolvedMapping patient(Instant lastUpdated) {
     return mapping(
-        FhirResourceType.PATIENT,
+        PATIENT,
         lastUpdated,
         Map.of(TEA_GIVEN, Set.of(QueryOperator.SW)),
-        Entry.field(FhirTargetField.PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER)
-            .system(IDENTIFIER_SYSTEM),
-        Entry.field(FhirTargetField.PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
-        Entry.field(FhirTargetField.PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN));
+        Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
+        Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
+        Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN));
+  }
+
+  private static ResolvedMapping configuredPatient(Map<String, Set<QueryOperator>> blocked) {
+    return mapping(
+        PATIENT,
+        T1,
+        blocked,
+        Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
+        Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
+        Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
+        Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH_DATE),
+        Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER).valueMap(Map.of("M", "male")));
   }
 
   private static ResolvedMapping encounter(Instant lastUpdated) {
-    return mapping(
-        FhirResourceType.ENCOUNTER,
-        lastUpdated,
-        Map.of(),
-        Entry.constant(
-            FhirTargetField.ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null));
+    Entry ambulatory =
+        Entry.constant(ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null);
+    return mapping(ENCOUNTER, lastUpdated, Map.of(), ambulatory);
   }
 
   private static ResolvedMapping immunization(Instant lastUpdated) {
-    return mapping(
-        FhirResourceType.IMMUNIZATION,
-        lastUpdated,
-        Map.of(),
-        Entry.field(FhirTargetField.IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, uid()),
-        Entry.constant(FhirTargetField.IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, null));
+    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, uid());
+    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, null);
+    return mapping(IMMUNIZATION, lastUpdated, Map.of(), administered, vaccine);
   }
 
   private static ResolvedMapping observation(Instant lastUpdated) {
-    return mapping(
-        FhirResourceType.OBSERVATION,
-        lastUpdated,
-        Map.of(),
-        Entry.field(FhirTargetField.OBSERVATION_VALUE, DATA_ELEMENT, uid())
-            .system(LOINC_SYSTEM)
-            .code(LOINC_BODY_HEIGHT_CODE));
+    Entry value = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, uid()).system(LOINC_SYSTEM);
+    return mapping(OBSERVATION, lastUpdated, Map.of(), value.code(LOINC_BODY_HEIGHT_CODE));
   }
 
-  /**
-   * Builds a resolved mapping on one tracked entity type; event-derived mappings share one program
-   * and program stage.
-   */
   private static ResolvedMapping mapping(
       FhirResourceType type,
-      Instant lastUpdated,
-      Map<String, Set<QueryOperator>> blockedSearchOperators,
+      Instant updated,
+      Map<String, Set<QueryOperator>> blocked,
       Entry... entries) {
-    boolean eventDerived = type.isEventDerived();
+    String program = type.isEventDerived() ? PROGRAM : null;
+    String stage = type.isEventDerived() ? STAGE : null;
+    var fields = entries(entries);
     return resolved(
-        uid(),
-        lastUpdated,
-        type,
-        TRACKED_ENTITY,
-        eventDerived ? PROGRAM : null,
-        eventDerived ? STAGE : null,
-        entries(entries),
-        Map.of(),
-        blockedSearchOperators,
-        Map.of());
+        uid(), updated, type, TRACKED_ENTITY, program, stage, fields, Map.of(), blocked, Map.of());
   }
 }

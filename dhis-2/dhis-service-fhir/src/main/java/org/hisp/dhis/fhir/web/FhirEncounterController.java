@@ -29,51 +29,42 @@
  */
 package org.hisp.dhis.fhir.web;
 
+import static org.hisp.dhis.fhir.web.FhirOpenApi.FHIR_JSON;
+
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.hisp.dhis.fhir.service.FhirEventResourceService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * FHIR R4 read-only endpoints for the Encounter resource: read and search-type over Tracker events
- * of mapped program stages.
- *
- * <p>Each handler passes the whole request to {@link FhirEventResourceService}, which validates the
- * query string, and returns the result as FHIR JSON through {@link FhirResourceSerializer}.
- */
+/** FHIR R4 read and search-type endpoints for {@code Encounter} over mapped program stages. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir/Encounter")
 public class FhirEncounterController {
   private final FhirEventResourceService eventResourceService;
-
   private final FhirResourceSerializer serializer;
 
-  /**
-   * Creates the controller.
-   *
-   * @param eventResourceService reads and searches the event-derived FHIR resources
-   * @param serializer encodes the resulting resources as FHIR JSON
-   */
   public FhirEncounterController(
       FhirEventResourceService eventResourceService, FhirResourceSerializer serializer) {
     this.eventResourceService = eventResourceService;
     this.serializer = serializer;
   }
 
-  /** Returns the Encounter with the logical id {@code {enrollmentUid}-{eventUid}}. */
+  @OpenApi.Response(value = FhirOpenApi.FhirEncounterResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
   @GetMapping("/{id}")
-  public ResponseEntity<String> readEncounter(@PathVariable String id, HttpServletRequest request) {
+  public ResponseEntity<String> readEncounter(
+      @OpenApi.Description("`{enrollmentUid}-{eventUid}`") @PathVariable String id,
+      HttpServletRequest request) {
     return serializer.ok(eventResourceService.read(FhirResourceType.ENCOUNTER, id, request));
   }
 
-  /** Returns a {@code searchset} Bundle of the Encounters matching the query parameters. */
+  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Params(FhirOpenApi.FhirEncounterSearchParameters.class)
+  @OpenApi.Description("Requires `patient`, `subject` or `_id`.")
   @GetMapping
   public ResponseEntity<String> searchEncounters(HttpServletRequest request) {
     return serializer.ok(eventResourceService.search(FhirResourceType.ENCOUNTER, request));

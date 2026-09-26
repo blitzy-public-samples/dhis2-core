@@ -29,19 +29,14 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
+import java.util.*;
+import java.util.function.*;
 import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.IdentifiableObject;
 import org.hisp.dhis.dxf2.metadata.objectbundle.ObjectBundle;
 import org.hisp.dhis.dxf2.metadata.objectbundle.hooks.AbstractObjectBundleHook;
 import org.hisp.dhis.feedback.ErrorReport;
-import org.hisp.dhis.preheat.Preheat;
-import org.hisp.dhis.preheat.PreheatIdentifier;
+import org.hisp.dhis.preheat.*;
 import org.springframework.stereotype.Component;
 
 /** Validates FHIR resource mappings during metadata import. */
@@ -49,51 +44,60 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class FhirResourceMappingObjectBundleHook
     extends AbstractObjectBundleHook<FhirResourceMapping> {
+  private static final String UNIQUENESS_VIEW =
+      FhirResourceMappingObjectBundleHook.class.getName() + ".uniquenessView";
   private final FhirResourceMappingStore store;
-
   private final FhirResourceMappingValidator validator;
 
-  /**
-   * Reports every rule of {@link FhirResourceMappingValidator} the mapping violates. The mapping's
-   * uniqueness key is compared with every stored mapping and every other mapping of the bundle; a
-   * bundle mapping takes the place of the stored mapping with the same UID. Referenced metadata is
-   * resolved by UID from the bundle's preheat, then from the database, ignoring sharing. The
-   * mapping is not modified.
-   *
-   * @param mapping the imported mapping to validate
-   * @param bundle the bundle being imported
-   * @param addReports receives one report per violation
-   */
+  /** Reports every violation against the stored and bundle mappings and the preheat metadata. */
   @Override
   public void validate(
       FhirResourceMapping mapping, ObjectBundle bundle, Consumer<ErrorReport> addReports) {
     validator.validate(mapping, others(mapping, bundle), lookup(bundle)).forEach(addReports);
   }
 
-  /**
-   * Returns the stored mappings overlaid by the bundle's mappings, without {@code mapping} and
-   * without any mapping that has its UID.
-   */
   private List<FhirResourceMapping> others(FhirResourceMapping mapping, ObjectBundle bundle) {
+    String key = FhirResourceMappingValidator.uniquenessKey(mapping);
+    if (key == null) {
+      return List.of();
+    }
+    String uid = mapping.getUid();
+    return view(mapping, bundle).byKey().getOrDefault(key, List.of()).stream()
+        .filter(other -> other != mapping && (uid == null || !uid.equals(other.getUid())))
+        .toList();
+  }
+
+  private UniquenessView view(FhirResourceMapping mapping, ObjectBundle bundle) {
+    if (bundle.getExtras(mapping, UNIQUENESS_VIEW) instanceof UniquenessView kept) {
+      return kept;
+    }
     Map<String, FhirResourceMapping> byUid = new LinkedHashMap<>();
     List<FhirResourceMapping> withoutUid = new ArrayList<>();
     for (FhirResourceMapping stored : store.getAllNoAcl()) {
       collect(stored, byUid, withoutUid);
     }
-    for (FhirResourceMapping imported : bundle.getObjects(FhirResourceMapping.class)) {
-      collect(imported, byUid, withoutUid);
+    Iterable<FhirResourceMapping> imported = bundle.getObjects(FhirResourceMapping.class);
+    for (FhirResourceMapping candidate : imported) {
+      collect(candidate, byUid, withoutUid);
     }
-    if (mapping.getUid() != null) {
-      byUid.remove(mapping.getUid());
+    List<FhirResourceMapping> overlay = new ArrayList<>(byUid.values());
+    overlay.addAll(withoutUid);
+    Map<String, List<FhirResourceMapping>> byKey = new HashMap<>();
+    for (FhirResourceMapping candidate : overlay) {
+      String key = FhirResourceMappingValidator.uniquenessKey(candidate);
+      if (key != null) {
+        byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(candidate);
+      }
     }
-    List<FhirResourceMapping> others = new ArrayList<>(byUid.size() + withoutUid.size());
-    others.addAll(byUid.values());
-    others.addAll(withoutUid);
-    others.removeIf(other -> other == mapping);
-    return others;
+    UniquenessView view = new UniquenessView(byKey);
+    for (FhirResourceMapping candidate : imported) {
+      bundle.putExtras(candidate, UNIQUENESS_VIEW, view);
+    }
+    return view;
   }
 
-  /** Adds a mapping by UID, replacing an earlier one with that UID, or to the UID-less list. */
+  private record UniquenessView(Map<String, List<FhirResourceMapping>> byKey) {}
+
   private static void collect(
       FhirResourceMapping mapping,
       Map<String, FhirResourceMapping> byUid,
@@ -108,10 +112,6 @@ public class FhirResourceMappingObjectBundleHook
     }
   }
 
-  /**
-   * Returns a lookup that finds an object by class and UID in the bundle's preheat, which includes
-   * the objects imported with the bundle, and otherwise in the database without sharing checks.
-   */
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup(
       ObjectBundle bundle) {
     Preheat preheat = bundle.getPreheat();

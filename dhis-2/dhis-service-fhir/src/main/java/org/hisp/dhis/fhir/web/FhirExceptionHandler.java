@@ -29,51 +29,22 @@
  */
 package org.hisp.dhis.fhir.web;
 
-import org.hisp.dhis.fhir.FhirApiException;
-import org.hisp.dhis.fhir.FhirResourceSerializer;
+import org.hisp.dhis.fhir.*;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.annotation.*;
 
-/**
- * Renders {@link FhirApiException}s raised by the FHIR controllers as FHIR {@code OperationOutcome}
- * responses.
- *
- * <p>The advice applies only to controllers in the package {@code org.hisp.dhis.fhir.web} and is
- * consulted before any other controller advice. Each response carries the exception's HTTP status
- * ({@code 404}, {@code 403}, {@code 400} or {@code 501}), the content type {@value
- * FhirResourceSerializer#FHIR_JSON_CONTENT_TYPE} and an {@code OperationOutcome} with one issue of
- * severity {@code error}, whose {@code code} and {@code diagnostics} are the exception's issue type
- * and diagnostics.
- *
- * <p>No other exception type is handled here. Any other exception raised by a FHIR controller, for
- * example an exceeded Tracker export deadline, is rendered by the platform's exception handling
- * with its usual status and body.
- */
+/** Renders the {@link FhirApiException}s of FHIR controllers as {@code OperationOutcome}s. */
 @RestControllerAdvice(basePackageClasses = FhirPatientController.class)
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class FhirExceptionHandler {
-
   private final FhirResourceSerializer serializer;
 
-  /**
-   * Creates the exception handler.
-   *
-   * @param serializer encodes the {@code OperationOutcome} of each handled exception
-   */
   public FhirExceptionHandler(FhirResourceSerializer serializer) {
     this.serializer = serializer;
   }
 
-  /**
-   * Returns the {@code OperationOutcome} response of the exception: its HTTP status, FHIR JSON
-   * content type and single {@code error} issue.
-   *
-   * @param ex the FHIR error raised by a FHIR controller
-   * @return the response carrying the encoded {@code OperationOutcome}
-   */
   @ExceptionHandler(FhirApiException.class)
   public ResponseEntity<String> handle(FhirApiException ex) {
     return serializer.error(ex);

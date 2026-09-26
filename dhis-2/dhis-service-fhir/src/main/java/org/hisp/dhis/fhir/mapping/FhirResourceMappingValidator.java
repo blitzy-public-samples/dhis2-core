@@ -29,68 +29,47 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
-import java.util.List;
+import java.net.*;
+import java.util.*;
+import java.util.Locale;
 import java.util.Objects;
-import java.util.Set;
-import java.util.function.BiFunction;
-import java.util.function.Function;
+import java.util.function.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.annotation.CheckForNull;
 import lombok.RequiredArgsConstructor;
-import org.hisp.dhis.common.CodeGenerator;
-import org.hisp.dhis.common.IdentifiableObject;
-import org.hisp.dhis.common.IdentifiableObjectManager;
-import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
-import org.hisp.dhis.feedback.ErrorCode;
-import org.hisp.dhis.feedback.ErrorReport;
+import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.mapping.FhirTargetField.Cardinality;
-import org.hisp.dhis.program.Program;
-import org.hisp.dhis.program.ProgramStage;
-import org.hisp.dhis.program.ProgramType;
-import org.hisp.dhis.trackedentity.TrackedEntityAttribute;
-import org.hisp.dhis.trackedentity.TrackedEntityType;
+import org.hisp.dhis.program.*;
+import org.hisp.dhis.trackedentity.*;
 import org.hl7.fhir.r4.model.Enumerations.AdministrativeGender;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Validates a {@link FhirResourceMapping} against the FHIR mapping rules and returns one {@link
- * ErrorReport} per violation, in rule order: the resource type and the tracked entity type, program
- * and program stage references; each field mapping entry; the required targets of the resource
- * type; repeated targets, identifier systems and sources within the mapping; and the {@link
- * #uniquenessKey(FhirResourceMapping) uniqueness key} against other mappings.
- *
- * <p>An entry without a target or source type, or with a target or source type the mapping does not
- * support, is not checked further. Membership of an attribute, data element or program stage is
- * only checked when the metadata that owns it resolves. References are resolved by UID, so they may
- * carry nothing but a UID. Nothing passed in is modified. Reports use only the error codes E4000,
- * E4010, E4014, E4027, E5002 and E5003, with {@link FhirResourceMapping} as their class.
- */
+/** Validates a {@link FhirResourceMapping}, returning one {@link ErrorReport} per violation. */
 @Component
 @RequiredArgsConstructor
 public class FhirResourceMappingValidator {
+  public static final int MAX_FIELD_MAPPINGS = 500;
+  public static final int MAX_VALUE_MAP_SIZE = 100;
+  public static final int MAX_TEXT_LENGTH = 1024;
+  public static final int MAX_TOTAL_TEXT_LENGTH = 100_000;
+  public static final String OTHER_MAPPING = "another mapping";
   private static final Set<String> GENDER_CODES =
       Arrays.stream(AdministrativeGender.values())
           .filter(gender -> gender != AdministrativeGender.NULL)
           .map(AdministrativeGender::toCode)
           .collect(Collectors.toUnmodifiableSet());
-
+  private static final Pattern CODE =
+      Pattern.compile("[^\\p{IsWhite_Space}\\p{Cc}]+(?: [^\\p{IsWhite_Space}\\p{Cc}]+)*");
+  private static final Pattern OID = Pattern.compile("[0-2](\\.(0|[1-9][0-9]*))+");
+  private static final Pattern LOWERCASE_UUID =
+      Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
   private final IdentifiableObjectManager manager;
 
-  /**
-   * Validates a mapping, resolving referenced metadata without applying the current user's sharing.
-   *
-   * @param mapping the mapping to validate, never {@code null}
-   * @param others the mappings its uniqueness key is compared with; {@code mapping} itself and
-   *     mappings with its UID are ignored, {@code null} means none
-   * @return a new mutable list with one report per violation; empty when the mapping is valid
-   */
+  /** Validates a mapping, resolving referenced metadata without applying sharing. */
   @Transactional(readOnly = true)
   public List<ErrorReport> validate(
       FhirResourceMapping mapping, Collection<FhirResourceMapping> others) {
@@ -98,14 +77,8 @@ public class FhirResourceMappingValidator {
   }
 
   /**
-   * Validates a mapping, resolving referenced metadata through the given lookup.
-   *
-   * @param mapping the mapping to validate, never {@code null}
-   * @param others the mappings its uniqueness key is compared with; {@code mapping} itself and
-   *     mappings with its UID are ignored, {@code null} means none
-   * @param lookup returns the object of the given class with the given UID, or {@code null} when
-   *     none exists; it is only called with non-null UIDs
-   * @return a new mutable list with one report per violation; empty when the mapping is valid
+   * Validates a mapping, resolving metadata through {@code lookup} and comparing its uniqueness key
+   * with the nullable {@code others}, except the mapping itself and those with its UID.
    */
   @Transactional(readOnly = true)
   public List<ErrorReport> validate(
@@ -115,11 +88,19 @@ public class FhirResourceMappingValidator {
     Check check = new Check(mapping, lookup);
     check.validateReferences();
     List<FhirFieldMapping> supported = new ArrayList<>();
-    for (FhirFieldMapping entry : fieldMappings(mapping)) {
-      if (entry == null) {
-        check.add(ErrorCode.E4000, "fieldMappings");
-      } else if (check.validateEntry(entry)) {
-        supported.add(entry);
+    List<FhirFieldMapping> entries = fieldMappings(mapping);
+    long textLength = textLength(entries);
+    if (entries.size() > MAX_FIELD_MAPPINGS) {
+      check.addTooLong("fieldMappings", MAX_FIELD_MAPPINGS, entries.size());
+    } else if (textLength > MAX_TOTAL_TEXT_LENGTH) {
+      check.addTooLong("fieldMappings.text", MAX_TOTAL_TEXT_LENGTH, textLength);
+    } else {
+      for (FhirFieldMapping entry : entries) {
+        if (entry == null) {
+          check.add(ErrorCode.E4000, "fieldMappings");
+        } else if (check.validateEntry(entry)) {
+          supported.add(entry);
+        }
       }
     }
     if (mapping.getResourceType() != null) {
@@ -131,14 +112,8 @@ public class FhirResourceMappingValidator {
   }
 
   /**
-   * Returns the key that at most one stored mapping may hold: {@code PATIENT}; {@code
-   * ENCOUNTER:{programStageUid}}; {@code OBSERVATION:{programStageUid}}; or {@code
-   * IMMUNIZATION:{programStageUid}:{dataElementUid}}, where the data element is the source of the
-   * first {@link FhirTargetField#IMMUNIZATION_ADMINISTERED} entry.
-   *
-   * @param mapping the mapping, may be {@code null} or incomplete
-   * @return the key, or {@code null} when the resource type, the program stage UID or the
-   *     administered data element is missing
+   * Returns the key at most one stored mapping may hold: {@code PATIENT}, {@code TYPE:stageUid} or
+   * {@code IMMUNIZATION:stageUid:administeredDataElementUid}; {@code null} when a part is missing.
    */
   @CheckForNull
   public static String uniquenessKey(@CheckForNull FhirResourceMapping mapping) {
@@ -165,6 +140,24 @@ public class FhirResourceMappingValidator {
     return isBlank(administered) ? null : type.name() + ":" + stage + ":" + administered;
   }
 
+  /**
+   * Returns whether a gender value map key lower-cased in the default locale equals a stored value
+   * lower-cased per code point.
+   */
+  public static boolean genderKeyMatches(String key, String value) {
+    return keyCase(key).equals(valueCase(value));
+  }
+
+  private static String keyCase(String key) {
+    return key.toLowerCase(Locale.getDefault());
+  }
+
+  private static String valueCase(String value) {
+    StringBuilder lowerCase = new StringBuilder(value.length());
+    value.codePoints().map(Character::toLowerCase).forEach(lowerCase::appendCodePoint);
+    return lowerCase.toString();
+  }
+
   private static List<FhirFieldMapping> fieldMappings(FhirResourceMapping mapping) {
     return mapping.getFieldMappings() == null ? List.of() : mapping.getFieldMappings();
   }
@@ -184,7 +177,6 @@ public class FhirResourceMappingValidator {
     return object == null ? null : object.getUid();
   }
 
-  /** Returns the mapping's UID, or its name when it has no UID, or the empty string. */
   private static String id(FhirResourceMapping mapping) {
     if (mapping.getUid() != null) {
       return mapping.getUid();
@@ -196,23 +188,60 @@ public class FhirResourceMappingValidator {
     return value == null || value.isBlank();
   }
 
-  /** The checks of one validation call and the reports they produce. */
+  private static long textLength(List<FhirFieldMapping> entries) {
+    long length = 0;
+    for (FhirFieldMapping entry : entries) {
+      if (entry == null) {
+        continue;
+      }
+      length += length(entry.getSource()) + length(entry.getSystem()) + length(entry.getCode());
+      length += length(entry.getDisplay()) + length(entry.getUnit());
+      if (entry.getValueMap() != null) {
+        for (Map.Entry<String, String> pair : entry.getValueMap().entrySet()) {
+          length += length(pair.getKey()) + length(pair.getValue());
+        }
+      }
+    }
+    return length;
+  }
+
+  private static int length(@CheckForNull String value) {
+    return value == null ? 0 : value.length();
+  }
+
+  private static boolean isValidSystem(String system, boolean identifier) {
+    URI uri;
+    try {
+      uri = new URI(system);
+    } catch (URISyntaxException e) {
+      return false;
+    }
+    String scheme = uri.getScheme();
+    if ("http".equals(scheme) || "https".equals(scheme)) {
+      return !isBlank(uri.getRawAuthority());
+    }
+    if (identifier && "ldap".equals(scheme)) {
+      return true;
+    }
+    if (!"urn".equals(scheme)) {
+      return false;
+    }
+    if (system.startsWith("urn:oid:")) {
+      String oid = system.substring("urn:oid:".length());
+      return OID.matcher(oid).matches() && (oid.lastIndexOf('.') >= 4 || oid.startsWith("1.3"));
+    }
+    return !system.startsWith("urn:uuid:")
+        || LOWERCASE_UUID.matcher(system.substring("urn:uuid:".length())).matches();
+  }
+
   private static final class Check {
     private final FhirResourceMapping mapping;
-
     @CheckForNull private final FhirResourceType type;
-
     private final String id;
-
     private final BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject>
         lookup;
-
     private final List<ErrorReport> reports = new ArrayList<>();
-
-    /** UIDs of the attributes entries may use; {@code null} when their owners did not resolve. */
     @CheckForNull private Set<String> attributes;
-
-    /** UIDs of the data elements entries may use; {@code null} when the stage did not resolve. */
     @CheckForNull private Set<String> dataElements;
 
     Check(
@@ -228,6 +257,36 @@ public class FhirResourceMappingValidator {
       reports.add(new ErrorReport(FhirResourceMapping.class, code, args));
     }
 
+    void addTooLong(String property, int max, long actual) {
+      add(ErrorCode.E4001, property, String.valueOf(max), String.valueOf(actual));
+    }
+
+    private void checkLength(String property, @CheckForNull String value) {
+      if (value != null && value.length() > MAX_TEXT_LENGTH) {
+        addTooLong(property, MAX_TEXT_LENGTH, value.length());
+      }
+    }
+
+    private boolean exceedsBounds(FhirFieldMapping entry) {
+      int before = reports.size();
+      checkLength("source", entry.getSource());
+      checkLength("system", entry.getSystem());
+      checkLength("code", entry.getCode());
+      checkLength("display", entry.getDisplay());
+      checkLength("unit", entry.getUnit());
+      Map<String, String> valueMap = entry.getValueMap();
+      if (valueMap != null && valueMap.size() > MAX_VALUE_MAP_SIZE) {
+        addTooLong("valueMap", MAX_VALUE_MAP_SIZE, valueMap.size());
+      } else if (valueMap != null) {
+        valueMap.forEach(
+            (key, value) -> {
+              checkLength("valueMap.key", key);
+              checkLength("valueMap.value", value);
+            });
+      }
+      return reports.size() > before;
+    }
+
     private boolean eventDerived() {
       return type != null && type.isEventDerived();
     }
@@ -238,12 +297,10 @@ public class FhirResourceMappingValidator {
       return uid == null ? null : lookup.apply(klass, uid);
     }
 
-    /** Checks the resource type and the tracked entity type, program and stage references. */
     void validateReferences() {
       if (type == null) {
         add(ErrorCode.E4000, "resourceType");
       }
-
       String typeUid = uid(mapping.getTrackedEntityType());
       TrackedEntityType trackedEntityType =
           find(TrackedEntityType.class, typeUid) instanceof TrackedEntityType t ? t : null;
@@ -252,7 +309,6 @@ public class FhirResourceMappingValidator {
       } else if (trackedEntityType == null) {
         add(ErrorCode.E5002, typeUid, id, "trackedEntityType");
       }
-
       String programUid = uid(mapping.getProgram());
       Program program = find(Program.class, programUid) instanceof Program p ? p : null;
       if (mapping.getProgram() == null) {
@@ -269,9 +325,7 @@ public class FhirResourceMappingValidator {
           add(ErrorCode.E5002, programUid, id, "trackedEntityType");
         }
       }
-
       ProgramStage stage = validateProgramStage(program);
-
       if (trackedEntityType != null && (mapping.getProgram() == null || program != null)) {
         attributes = new HashSet<>();
         if (trackedEntityType.getTrackedEntityTypeAttributes() != null) {
@@ -287,10 +341,6 @@ public class FhirResourceMappingValidator {
       }
     }
 
-    /**
-     * Checks the program stage reference and returns the resolved stage, or {@code null} when it is
-     * absent, not allowed for the resource type or unresolvable.
-     */
     @CheckForNull
     private ProgramStage validateProgramStage(@CheckForNull Program program) {
       String stageUid = uid(mapping.getProgramStage());
@@ -320,10 +370,6 @@ public class FhirResourceMappingValidator {
               .anyMatch(s -> s != null && Objects.equals(s.getUid(), stage.getUid()));
     }
 
-    /**
-     * Checks one non-null entry and returns whether its target and source type are supported for
-     * the mapping. A missing gender code in the value map is reported as an invalid code.
-     */
     boolean validateEntry(FhirFieldMapping entry) {
       FhirTargetField target = entry.getTarget();
       FhirSourceType sourceType = entry.getSourceType();
@@ -336,7 +382,6 @@ public class FhirResourceMappingValidator {
       if (target == null || sourceType == null) {
         return false;
       }
-
       boolean supported = true;
       if (type != null && target.resourceType() != type) {
         add(ErrorCode.E4010, target.name(), type.name());
@@ -349,7 +394,16 @@ public class FhirResourceMappingValidator {
       if (!supported) {
         return false;
       }
-
+      if (exceedsBounds(entry)) {
+        return true;
+      }
+      if (!isBlank(entry.getCode()) && !CODE.matcher(entry.getCode()).matches()) {
+        add(ErrorCode.E4027, entry.getCode(), "code");
+      }
+      if (!isBlank(entry.getSystem())
+          && !isValidSystem(entry.getSystem(), target == FhirTargetField.PATIENT_IDENTIFIER)) {
+        add(ErrorCode.E4027, entry.getSystem(), "system");
+      }
       if (sourceType == FhirSourceType.CONSTANT) {
         if (isBlank(entry.getCode())) {
           add(ErrorCode.E4000, "code");
@@ -369,14 +423,11 @@ public class FhirResourceMappingValidator {
             add(ErrorCode.E4027, value, "valueMap");
           }
         }
+        validateGenderKeys(entry.getValueMap());
       }
       return true;
     }
 
-    /**
-     * Checks the attribute or data element source of an entry and, whenever it resolves, its value
-     * type, also for a source outside the allowed attributes or data elements.
-     */
     private void validateSource(
         FhirTargetField target, FhirSourceType sourceType, @CheckForNull String source) {
       if (isBlank(source)) {
@@ -387,7 +438,6 @@ public class FhirResourceMappingValidator {
         add(ErrorCode.E4014, source, "source");
         return;
       }
-
       boolean attribute = sourceType == FhirSourceType.ATTRIBUTE;
       IdentifiableObject found =
           find(attribute ? TrackedEntityAttribute.class : DataElement.class, source);
@@ -400,7 +450,6 @@ public class FhirResourceMappingValidator {
       if (resolved == null || (allowed != null && !allowed.contains(source))) {
         add(ErrorCode.E5002, source, id, target.name());
       }
-
       ValueType valueType = null;
       if (resolved instanceof TrackedEntityAttribute trackedEntityAttribute) {
         valueType = trackedEntityAttribute.getValueType();
@@ -412,7 +461,17 @@ public class FhirResourceMappingValidator {
       }
     }
 
-    /** Reports every required target of the resource type that no entry has. */
+    private void validateGenderKeys(Map<String, String> valueMap) {
+      Set<String> folded = new HashSet<>();
+      for (String key : valueMap.keySet()) {
+        if (isBlank(key) || key.contains(QueryFilter.OPTION_SEP) || !genderKeyMatches(key, key)) {
+          add(ErrorCode.E4027, key, "valueMap");
+        } else if (!folded.add(keyCase(key))) {
+          add(ErrorCode.E5003, "valueMap", key, id, id);
+        }
+      }
+    }
+
     void validateRequiredTargets() {
       Set<FhirTargetField> present =
           fieldMappings(mapping).stream()
@@ -427,10 +486,6 @@ public class FhirResourceMappingValidator {
       }
     }
 
-    /**
-     * Reports, once per value and in this order, repeated single-entry targets, identifier systems
-     * and sources (Patient attributes and observation data elements) among the supported entries.
-     */
     void validateIntraMappingUniqueness(List<FhirFieldMapping> supported) {
       reportRepeated(
           supported,
@@ -450,7 +505,6 @@ public class FhirResourceMappingValidator {
                   : null);
     }
 
-    /** Reports, once per value, each non-blank value that more than one entry yields. */
     private void reportRepeated(
         List<FhirFieldMapping> entries,
         String property,
@@ -459,17 +513,13 @@ public class FhirResourceMappingValidator {
       Set<String> repeated = new LinkedHashSet<>();
       for (FhirFieldMapping entry : entries) {
         String value = valueOf.apply(entry);
-        if (!isBlank(value) && !seen.add(value)) {
+        if (!isBlank(value) && value.length() <= MAX_TEXT_LENGTH && !seen.add(value)) {
           repeated.add(value);
         }
       }
       repeated.forEach(value -> add(ErrorCode.E5003, property, value, id, id));
     }
 
-    /**
-     * Reports the first other mapping that holds the mapping's uniqueness key, naming it by UID, or
-     * by name when it has no UID.
-     */
     void validateUniqueness(@CheckForNull Collection<FhirResourceMapping> others) {
       String key = uniquenessKey(mapping);
       if (key == null || others == null) {
@@ -482,7 +532,7 @@ public class FhirResourceMappingValidator {
           continue;
         }
         if (key.equals(uniquenessKey(other))) {
-          add(ErrorCode.E5003, "resourceType", key, id, id(other));
+          add(ErrorCode.E5003, "resourceType", key, id, OTHER_MAPPING);
           return;
         }
       }

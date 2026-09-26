@@ -204,6 +204,16 @@
       <artifactId>spring-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-api</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -221,47 +231,4 @@
       </plugin>
     </plugins>
   </build>
-
-  <profiles>
-    <profile>
-      <id>fhir-sources-incomplete</id>
-      <activation>
-        <file>
-          <missing>${basedir}/../dhis-test-web-api/src/test/java/org/hisp/dhis/fhir/FhirRequestLifecycleTest.java</missing>
-        </file>
-      </activation>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-dependency-plugin</artifactId>
-            <configuration>
-              <ignoredUnusedDeclaredDependencies combine.children="append">
-                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-support-external</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-core</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-schema</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.hisp.dhis:dhis-service-acl</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.springframework:spring-core</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.springframework:spring-jdbc</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.springframework:spring-tx</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.springframework:spring-webmvc</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.springframework.security:spring-security-web</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>jakarta.persistence:jakarta.persistence-api</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>jakarta.annotation:jakarta.annotation-api</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>com.fasterxml.jackson.core:jackson-annotations</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>com.fasterxml.jackson.core:jackson-databind</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.slf4j:slf4j-api</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.projectlombok:lombok</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.mockito:mockito-core</ignoredUnusedDeclaredDependency>
-                <ignoredUnusedDeclaredDependency>org.mockito:mockito-junit-jupiter</ignoredUnusedDeclaredDependency>
-              </ignoredUnusedDeclaredDependencies>
-              <ignoredNonTestScopedDependencies combine.children="append">
-                <ignoredNonTestScopedDependency>ca.uhn.hapi.fhir:hapi-fhir-base</ignoredNonTestScopedDependency>
-              </ignoredNonTestScopedDependencies>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-  </profiles>
 </project>

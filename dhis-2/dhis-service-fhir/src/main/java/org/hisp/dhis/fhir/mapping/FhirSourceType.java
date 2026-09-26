@@ -29,17 +29,9 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
-/**
- * Where a mapped FHIR element takes its value from. A field mapping carries the constant name as
- * its {@code sourceType} in JSON.
- */
+/** Where a mapped FHIR element takes its value from. */
 public enum FhirSourceType {
-  /** The value of a tracked entity attribute whose UID is in the entry's {@code source}. */
   ATTRIBUTE,
-
-  /** The value of a program stage data element whose UID is in the entry's {@code source}. */
   DATA_ELEMENT,
-
-  /** A fixed coding from {@code system}, {@code code} and {@code display}, with no source. */
   CONSTANT
 }

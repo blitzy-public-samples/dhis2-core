@@ -33,19 +33,7 @@ import java.util.List;
 import javax.annotation.Nonnull;
 import org.hisp.dhis.common.IdentifiableObjectStore;
 
-/**
- * Store for {@link FhirResourceMapping} objects.
- *
- * <p>Provides the standard identifiable-object store operations, including {@link #getAllNoAcl()},
- * plus a lookup of the mappings of one {@link FhirResourceType}.
- */
 public interface FhirResourceMappingStore extends IdentifiableObjectStore<FhirResourceMapping> {
-  /**
-   * Returns all mappings of the given resource type, ignoring sharing.
-   *
-   * @param type the FHIR resource type the mappings produce
-   * @return the mappings whose resource type is {@code type}; empty when there are none
-   */
   @Nonnull
   List<FhirResourceMapping> getByResourceTypeNoAcl(@Nonnull FhirResourceType type);
 }
