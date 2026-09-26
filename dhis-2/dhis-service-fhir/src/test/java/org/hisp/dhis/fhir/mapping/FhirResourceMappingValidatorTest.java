@@ -41,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.util.*;
+import java.util.Locale;
 import java.util.stream.*;
 import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
@@ -59,33 +60,14 @@ class FhirResourceMappingValidatorTest {
       Entry.constant(
           ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
   private static final Set<ErrorCode> VALIDATOR_CODES =
-      EnumSet.of(E4000, E4001, E4010, E4014, E4027, E5002, E5003);
+      EnumSet.of(E4000, E4010, E4014, E4027, E5002, E5003);
   private static final Map<FhirTargetField, Set<ValueType>> ACCEPTED =
       new EnumMap<>(FhirTargetField.class);
 
   static {
-    Set<ValueType> text = EnumSet.of(TEXT, LONG_TEXT, LETTER);
-    Set<ValueType> integer =
-        EnumSet.of(INTEGER, INTEGER_POSITIVE, INTEGER_NEGATIVE, INTEGER_ZERO_OR_POSITIVE);
-    Set<ValueType> identifier =
-        EnumSet.of(USERNAME, EMAIL, PHONE_NUMBER, URL, TEXT, LONG_TEXT, LETTER);
-    identifier.addAll(integer);
-    Set<ValueType> doseNumber = EnumSet.of(TEXT);
-    doseNumber.addAll(integer);
-    ACCEPTED.put(PATIENT_IDENTIFIER, identifier);
-    EnumSet.of(PATIENT_FAMILY_NAME, PATIENT_GIVEN_NAME, PATIENT_GENDER, PATIENT_ADDRESS_TEXT)
-        .forEach(target -> ACCEPTED.put(target, text));
-    EnumSet.of(ENCOUNTER_TYPE, ENCOUNTER_REASON, IMMUNIZATION_LOT_NUMBER)
-        .forEach(target -> ACCEPTED.put(target, text));
-    ACCEPTED.put(PATIENT_BIRTH_DATE, EnumSet.of(DATE, AGE));
-    ACCEPTED.put(PATIENT_PHONE, EnumSet.of(PHONE_NUMBER, TEXT));
-    ACCEPTED.put(PATIENT_EMAIL, EnumSet.of(EMAIL, TEXT));
-    ACCEPTED.put(IMMUNIZATION_ADMINISTERED, EnumSet.of(BOOLEAN, TRUE_ONLY, TEXT));
-    ACCEPTED.put(IMMUNIZATION_DOSE_NUMBER, doseNumber);
-    ACCEPTED.put(
-        OBSERVATION_VALUE,
-        EnumSet.complementOf(
-            EnumSet.of(FILE_RESOURCE, IMAGE, COORDINATE, GEOJSON, ORGANISATION_UNIT, REFERENCE)));
+    catalog()
+        .filter(c -> !c[5].equals("none"))
+        .forEach(c -> ACCEPTED.put(FhirTargetField.valueOf(c[0]), parse(ValueType.class, c[5])));
   }
 
   private final IdentifiableObjectManager manager = mock(IdentifiableObjectManager.class);
@@ -171,14 +153,7 @@ class FhirResourceMappingValidatorTest {
   }
 
   @ParameterizedTest
-  @EnumSource(
-      value = FhirTargetField.class,
-      names = {
-        "ENCOUNTER_CLASS",
-        "IMMUNIZATION_VACCINE_CODE",
-        "IMMUNIZATION_ADMINISTERED",
-        "OBSERVATION_VALUE"
-      })
+  @MethodSource("requiredTargets")
   void missingRequiredTargetIsMissingRequiredProperty(FhirTargetField target) {
     assertOnly(validate(withEntries(target)), E4000, target.name());
   }
@@ -190,11 +165,22 @@ class FhirResourceMappingValidatorTest {
     assertOnly(validate(mapping), E4010, "OBSERVATION_VALUE", "PATIENT");
   }
 
-  @ParameterizedTest
-  @ValueSource(strings = {"ENCOUNTER_CLASS", "PATIENT_FAMILY_NAME"})
-  void sourceTypeNotAllowedForTargetIsNotSupported(FhirTargetField target) {
-    var mapping = withEntries(target, Entry.field(target, DATA_ELEMENT, textDe.getUid()));
-    assertOnly(validate(mapping), E4010, "DATA_ELEMENT", target.name());
+  @Test
+  void targetCatalogAndEnumNamesMatchExpectedTables() {
+    List<String[]> rows = catalog().toList();
+    assertEquals(rows.size(), FhirTargetField.values().length);
+    for (FhirTargetField target : FhirTargetField.values()) {
+      String[] c = rows.get(target.ordinal());
+      assertEquals(c[0] + " " + c[1], target + " " + target.resourceType(), c[0]);
+      assertEquals(parse(FhirSourceType.class, c[2]), target.allowedSources(), c[0]);
+      assertEquals(c[3] + " " + c[4], target.cardinality() + " " + target.isRequired(), c[0]);
+      assertEquals(parse(ValueType.class, c[5]), target.acceptedValueTypes(), c[0]);
+    }
+    assertEquals("[ATTRIBUTE, DATA_ELEMENT, CONSTANT]", Arrays.toString(FhirSourceType.values()));
+    FhirResourceType[] types = FhirResourceType.values();
+    assertEquals("[PATIENT, ENCOUNTER, IMMUNIZATION, OBSERVATION]", Arrays.toString(types));
+    List<String> fhirTypes = Stream.of(types).map(FhirResourceType::fhirType).toList();
+    assertEquals(List.of("Patient", "Encounter", "Immunization", "Observation"), fhirTypes);
   }
 
   @Test
@@ -207,9 +193,8 @@ class FhirResourceMappingValidatorTest {
   @CsvSource({
     "M, man, F, female, E4027, man",
     "'  ', male, F, female, E4027, '  '",
-    "A;B, male, C, male, E4027, A;B",
     "Ä, male, ä, female, E5003, ä",
-    "ΟΔΟΣ, other, F, female, E4027, ΟΔΟΣ"
+    "ΟΔΟΣ, other, οδοσ, female, E5003, οδοσ"
   })
   void genderValueMapOutsideAdministrativeGenderIsInvalid(
       String k1, String v1, String k2, String v2, ErrorCode code, String arg) {
@@ -219,6 +204,25 @@ class FhirResourceMappingValidatorTest {
     String[] args =
         code == E5003 ? new String[] {"valueMap", arg, id, id} : new String[] {arg, "valueMap"};
     assertOnly(validate(mapping), code, args);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"tr", "en"})
+  void genderValueMapKeysFoldIndependentlyOfDefaultLocale(String languageTag) {
+    FhirResourceMapping mapping = validMapping(PATIENT);
+    entryOf(mapping, PATIENT_GENDER)
+        .setValueMap(
+            Map.of("A;B", "male", "ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
+    Locale locale = Locale.getDefault();
+    try {
+      Locale.setDefault(Locale.forLanguageTag(languageTag));
+      assertEquals(List.of(), validate(mapping));
+      assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
+      assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
+      assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
+    } finally {
+      Locale.setDefault(locale);
+    }
   }
 
   @ParameterizedTest
@@ -245,6 +249,16 @@ class FhirResourceMappingValidatorTest {
             e ->
                 EnumSet.complementOf(EnumSet.copyOf(e.getValue())).stream()
                     .map(type -> Arguments.of(e.getKey(), type)));
+  }
+
+  static Stream<String> requiredTargets() {
+    return catalog().filter(c -> c[4].equals("true")).map(c -> c[0]);
+  }
+
+  static Stream<Arguments> sourceTypes() {
+    return catalog()
+        .flatMap(
+            c -> Stream.of(FhirSourceType.values()).map(s -> Arguments.of(c[0], s, c[2], c[3])));
   }
 
   @ParameterizedTest
@@ -296,11 +310,25 @@ class FhirResourceMappingValidatorTest {
     assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
   }
 
-  @Test
-  void repeatedOneCardinalityTargetIsDuplicate() {
-    var mapping = withEntries(PATIENT_GIVEN_NAME, entry(PATIENT_FAMILY_NAME, text2Tea));
+  @ParameterizedTest
+  @MethodSource("sourceTypes")
+  void sourceTypesAndRepeatedEntriesFollowExpectedCatalog(
+      FhirTargetField target, FhirSourceType type, String sources, Cardinality cardinality) {
+    ValueType valueType = ACCEPTED.getOrDefault(target, Set.of(TEXT)).iterator().next();
+    FhirResourceMapping mapping = withEntries(target, sourceOf(target, type, valueType));
+    if (!parse(FhirSourceType.class, sources).contains(type)) {
+      assertOnly(validate(mapping), E4010, type.name(), target.name());
+      return;
+    }
+    assertEquals(List.of(), validate(mapping));
+    Entry repeat = sourceOf(target, type, valueType).system(SYSTEM + 2).code("2");
+    mapping.getFieldMappings().add(repeat.build());
     String id = mapping.getUid();
-    assertOnly(validate(mapping), E5003, "target", "PATIENT_FAMILY_NAME", id, id);
+    if (cardinality == Cardinality.ONE) {
+      assertOnly(validate(mapping), E5003, "target", target.name(), id, id);
+    } else {
+      assertEquals(List.of(), validate(mapping));
+    }
   }
 
   @Test
@@ -309,13 +337,6 @@ class FhirResourceMappingValidatorTest {
         withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
     String id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "system", SYSTEM, id, id);
-    String tooLong = "urn:x:" + "a".repeat(MAX_TEXT_LENGTH);
-    mapping.getFieldMappings().stream()
-        .filter(e -> e.getSystem() != null)
-        .forEach(e -> e.setSystem(tooLong));
-    List<String> args = List.of("system", "1024", String.valueOf(tooLong.length()));
-    assertEquals(
-        List.of(args, args), validate(mapping).stream().map(ErrorReport::getArgs).toList());
   }
 
   @Test
@@ -355,11 +376,14 @@ class FhirResourceMappingValidatorTest {
     "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', false",
     "OBSERVATION_VALUE, code, 'a\u00a0b', false",
     "ENCOUNTER_TYPE, system, 'urn:bad uri', false",
-    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, false",
-    "ENCOUNTER_CLASS, system, http:foo, false",
-    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, false",
+    "ENCOUNTER_TYPE, system, codes/local, false",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.02.3, false",
     "OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, false",
-    "OBSERVATION_VALUE, system, " + LDAP + ", false",
+    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, true",
+    "ENCOUNTER_CLASS, system, http:foo, true",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, true",
+    "PATIENT_IDENTIFIER, system, ftp://fhir.example.org/codes, true",
+    "OBSERVATION_VALUE, system, " + LDAP + ", true",
     "OBSERVATION_VALUE, code, a b, true",
     "ENCOUNTER_CLASS, code, \u00e4, true",
     "PATIENT_IDENTIFIER, system, " + LDAP + ", true",
@@ -378,40 +402,25 @@ class FhirResourceMappingValidatorTest {
   }
 
   @Test
-  void mappingOverCountOrTotalTextBoundIsTooLong() {
+  void entryCountAndTextLengthAreNotValidated() {
     FhirResourceMapping mapping = validMapping(ENCOUNTER);
-    FhirFieldMapping type = entryOf(mapping, ENCOUNTER_TYPE);
-    type.setValueMap(pairs(MAX_VALUE_MAP_SIZE));
+    entryOf(mapping, ENCOUNTER_CLASS).setDisplay("d".repeat(5000));
     List<FhirFieldMapping> entries = mapping.getFieldMappings();
-    IntStream.range(entries.size(), MAX_FIELD_MAPPINGS)
+    IntStream.range(0, 600)
         .forEach(i -> entries.add(Entry.constant(ENCOUNTER_TYPE, SYSTEM, "t" + i, null).build()));
     assertEquals(List.of(), validate(mapping));
-    type.setValueMap(pairs(101));
-    assertOnly(validate(mapping), E4001, "valueMap", "100", "101");
-    entries.add(entry(ENCOUNTER_TYPE, strayDe).build());
-    assertOnly(validate(mapping), E4001, "fieldMappings", "500", "501");
-    FhirResourceMapping text = withEntries(ENCOUNTER_TYPE);
-    String coding = ENCOUNTER_CLASS_SYSTEM + ENCOUNTER_CLASS_CODE + ENCOUNTER_CLASS_DISPLAY;
-    int free = MAX_TOTAL_TEXT_LENGTH - coding.length();
-    Entry reason =
-        entry(ENCOUNTER_REASON, textDe).display("d".repeat(1000 - textDe.getUid().length()));
-    IntStream.range(0, free / 1000).forEach(i -> text.getFieldMappings().add(reason.build()));
-    FhirFieldMapping encounterClass = entryOf(text, ENCOUNTER_CLASS);
-    encounterClass.setDisplay(encounterClass.getDisplay() + "d".repeat(free % 1000));
-    assertEquals(List.of(), validate(text));
-    entryOf(text, ENCOUNTER_REASON).setValueMap(Map.of("d", ""));
-    assertOnly(validate(text), E4001, "fieldMappings.text", "100000", "100001");
   }
 
-  @ParameterizedTest
-  @ValueSource(
-      strings = {"source", "system", "code", "display", "unit", "valueMap.key", "valueMap.value"})
-  void textLongerThanMaxTextLengthIsTooLong(String property) {
-    String urn = "urn:x:" + "a".repeat(MAX_TEXT_LENGTH - "urn:x:".length());
-    List<ErrorReport> atBound = validate(withValue(OBSERVATION_VALUE, property, urn));
-    assertTrue(atBound.stream().noneMatch(r -> r.getErrorCode() == E4001), atBound::toString);
-    var tooLong = withValue(OBSERVATION_VALUE, property, urn + "a");
-    assertOnly(validate(tooLong), E4001, property, "1024", "1025");
+  @Test
+  void validateStructureSkipsEveryRuleThatResolvesMetadata() {
+    var mapping = withEntries(ENCOUNTER_TYPE, entry(ENCOUNTER_TYPE, dataElement(uid(), BOOLEAN)));
+    mapping.setTrackedEntityType(trackedEntityType(uid()));
+    mapping.setProgram(withoutRegistrationProgram);
+    mapping.setProgramStage(otherStage);
+    assertEquals(List.of(), validator.validateStructure(mapping));
+    entryOf(mapping, ENCOUNTER_TYPE).setTarget(null);
+    assertOnly(validator.validateStructure(mapping), E4000, "target");
+    verifyNoInteractions(manager);
   }
 
   private <T extends IdentifiableObject> T register(T object) {
@@ -510,13 +519,48 @@ class FhirResourceMappingValidatorTest {
   }
 
   private Entry sourceOfValueType(FhirTargetField target, ValueType valueType) {
-    IdentifiableObject source =
-        target.resourceType() == PATIENT ? personAttribute(valueType) : stageDataElement(valueType);
-    return entry(target, source).system(SYSTEM).code(LOINC_BODY_HEIGHT_CODE).valueMap(GENDER_MAP);
+    return sourceOf(target, target.resourceType() == PATIENT ? ATTRIBUTE : DATA_ELEMENT, valueType);
   }
 
-  private static Map<String, String> pairs(int size) {
-    return IntStream.range(0, size).boxed().collect(Collectors.toMap(i -> "k" + i, i -> "v" + i));
+  private Entry sourceOf(FhirTargetField target, FhirSourceType type, ValueType valueType) {
+    IdentifiableObject source = type == ATTRIBUTE ? personAttribute(valueType) : null;
+    source = type == DATA_ELEMENT ? stageDataElement(valueType) : source;
+    Entry entry = Entry.field(target, type, source == null ? null : source.getUID().getValue());
+    return entry.system(SYSTEM).code(LOINC_BODY_HEIGHT_CODE).valueMap(GENDER_MAP);
+  }
+
+  /** Target, resource type, sources, cardinality, required, value types; {@code !} negates. */
+  static Stream<String[]> catalog() {
+    return """
+        PATIENT_IDENTIFIER PATIENT ATTRIBUTE MANY false TEXT,LONG_TEXT,LETTER,USERNAME,EMAIL,\
+        PHONE_NUMBER,URL,INTEGER,INTEGER_POSITIVE,INTEGER_NEGATIVE,INTEGER_ZERO_OR_POSITIVE
+        PATIENT_FAMILY_NAME PATIENT ATTRIBUTE ONE false TEXT,LONG_TEXT,LETTER
+        PATIENT_GIVEN_NAME PATIENT ATTRIBUTE ONE false TEXT,LONG_TEXT,LETTER
+        PATIENT_GENDER PATIENT ATTRIBUTE ONE false TEXT,LONG_TEXT,LETTER
+        PATIENT_BIRTH_DATE PATIENT ATTRIBUTE ONE false DATE,AGE
+        PATIENT_PHONE PATIENT ATTRIBUTE MANY false PHONE_NUMBER,TEXT
+        PATIENT_EMAIL PATIENT ATTRIBUTE MANY false EMAIL,TEXT
+        PATIENT_ADDRESS_TEXT PATIENT ATTRIBUTE ONE false TEXT,LONG_TEXT,LETTER
+        ENCOUNTER_CLASS ENCOUNTER CONSTANT ONE true none
+        ENCOUNTER_TYPE ENCOUNTER DATA_ELEMENT,CONSTANT MANY false TEXT,LONG_TEXT,LETTER
+        ENCOUNTER_REASON ENCOUNTER DATA_ELEMENT MANY false TEXT,LONG_TEXT,LETTER
+        IMMUNIZATION_ADMINISTERED IMMUNIZATION DATA_ELEMENT ONE true BOOLEAN,TRUE_ONLY,TEXT
+        IMMUNIZATION_VACCINE_CODE IMMUNIZATION CONSTANT ONE true none
+        IMMUNIZATION_LOT_NUMBER IMMUNIZATION DATA_ELEMENT ONE false TEXT,LONG_TEXT,LETTER
+        IMMUNIZATION_DOSE_NUMBER IMMUNIZATION DATA_ELEMENT ONE false TEXT,INTEGER,\
+        INTEGER_POSITIVE,INTEGER_NEGATIVE,INTEGER_ZERO_OR_POSITIVE
+        OBSERVATION_VALUE OBSERVATION DATA_ELEMENT MANY true !FILE_RESOURCE,IMAGE,COORDINATE,\
+        GEOJSON,ORGANISATION_UNIT,REFERENCE"""
+        .lines()
+        .map(row -> row.split(" "));
+  }
+
+  private static <E extends Enum<E>> EnumSet<E> parse(Class<E> type, String names) {
+    EnumSet<E> set = EnumSet.noneOf(type);
+    Stream.of(names.replace("!", "").split(","))
+        .filter(name -> !name.equals("none"))
+        .forEach(name -> set.add(Enum.valueOf(type, name)));
+    return names.startsWith("!") ? EnumSet.complementOf(set) : set;
   }
 
   private List<ErrorReport> validate(FhirResourceMapping mapping, FhirResourceMapping... others) {

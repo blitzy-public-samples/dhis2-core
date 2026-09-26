@@ -30,6 +30,7 @@
 package org.hisp.dhis.fhir;
 
 import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.toMap;
 import static java.util.stream.Collectors.toSet;
 import static org.hisp.dhis.feedback.ErrorCode.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.OTHER_MAPPING;
@@ -124,15 +125,21 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
       "fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false";
   private static final String EDIT_FIELDS =
       "?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing";
+  private static final String TYPES_PATH =
+      "trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false";
+  private static final String PROGRAMS_FILTER =
+      "programs?filter=programType:eq:WITH_REGISTRATION&filter=trackedEntityType.id:eq:";
+  private static final String PROGRAMS_FIELDS =
+      "&fields=id,displayName,programTrackedEntityAttributes[trackedEntityAttribute[id,displayName,valueType]],programStages[id,displayName,programStageDataElements[dataElement[id,displayName,valueType]]]&paging=false";
   private static final List<String> PAGE_CALLS =
       List.of(
           "'X-Requested-With': 'XMLHttpRequest'",
           "'XSRF-TOKEN='",
           "headers['X-XSRF-TOKEN'] = token",
           "api('GET', '" + STATUS_PATH + "'",
-          "'trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false'",
-          "'programs?filter=programType:eq:WITH_REGISTRATION&filter=trackedEntityType.id:eq:'",
-          "'&fields=id,displayName,programTrackedEntityAttributes[trackedEntityAttribute[id,displayName,valueType]],programStages[id,displayName,programStageDataElements[dataElement[id,displayName,valueType]]]&paging=false'",
+          "'" + TYPES_PATH + "'",
+          "'" + PROGRAMS_FILTER + "'",
+          "'" + PROGRAMS_FIELDS + "'",
           "'" + LIST_PATH + "'",
           "'" + EDIT_FIELDS + "'",
           "api('POST', '" + MAPPINGS + "'",
@@ -320,6 +327,24 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   }
 
   @Test
+  void settingsPageMissingFromClasspathAnswersServerErrorWebMessage() {
+    ClassLoader original = Thread.currentThread().getContextClassLoader();
+    // The request thread's class loader no longer sees the application class path or the page.
+    Thread.currentThread().setContextClassLoader(ClassLoader.getPlatformClassLoader());
+    try {
+      HttpResponse response = GET(ENDPOINT + "/settings", Accept(MediaType.TEXT_HTML_VALUE));
+      JsonObject error = response.content(HttpStatus.INTERNAL_SERVER_ERROR);
+      String expected =
+          "{\"httpStatus\": \"Internal Server Error\", \"httpStatusCode\": 500, \"status\": \"ERROR\", \"message\": \"The FHIR settings page is not available\"}";
+      assertTrue(JsonMixed.of(expected).equivalentTo(error), error::toJson);
+      assertEquals(MediaType.APPLICATION_JSON_VALUE, response.getContentType());
+      assertNull(response.header("Cache-Control"));
+    } finally {
+      Thread.currentThread().setContextClassLoader(original);
+    }
+  }
+
+  @Test
   void settingsPageRequestsSucceedThroughCsrfProtectedSecurityChain() {
     mvc = settingsPageChain(null);
     HttpResponse page = GET(ENDPOINT + "/settings", Accept(MediaType.TEXT_HTML_VALUE));
@@ -343,6 +368,43 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertTrue(GET(LIST_PATH).content(HttpStatus.OK).toJson().contains("FHIR renamed Patient"));
     assertStatus(HttpStatus.OK, DELETE(ENDPOINT + "/" + uid, csrf));
     assertStatus(HttpStatus.NOT_FOUND, GET(ENDPOINT + "/" + uid + EDIT_FIELDS));
+  }
+
+  @Test
+  void settingsPagePickerAndListRequestsReturnTheFieldsThePageReads() {
+    String typeKeys = "displayName,id,trackedEntityTypeAttributes";
+    JsonObject person = byId(GET(TYPES_PATH).content(), "trackedEntityTypes", typeKeys).get(PERSON);
+    assertEquals(
+        "V66aa7a2122:NUMBER,dIVt4l5vIOa:TEXT,integerAttr:INTEGER,toUpdate000:TEXT",
+        targets(person, "trackedEntityTypeAttributes", "trackedEntityAttribute"));
+    String keys = "displayName,id,programStages,programTrackedEntityAttributes";
+    JsonObject found = GET(PROGRAMS_FILTER + PERSON + PROGRAMS_FIELDS).content();
+    Map<String, JsonObject> programs = byId(found, "programs", keys);
+    assertEquals(
+        "BFcipDERJnf,SeeUNWLQmZk,UWRnoyBjvqi,YlUmbgnKWkd,pcxIanBWlSY,sLngICFQjvH,shPjYNifvMK",
+        String.join(",", new TreeSet<>(programs.keySet())));
+    assertEquals(
+        "dIVt4l5vIOa:TEXT,fRGt4l6yIRb:TEXT,multitxtAtr:MULTI_TEXT",
+        targets(programs.get(PROGRAM), "programTrackedEntityAttributes", "trackedEntityAttribute"));
+    String stageKeys = "displayName,id,programStageDataElements";
+    Map<String, JsonObject> stages = byId(programs.get(PROGRAM), "programStages", stageKeys);
+    assertEquals(Set.of(STAGE, "NpsdDv6kKS2"), stages.keySet());
+    assertEquals(
+        "DATAEL00001:TEXT,DATAEL00002:TEXT,DATAEL00003:TEXT,DATAEL00004:TEXT,DATAEL00005:TEXT,DATAEL00006:INTEGER,DATAEL00007:TEXT,GieVkTxp4HH:NUMBER",
+        targets(stages.get(STAGE), "programStageDataElements", "dataElement"));
+    for (String body : List.of(FULL_PATIENT, FULL_OBSERVATION)) {
+      String id = assertStatus(HttpStatus.CREATED, POST(ENDPOINT, body));
+      String item =
+          body.replace("\"name\":", "\"displayName\":")
+              .replace("{\"id\": \"" + PERSON + "\"}", "{\"displayName\": \"Person\"}")
+              .replace("{\"id\": \"" + PROGRAM + "\"}", "{\"displayName\": \"BFcipDERJnf name\"}")
+              .replace("{\"id\": \"" + STAGE + "\"}", "{\"displayName\": \"test-program-stage\"}");
+      JsonList<JsonObject> listed = GET(LIST_PATH).content().getList(MAPPINGS, JsonObject.class);
+      assertTrue(listed.stream().anyMatch(JsonMixed.of(item)::equivalentTo), listed::toJson);
+      JsonObject edited = GET(ENDPOINT + "/" + id + EDIT_FIELDS).content();
+      String detail = "{\"sharing\": " + edited.get("sharing").toJson() + ", " + body.substring(1);
+      assertTrue(JsonMixed.of(detail).equivalentTo(edited), edited::toJson);
+    }
   }
 
   /** Mappings that together violate every validator rule, with the messages each must yield. */
@@ -377,9 +439,6 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
             errorMessage(E4000, "code")),
         invalid(patient(1, entry(PATIENT_FAMILY_NAME, ATTRIBUTE)), errorMessage(E4000, "source")),
         invalid(
-            mapping(INVALID_NAME, ENCOUNTER, List.of(constant(ENCOUNTER_CLASS, "c".repeat(1025)))),
-            errorMessage(E4001, "code", "1024", "1025")),
-        invalid(
             mapping(
                 INVALID_NAME, PATIENT, with(PATIENT_ENTRIES, observation(INTEGER_ELEMENT, "x"))),
             errorMessage(E4010, OBSERVATION_VALUE.name(), PATIENT.name())),
@@ -394,9 +453,6 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
             errorMessage(E4027, "man", "valueMap")),
         invalid(
             patient(2, gender(GIVEN_ATTRIBUTE, "", "male")), errorMessage(E4027, "", "valueMap")),
-        invalid(
-            patient(2, gender(GIVEN_ATTRIBUTE, "A;B", "male")),
-            errorMessage(E4027, "A;B", "valueMap")),
         invalid(
             patient(2, attribute(PATIENT_BIRTH_DATE, GIVEN_ATTRIBUTE)),
             errorMessage(E4027, "TEXT", PATIENT_BIRTH_DATE.name())),
@@ -532,6 +588,26 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static String summary(JsonObject object, List<String> properties) {
     return properties.stream()
         .map(p -> p + "=" + (object.get(p).exists() ? object.get(p).toMinimizedJson() : ""))
+        .collect(joining(","));
+  }
+
+  /** Indexes the owner's list by id, asserting that each object's sorted keys join to keys. */
+  private static Map<String, JsonObject> byId(JsonObject owner, String list, String keys) {
+    return owner.getList(list, JsonObject.class).stream()
+        .collect(toMap(object -> object.getString("id").string(), object -> keyed(object, keys)));
+  }
+
+  private static JsonObject keyed(JsonObject object, String keys) {
+    assertEquals(keys, object.names().stream().sorted().collect(joining(",")), object::toJson);
+    return object;
+  }
+
+  /** Returns the sorted id:valueType of the object under each link, asserting both key sets. */
+  private static String targets(JsonObject owner, String links, String link) {
+    return owner.getList(links, JsonObject.class).stream()
+        .map(each -> keyed(keyed(each, link).getObject(link), "displayName,id,valueType"))
+        .map(t -> t.getString("id").string() + ":" + t.getString("valueType").string())
+        .sorted()
         .collect(joining(","));
   }
 

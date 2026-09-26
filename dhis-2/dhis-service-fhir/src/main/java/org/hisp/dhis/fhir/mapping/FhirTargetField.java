@@ -29,107 +29,49 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.Cardinality.*;
+
 import java.util.*;
 import org.hisp.dhis.common.ValueType;
 
 /** The closed catalog of FHIR R4 elements a {@link FhirFieldMapping} may target. */
 public enum FhirTargetField {
-  PATIENT_IDENTIFIER(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.MANY,
-      false,
-      ValueTypes.IDENTIFIER),
-  PATIENT_FAMILY_NAME(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.ONE,
-      false,
-      ValueTypes.TEXT),
-  PATIENT_GIVEN_NAME(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.ONE,
-      false,
-      ValueTypes.TEXT),
-  PATIENT_GENDER(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.ONE,
-      false,
-      ValueTypes.TEXT),
-  PATIENT_BIRTH_DATE(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.ONE,
-      false,
-      ValueTypes.BIRTH_DATE),
-  PATIENT_PHONE(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.MANY,
-      false,
-      ValueTypes.PHONE),
-  PATIENT_EMAIL(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.MANY,
-      false,
-      ValueTypes.EMAIL),
-  PATIENT_ADDRESS_TEXT(
-      FhirResourceType.PATIENT,
-      EnumSet.of(FhirSourceType.ATTRIBUTE),
-      Cardinality.ONE,
-      false,
-      ValueTypes.TEXT),
-  ENCOUNTER_CLASS(
-      FhirResourceType.ENCOUNTER,
-      EnumSet.of(FhirSourceType.CONSTANT),
-      Cardinality.ONE,
-      true,
-      ValueTypes.NONE),
-  ENCOUNTER_TYPE(
-      FhirResourceType.ENCOUNTER,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT, FhirSourceType.CONSTANT),
-      Cardinality.MANY,
-      false,
-      ValueTypes.TEXT),
-  ENCOUNTER_REASON(
-      FhirResourceType.ENCOUNTER,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT),
-      Cardinality.MANY,
-      false,
-      ValueTypes.TEXT),
+  /** One {@code Patient.identifier} per entry: the attribute value under its {@code system}. */
+  PATIENT_IDENTIFIER(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.IDENTIFIER),
+  /** {@code Patient.name[0].family}: the attribute value. */
+  PATIENT_FAMILY_NAME(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
+  /** {@code Patient.name[0].given[0]}: the attribute value. */
+  PATIENT_GIVEN_NAME(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
+  /** {@code Patient.gender}: the attribute value translated by the entry's {@code valueMap}. */
+  PATIENT_GENDER(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
+  /** {@code Patient.birthDate}: the attribute's date or age value. */
+  PATIENT_BIRTH_DATE(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.BIRTH_DATE),
+  /** One {@code Patient.telecom} with system {@code phone} per entry: the attribute value. */
+  PATIENT_PHONE(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.PHONE),
+  /** One {@code Patient.telecom} with system {@code email} per entry: the attribute value. */
+  PATIENT_EMAIL(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.EMAIL),
+  /** {@code Patient.address[0].text}: the attribute value. */
+  PATIENT_ADDRESS_TEXT(PATIENT, EnumSet.of(ATTRIBUTE), ONE, false, ValueTypes.TEXT),
+  /** {@code Encounter.class}: the entry's constant coding. */
+  ENCOUNTER_CLASS(ENCOUNTER, EnumSet.of(CONSTANT), ONE, true, ValueTypes.NONE),
+  /** {@code Encounter.type}: the constant coding, or the value as a code under {@code system}. */
+  ENCOUNTER_TYPE(ENCOUNTER, EnumSet.of(DATA_ELEMENT, CONSTANT), MANY, false, ValueTypes.TEXT),
+  /** One {@code Encounter.reasonCode.text} per entry: the data element value. */
+  ENCOUNTER_REASON(ENCOUNTER, EnumSet.of(DATA_ELEMENT), MANY, false, ValueTypes.TEXT),
+  /** {@code Immunization.status}: not-done when the value is false, otherwise completed. */
   IMMUNIZATION_ADMINISTERED(
-      FhirResourceType.IMMUNIZATION,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT),
-      Cardinality.ONE,
-      true,
-      ValueTypes.ADMINISTERED),
-  IMMUNIZATION_VACCINE_CODE(
-      FhirResourceType.IMMUNIZATION,
-      EnumSet.of(FhirSourceType.CONSTANT),
-      Cardinality.ONE,
-      true,
-      ValueTypes.NONE),
-  IMMUNIZATION_LOT_NUMBER(
-      FhirResourceType.IMMUNIZATION,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT),
-      Cardinality.ONE,
-      false,
-      ValueTypes.TEXT),
+      IMMUNIZATION, EnumSet.of(DATA_ELEMENT), ONE, true, ValueTypes.ADMINISTERED),
+  /** {@code Immunization.vaccineCode}: the entry's constant coding. */
+  IMMUNIZATION_VACCINE_CODE(IMMUNIZATION, EnumSet.of(CONSTANT), ONE, true, ValueTypes.NONE),
+  /** {@code Immunization.lotNumber}: the data element value. */
+  IMMUNIZATION_LOT_NUMBER(IMMUNIZATION, EnumSet.of(DATA_ELEMENT), ONE, false, ValueTypes.TEXT),
+  /** {@code Immunization.protocolApplied[0].doseNumber[x]}: the data element value. */
   IMMUNIZATION_DOSE_NUMBER(
-      FhirResourceType.IMMUNIZATION,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT),
-      Cardinality.ONE,
-      false,
-      ValueTypes.DOSE_NUMBER),
-  OBSERVATION_VALUE(
-      FhirResourceType.OBSERVATION,
-      EnumSet.of(FhirSourceType.DATA_ELEMENT),
-      Cardinality.MANY,
-      true,
-      ValueTypes.OBSERVATION);
+      IMMUNIZATION, EnumSet.of(DATA_ELEMENT), ONE, false, ValueTypes.DOSE_NUMBER),
+  /** {@code Observation.value[x]}: one Observation per entry, coded by the entry's coding. */
+  OBSERVATION_VALUE(OBSERVATION, EnumSet.of(DATA_ELEMENT), MANY, true, ValueTypes.OBSERVATION);
 
   /** How many entries of one target a single mapping may contain. */
   public enum Cardinality {

@@ -33,6 +33,8 @@ import static java.util.Map.entry;
 import static org.hisp.dhis.common.QueryOperator.*;
 import static org.hisp.dhis.common.ValueType.*;
 import static org.hisp.dhis.fhir.FhirTestFixtures.*;
+import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.genderFold;
+import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.genderKeyMatches;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
@@ -41,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.util.*;
+import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import org.hisp.dhis.common.*;
@@ -207,15 +210,6 @@ class FhirSearchTranslatorTest {
     assertInvalid(parameter, () -> call.accept(query), others);
   }
 
-  private static void assertOrBounds(String name, String element, Consumer<String> call) {
-    String copies = name + "=" + String.join(",", Collections.nCopies(100, element));
-    assertDoesNotThrow(() -> call.accept(copies));
-    String tooMany = assertInvalid(name, () -> call.accept(copies + "," + element));
-    assertTrue(tooMany.endsWith("must not contain more than 100 values"), tooMany);
-    String tooLong = assertInvalid(name, () -> call.accept(name + "=" + ",".repeat(4097)));
-    assertTrue(tooLong.endsWith("must not be longer than 4096 characters"), tooLong);
-  }
-
   private static void assertFilter(
       Map<UID, List<QueryFilter>> filters, String tea, QueryOperator operator, String... values) {
     List<QueryFilter> onAttribute = filters.getOrDefault(UID.of(tea), List.of());
@@ -275,19 +269,44 @@ class FhirSearchTranslatorTest {
 
   @Test
   void genderTranslatesThroughValueMap() throws BadRequestException {
-    assertFilter(patientFilters(FULL_MAPPING, "gender=male"), TEA_GENDER, EQ, "M");
-    assertFilter(patientFilters(FULL_MAPPING, "gender=other"), TEA_GENDER, IN, "O", "X");
-    assertFilter(patientFilters(FULL_MAPPING, "gender=male,female"), TEA_GENDER, IN, "M", "F");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=male"), TEA_GENDER, EQ, "m");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=other"), TEA_GENDER, IN, "o", "x");
+    assertFilter(patientFilters(FULL_MAPPING, "gender=male,female"), TEA_GENDER, IN, "m", "f");
     assertFalse(translatePatient(FULL_MAPPING, "gender=male").empty());
     TranslatedSearch unmapped = translatePatient(FULL_MAPPING, "gender=unknown&family=rain");
     assertTrue(unmapped.empty());
     assertEquals(Set.of(UID.of(TEA_FAMILY)), filters(unmapped.trackedEntityParams()).keySet());
-    for (var bad : List.of(Map.of("", "male"), Map.of("A;B", "male", "C", "male", "F", "female"))) {
-      ResolvedMapping invalid = genderMapping(bad);
-      assertThrows(IllegalArgumentException.class, () -> translatePatient(invalid, "gender=male"));
+    ResolvedMapping blank = genderMapping(Map.of("", "male"));
+    assertThrows(IllegalArgumentException.class, () -> translatePatient(blank, "gender=male"));
+    ResolvedMapping shared = genderMapping(Map.of("A;B", "male", "C", "male", "F", "female"));
+    assertInvalid(
+        "gender", () -> translatePatient(shared, "gender=male"), TEA_GENDER, "A;B", "a;b");
+    assertFilter(patientFilters(shared, "gender=female"), TEA_GENDER, EQ, "f");
+    ResolvedMapping separator = genderMapping(Map.of("A;B", "male", "F", "female"));
+    List<QueryFilter> single = patientFilters(separator, "gender=male").get(UID.of(TEA_GENDER));
+    assertEquals(List.of(new QueryFilter(EQ, "a;b")), single);
+    assertInvalid("gender", () -> translatePatient(separator, "gender=male,female"), TEA_GENDER);
+  }
+
+  @Test
+  void genderFilterMatchesTheValuesTheMapperMapsUnderEveryDefaultLocale() {
+    ResolvedMapping mapping = genderMapping(Map.of("ΟΔΟΣ", "unknown", "I", "male"));
+    Locale locale = Locale.getDefault();
+    try {
+      for (String tag : List.of("tr", "en")) {
+        Locale.setDefault(Locale.forLanguageTag(tag));
+        for (var code : Map.of("unknown", "ΟΔΟΣ", "male", "I").entrySet()) {
+          var params = translatePatient(mapping, "gender=" + code.getKey()).trackedEntityParams();
+          String operand = params.getFilter().split(":", 3)[2].toLowerCase();
+          for (String value : List.of("ΟΔΟΣ", "οδοσ", "οδος", "I", "i", "İ", "ı")) {
+            boolean mapped = genderKeyMatches(code.getValue(), value);
+            assertEquals(mapped, genderFold(value).equals(operand), tag + " " + value);
+          }
+        }
+      }
+    } finally {
+      Locale.setDefault(locale);
     }
-    ResolvedMapping unrequested = genderMapping(Map.of("A;B", "male", "F", "female"));
-    assertFilter(patientFilters(unrequested, "gender=female"), TEA_GENDER, EQ, "F");
   }
 
   @Test
@@ -419,12 +438,21 @@ class FhirSearchTranslatorTest {
     Consumer<String> observation = q -> translateEvents(OBSERVATION, q);
     assertOnlyNamed("_id", "patient=" + TE_1 + "&_count=5&_id=bad", encounter);
     assertOnlyNamed("_format", "patient=" + TE_1 + "&_page=2&_format=xml", observation);
-    Consumer<String> code = q -> observation.accept(q + "&patient=" + TE_1);
-    assertOrBounds("_id", TE_1, patient);
-    assertOrBounds("_id", ENCOUNTER_ID, encounter);
-    assertOrBounds("gender", "male", patient);
-    assertOrBounds("code", HEIGHT, code);
-    assertDoesNotThrow(() -> code.accept("code=" + "x".repeat(4096)));
+  }
+
+  @Test
+  void largeOrListsAreAccepted() throws BadRequestException {
+    List<String> ids = Stream.iterate(0, i -> i + 1).limit(500).map("Te%09d"::formatted).toList();
+    TranslatedSearch patients = translatePatient(FULL_MAPPING, "_id=" + String.join(",", ids));
+    assertEquals(UID.of(ids), patients.trackedEntityParams().getTrackedEntities());
+    List<String> encounters = ids.stream().limit(200).map(id -> id + "-" + EVT).toList();
+    TranslatedSearch events = translateEvents(ENCOUNTER, "_id=" + String.join(",", encounters));
+    assertEquals(200, events.enrollmentParams().getEnrollments().size());
+    assertEquals(Set.copyOf(encounters), events.logicalIds());
+    String genders = String.join(",", Collections.nCopies(150, "male,female"));
+    assertFilter(patientFilters(FULL_MAPPING, "gender=" + genders), TEA_GENDER, IN, "m", "f");
+    String codes = String.join(",", Collections.nCopies(200, LOINC + "|" + HEIGHT));
+    assertCodes("patient=" + TE_1 + "&code=" + codes, true, false);
   }
 
   @Test
@@ -444,7 +472,7 @@ class FhirSearchTranslatorTest {
     assertFilter(patientFilters(integer, "identifier=urn:test:int|42"), TEA_INTEGER, EQ, "42");
     ResolvedMapping shortGender = patientMapping(null, Map.of(), Map.of(TEA_GENDER, 2));
     assertOnlyNamed("gender", "gender=male&family=rain", q -> translatePatient(shortGender, q));
-    assertFilter(patientFilters(shortGender, "gender=other"), TEA_GENDER, IN, "O", "X");
+    assertFilter(patientFilters(shortGender, "gender=other"), TEA_GENDER, IN, "o", "x");
   }
 
   @Test

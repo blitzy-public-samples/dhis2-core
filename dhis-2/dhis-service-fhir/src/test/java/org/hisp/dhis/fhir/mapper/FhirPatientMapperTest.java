@@ -130,18 +130,19 @@ class FhirPatientMapperTest {
     ResolvedMapping dottedAndGreek = genderMapping(Map.of("i", "other", "οδοσ", "unknown"));
     assertEquals(OTHER, gender(dottedAndGreek, "İ"));
     assertEquals(UNKNOWN, gender(dottedAndGreek, "ΟΔΟΣ"));
-    ResolvedMapping capitalI = genderMapping(Map.of("I", "male"));
+    ResolvedMapping folded = genderMapping(Map.of("I", "male", "ΟΔΟΣ", "unknown"));
     Locale locale = Locale.getDefault();
     try {
-      Locale.setDefault(Locale.ENGLISH);
-      assertEquals(MALE, gender(capitalI, "i"));
-      assertNull(gender(capitalI, "ı"));
-      Locale.setDefault(Locale.forLanguageTag("tr"));
-      assertEquals(MALE, gender(capitalI, "ı"));
-      assertNull(gender(capitalI, "i"));
+      for (Locale current : List.of(Locale.ENGLISH, Locale.forLanguageTag("tr"))) {
+        Locale.setDefault(current);
+        List.of("I", "i", "İ").forEach(v -> assertEquals(MALE, gender(folded, v), v));
+        List.of("ΟΔΟΣ", "οδοσ").forEach(v -> assertEquals(UNKNOWN, gender(folded, v), v));
+        List.of("ı", "οδος").forEach(v -> assertNull(gender(folded, v), v));
+      }
     } finally {
       Locale.setDefault(locale);
     }
+    assertEquals(OTHER, gender(genderMapping(Map.of("M;F", "other")), "m;f"));
   }
 
   @Test

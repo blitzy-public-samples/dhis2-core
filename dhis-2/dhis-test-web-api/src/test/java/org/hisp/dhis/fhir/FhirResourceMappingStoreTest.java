@@ -117,13 +117,13 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
 
   /**
    * The partial unique indexes of table {@code fhirresourcemapping}: name | validator uniqueness
-   * key it enforces | blank-separated fragments of its normalised definition.
+   * key it enforces | key expressions | predicate, both in SQL.
    */
   private static final List<IndexContract> PARTIAL_INDEXES =
       """
-      ux_fhirresourcemapping_patient      | PATIENT                                | usingbtree(resourcetype)where (resourcetype)='patient'
-      ux_fhirresourcemapping_stage        | ENCOUNTER:{stage}, OBSERVATION:{stage} | usingbtree(resourcetype,programstageid)where (resourcetype)=any 'encounter','observation'
-      ux_fhirresourcemapping_immunization | IMMUNIZATION:{stage}:{administered DE} | usingbtree(programstageid,((jsonb_path_query_first(fieldmappings, @.target==immunization_administered .source')#>>'{}')))where (resourcetype)='immunization'
+      ux_fhirresourcemapping_patient      | PATIENT                                | resourcetype                 | resourcetype = 'PATIENT'
+      ux_fhirresourcemapping_stage        | ENCOUNTER:{stage}, OBSERVATION:{stage} | resourcetype, programstageid | resourcetype in ('ENCOUNTER', 'OBSERVATION')
+      ux_fhirresourcemapping_immunization | IMMUNIZATION:{stage}:{administered DE} | programstageid, (jsonb_path_query_first(fieldmappings, '$[*] ? (@.target == "IMMUNIZATION_ADMINISTERED").source') #>> '{}') | resourcetype = 'IMMUNIZATION'
       """
           .lines()
           .map(IndexContract::parse)
@@ -187,8 +187,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         constraintIndexes.put(row.constraintName(), row.constraintIndexDefinition());
       }
     }
-    Map<String, String> indexes = migratedIndexes();
-    Map<String, String> otherIndexes = new TreeMap<>(indexes);
+    Map<String, String> otherIndexes = migratedIndexes();
     PARTIAL_INDEXES.forEach(index -> otherIndexes.remove(index.name()));
     List<String> unmodelled =
         hbm.keySet().stream().filter(p -> !modelProperties.contains(p)).toList();
@@ -203,8 +202,21 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         () -> assertEquals(columns, migratedColumns()),
         () -> assertEquals(constraints, migratedConstraints()),
         () -> assertEquals(constraintIndexes, otherIndexes),
-        () ->
-            assertAll(PARTIAL_INDEXES.stream().map(i -> () -> i.assertIn(indexes.get(i.name())))));
+        () -> assertEquals(Map.of(), partialIndexMismatches(), "partial unique indexes"));
+  }
+
+  @Test
+  void partialIndexContractDetectsExtraPredicateDisjunctAndKeyExpression() {
+    Map<String, String> mismatches =
+        partialIndexMismatches(
+            """
+            drop index ux_fhirresourcemapping_patient, ux_fhirresourcemapping_stage;
+            create unique index ux_fhirresourcemapping_patient on fhirresourcemapping (resourcetype) where resourcetype = 'PATIENT' or resourcetype = 'OBSERVATION';
+            create unique index ux_fhirresourcemapping_stage on fhirresourcemapping (resourcetype, programstageid, name) where resourcetype in ('ENCOUNTER', 'OBSERVATION');
+            """);
+    Set<String> mutated = Set.of("ux_fhirresourcemapping_patient", "ux_fhirresourcemapping_stage");
+    assertEquals(mutated, mismatches.keySet(), mismatches::toString);
+    assertEquals(Map.of(), partialIndexMismatches(), "mutated indexes not rolled back");
   }
 
   @Test
@@ -297,16 +309,37 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
             + " where conrelid = 'fhirresourcemapping'::regclass and contype <> 'n'");
   }
 
-  /** Returns each index definition without schema, blanks, quotes and casts, in lower case. */
+  /** Returns each index definition as PostgreSQL renders it, without the schema. */
   private Map<String, String> migratedIndexes() {
+    return queryPairs(
+        "select indexname, replace(indexdef, ' ON ' || schemaname || '.', ' ON ')"
+            + " from pg_indexes where schemaname = current_schema() and tablename = ?",
+        TABLE);
+  }
+
+  /**
+   * Runs the statements and creates each contract index as {@code <name>_contract} in a rolled-back
+   * transaction, then returns each partial index whose definition differs from its contract index.
+   */
+  private Map<String, String> partialIndexMismatches(String... statements) {
+    TransactionTemplate rollback = newTransaction();
     Map<String, String> indexes =
-        queryPairs(
-            "select indexname, lower(replace(indexdef, ' ON ' || schemaname || '.', ' ON '))"
-                + " from pg_indexes where schemaname = current_schema() and tablename = ?",
-            TABLE);
-    indexes.replaceAll(
-        (name, def) -> def.replaceAll("[\\s\"]", "").replaceAll("::[a-z]+(\\[])?", ""));
-    return indexes;
+        rollback.execute(
+            status -> {
+              status.setRollbackOnly();
+              Arrays.stream(statements).forEach(jdbcTemplate::execute);
+              PARTIAL_INDEXES.forEach(i -> jdbcTemplate.execute(i.create(i.name() + "_contract")));
+              return migratedIndexes();
+            });
+    Map<String, String> mismatches = new TreeMap<>();
+    for (IndexContract index : PARTIAL_INDEXES) {
+      String name = index.name();
+      String expected = indexes.get(name + "_contract").replace(name + "_contract ", name + " ");
+      if (!expected.equals(indexes.get(name))) {
+        mismatches.put(name, index.uniquenessKey() + ": " + indexes.get(name) + " <> " + expected);
+      }
+    }
+    return mismatches;
   }
 
   private Map<String, String> queryPairs(String sql, Object... args) {
@@ -488,7 +521,8 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     }
 
     String constraintIndexDefinition() {
-      return "createuniqueindex%son%susingbtree(%s)".formatted(constraintName, TABLE, column);
+      return "CREATE UNIQUE INDEX %s ON %s USING btree (%s)"
+          .formatted(constraintName, TABLE, column);
     }
 
     /** Returns {@code "element column length nullable unique foreignKey"}. */
@@ -503,20 +537,17 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     }
   }
 
-  /** A partial unique index with the validator uniqueness key it enforces. */
-  private record IndexContract(String name, String uniquenessKey, List<String> fragments) {
+  /** A partial unique index with the validator uniqueness key it enforces, keys and predicate. */
+  private record IndexContract(String name, String uniquenessKey, String keys, String predicate) {
     static IndexContract parse(String line) {
       String[] cells = Arrays.stream(line.split("\\|")).map(String::strip).toArray(String[]::new);
-      assertEquals(3, cells.length, line);
-      return new IndexContract(cells[0], cells[1], List.of(cells[2].split(" ")));
+      assertEquals(4, cells.length, line);
+      return new IndexContract(cells[0], cells[1], cells[2], cells[3]);
     }
 
-    void assertIn(String definition) {
-      String description = name + " enforcing " + uniquenessKey + ": " + definition;
-      assertNotNull(definition, description);
-      assertTrue(definition.startsWith("createuniqueindex" + name), description);
-      List<String> absent = fragments.stream().filter(f -> !definition.contains(f)).toList();
-      assertEquals(List.of(), absent, description);
+    String create(String indexName) {
+      return "create unique index %s on %s (%s) where %s"
+          .formatted(indexName, TABLE, keys, predicate);
     }
   }
 }

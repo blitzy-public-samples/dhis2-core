@@ -156,6 +156,8 @@ class FhirTrackerReaderTest {
     List<String> configured = origin.configuredAttributeParameters();
     var none = new FhirSearchOrigin(origin.attributeToParameter(), List.of(), configured);
     assertInvalid(trackedEntityError(tooFew, none), "identifier, family, given", minimum);
+    var unconfigured = trackedEntityError(tooFew, FhirSearchOrigin.empty());
+    assertInvalid(unconfigured, "_id", minimum + NO_ATTRIBUTE_PARAMETERS);
   }
 
   @Test
@@ -192,7 +194,6 @@ class FhirTrackerReaderTest {
     assertNotSupported(trackedEntityError(blocked(FAMILY_TEA + "2"), origin), "Patient");
     var invalid = new IllegalQueryException("Query is not valid");
     assertNotSupported(trackedEntityError(invalid, origin), "Patient");
-    assertNotSupported(trackedEntityError(new IllegalQueryException(TOO_FEW), none), "Patient");
     assertNotSupported(enrollmentError(invalid, new EnrollmentRequestParams()), "Observation");
   }
 

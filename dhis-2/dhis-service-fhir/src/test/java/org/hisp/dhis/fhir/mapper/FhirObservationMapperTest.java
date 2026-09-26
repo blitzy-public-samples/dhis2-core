@@ -73,6 +73,7 @@ class FhirObservationMapperTest {
   private static final String DE_TEXT = "DeText00001";
   private static final String DE_BAD_NUMBER = "DeBadNumber";
   private static final String TEST_SYSTEM = "urn:dhis2:fhir-test:observation";
+  private static final String FULL_URL_BASE = "http://localhost/api/fhir/Observation/";
   private final FhirObservationMapper mapper = new FhirObservationMapper(new FhirValueConverter());
 
   @Test
@@ -185,12 +186,18 @@ class FhirObservationMapperTest {
     for (String source : List.of(ENR + "-" + EVT, ENR + "-" + EVT_2, ENR_2 + "-" + EVT_3)) {
       List.of(DE_HEIGHT, DE_BOOLEAN, DE_TEXT).forEach(de -> expected.add(source + "-" + de));
     }
-    assertEquals(expected, observations.stream().map(Observation::getIdPart).toList());
+    Bundle bundle = new Bundle().setType(Bundle.BundleType.SEARCHSET);
     for (Observation observation : observations) {
       String id = observation.getIdPart();
       var parsed = FhirLogicalId.parse(FhirResourceType.OBSERVATION, id);
       assertEquals(Optional.of(id), parsed.map(FhirLogicalId::compose));
+      var entry = bundle.addEntry().setFullUrl(FULL_URL_BASE + id).setResource(observation);
+      entry.getSearch().setMode(Bundle.SearchEntryMode.MATCH);
     }
+    List<Bundle.BundleEntryComponent> entries = bundle.getEntry();
+    assertEquals(expected, entries.stream().map(e -> e.getResource().getIdPart()).toList());
+    assertEquals(entries.size(), entries.stream().map(e -> e.getFullUrl()).distinct().count());
+    FhirR4Validation.assertValid(bundle);
   }
 
   @Test

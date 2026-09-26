@@ -238,17 +238,31 @@ class FhirResourceMappingServiceTest {
     List<FhirResourceMapping> usable = List.of(patient, observation, vaccineA, vaccineB);
     assertEquals(
         usable.stream().map(FhirResourceMapping::getUid).sorted().toList(), uids(resolved));
-    String text = textAttribute.getUid();
-    String integer = integerAttribute.getUid();
-    String number = numberDataElement.getUid();
-    String bool = booleanDataElement.getUid();
     verify(store, never()).getByResourceTypeNoAcl(any());
     verify(manager).getNoAcl(TrackedEntityType.class, Set.of(person.getUid()));
     verify(manager).getNoAcl(Program.class, Set.of(program.getUid()));
     verify(manager).getNoAcl(ProgramStage.class, Set.of(stageA.getUid(), stageB.getUid()));
-    verify(manager).getNoAcl(TrackedEntityAttribute.class, Set.of(text, integer));
-    Set<String> dataElements = Set.of(number, bool, trueOnly.getUid(), missing.getUid());
-    verify(manager).getNoAcl(DataElement.class, dataElements);
+    verify(manager, never()).getNoAcl(eq(TrackedEntityAttribute.class), anyCollection());
+    verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
+    verify(manager, never()).getNoAcl(any(), anyString());
+  }
+
+  @Test
+  void structurallyInvalidMappingIsDroppedBeforeItsMetadataIsLoaded() {
+    var realValidator = new FhirResourceMappingValidator(manager);
+    service = spy(new FhirResourceMappingService(store, realValidator, schemaService, manager));
+    FhirResourceMapping broken = encounter(uid(), programStage(uid(), program));
+    broken.getFieldMappings().get(0).setTarget(null);
+    FhirResourceMapping stray = observation(uid(), stageA);
+    List<FhirFieldMapping> entries = stray.getFieldMappings();
+    Stream.generate(() -> Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, uid()).code("c").build())
+        .limit(1000)
+        .forEach(entries::add);
+    when(store.getAllNoAcl()).thenReturn(List.of(broken, stray));
+    assertEquals(List.of(), service.resolveAll());
+    verify(service).logIgnored(List.of(broken.getUid()), List.of(ErrorCode.E4000, ErrorCode.E4000));
+    verify(manager).getNoAcl(ProgramStage.class, Set.of(stageA.getUid()));
+    verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
     verify(manager, never()).getNoAcl(any(), anyString());
   }
 

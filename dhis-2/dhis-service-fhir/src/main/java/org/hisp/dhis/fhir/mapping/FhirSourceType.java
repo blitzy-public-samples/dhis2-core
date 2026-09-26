@@ -31,7 +31,10 @@ package org.hisp.dhis.fhir.mapping;
 
 /** Where a mapped FHIR element takes its value from. */
 public enum FhirSourceType {
+  /** The value of the tracked entity attribute whose UID is the entry's {@code source}. */
   ATTRIBUTE,
+  /** The value of the program stage data element whose UID is the entry's {@code source}. */
   DATA_ELEMENT,
+  /** A fixed coding from {@code system}, {@code code} and {@code display}, with no source. */
   CONSTANT
 }

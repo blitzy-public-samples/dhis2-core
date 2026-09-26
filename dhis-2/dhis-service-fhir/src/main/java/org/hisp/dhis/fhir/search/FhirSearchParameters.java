@@ -67,8 +67,6 @@ public class FhirSearchParameters {
   public static final String CODE = "code";
   public static final int DEFAULT_COUNT = 50;
   public static final int DEFAULT_PAGE = 1;
-  public static final int MAX_OR_VALUES = 100;
-  public static final int MAX_OR_LENGTH = 4096;
   public static final Set<String> FORMATS =
       Set.of("json", "application/json", "application/fhir+json");
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
@@ -355,19 +353,6 @@ public class FhirSearchParameters {
 
   private static List<String> elements(String name, String value) {
     if (OR_PARAMETERS.contains(name)) {
-      if (value.length() > MAX_OR_LENGTH) {
-        throw FhirApiException.invalidParameter(
-            name, "must not be longer than " + MAX_OR_LENGTH + " characters");
-      }
-      int count = 1;
-      for (int separator = value.indexOf(OR_SEPARATOR);
-          separator >= 0;
-          separator = value.indexOf(OR_SEPARATOR, separator + 1)) {
-        if (++count > MAX_OR_VALUES) {
-          throw FhirApiException.invalidParameter(
-              name, "must not contain more than " + MAX_OR_VALUES + " values");
-        }
-      }
       List<String> elements = List.of(value.split(OR_SEPARATOR, -1));
       if (elements.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");

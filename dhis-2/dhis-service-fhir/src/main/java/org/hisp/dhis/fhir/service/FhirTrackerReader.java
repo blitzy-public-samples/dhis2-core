@@ -43,6 +43,7 @@ import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
+import org.hisp.dhis.fhir.search.FhirSearchParameters;
 import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.EnrollmentRequestParams;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.FhirEnrollmentExportAdapter;
@@ -62,6 +63,8 @@ public class FhirTrackerReader {
       "The value is not accepted by the mapped attribute";
   static final String ATTRIBUTE_NOT_SEARCHABLE =
       "The attribute cannot be searched outside the user's capture scope";
+  static final String NO_ATTRIBUTE_PARAMETERS =
+      " and none is configured, so " + FhirSearchParameters.ID + " is required";
   static final String SELECTOR_NOT_FOUND = "is specified but does not exist";
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
   private final FhirTrackedEntityExportAdapter trackedEntityAdapter;
@@ -208,16 +211,17 @@ public class FhirTrackerReader {
           origin.suppliedAttributeParameters().isEmpty()
               ? origin.configuredAttributeParameters()
               : origin.suppliedAttributeParameters();
-      if (!names.isEmpty()) {
-        log.debug(
-            "Tracked entity export requires at least {} attribute parameters, naming {} ({})",
-            minimum.group(1),
-            names,
-            exceptionName(exception));
-        return FhirApiException.invalidParameter(
-            String.join(PARAMETER_SEPARATOR, names),
-            "At least " + minimum.group(1) + " attribute search parameters are required");
-      }
+      String named =
+          names.isEmpty() ? FhirSearchParameters.ID : String.join(PARAMETER_SEPARATOR, names);
+      String required =
+          "At least " + minimum.group(1) + " attribute search parameters are required";
+      log.debug(
+          "Tracked entity export requires at least {} attribute parameters, naming {} ({})",
+          minimum.group(1),
+          named,
+          exceptionName(exception));
+      return FhirApiException.invalidParameter(
+          named, names.isEmpty() ? required + NO_ATTRIBUTE_PARAMETERS : required);
     }
     return unusableMapping(
         FhirResourceType.PATIENT, exception, params.getProgram(), params.getTrackedEntityType());

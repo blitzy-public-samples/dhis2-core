@@ -82,11 +82,10 @@
     </main>
     <script type="module">
       const API = location.pathname.replace(/fhirResourceMappings\/settings\/?$/, '');
-      const TIMEOUT_MS = 30000;
       const CHUNK_SIZE = 200;
-      const UNCERTAIN = 'No answer arrived within ' + TIMEOUT_MS / 1000 + ' seconds; the change may or may not have been saved.';
       const TEXTUAL = ['TEXT', 'LONG_TEXT', 'LETTER'];
       const INTEGERS = ['INTEGER', 'INTEGER_POSITIVE', 'INTEGER_NEGATIVE', 'INTEGER_ZERO_OR_POSITIVE'];
+      const QUANTITY = ['NUMBER', ...INTEGERS, 'PERCENTAGE', 'UNIT_INTERVAL'];
       const CODING = ['system', 'code', 'display'];
       const TARGETS = {
         PATIENT_IDENTIFIER: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {ATTRIBUTE: ['system']}, requiredInputs: ['system'],
@@ -142,22 +141,13 @@
         select.replaceChildren(options);
         unflag(select);
       }
-      const isMissing = (select) => Boolean(select.selectedOptions[0] && select.selectedOptions[0].hasAttribute('data-missing'));
-      function setValue(select, value, preserve) {
-        const wanted = text(value);
-        const known = Array.from(select.options).some((option) => option.value === wanted);
-        if (!known && preserve && wanted) {
-          select.appendChild(el('option', {value: wanted, 'data-missing': ''}, 'Unavailable: ' + wanted));
-          flag(select);
-        }
-        select.value = known || (preserve && wanted) ? wanted : '';
-      }
-      function missingChoices() {
-        return Array.from(form.querySelectorAll('select')).filter((select) => isMissing(select) && !select.closest('[hidden]')).map((select) => {
-          const row = select.closest('.mapping-row');
-          const label = (row ? row.firstChild.textContent + ', ' : '') + text(select.labels[0] && select.labels[0].textContent).replace(' (required)', '');
-          return label + ': "' + select.value + '" is not available; choose a value explicitly.';
-        });
+      function setValue(select, value, warnings) {
+        const wanted = text(value), known = Array.from(select.options).some((option) => option.value === wanted);
+        select.value = known ? wanted : '';
+        if (known || !wanted || !warnings || select.closest('[hidden]')) return;
+        if (select.required) form.noValidate = true;
+        const row = select.closest('.mapping-row');
+        warnings.push((row ? row.firstChild.textContent + ', ' : '') + text(select.labels[0] && select.labels[0].textContent).replace(' (required)', '') + ': "' + wanted + '"');
       }
       function csrfToken() {
         const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='));
@@ -168,13 +158,13 @@
         const headers = {Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(body === undefined ? {} : {'Content-Type': 'application/json'})};
         const token = method === 'GET' ? '' : csrfToken();
         if (token) headers['X-XSRF-TOKEN'] = token;
-        const init = {method, credentials: 'same-origin', headers, signal: AbortSignal.timeout(TIMEOUT_MS), body: body === undefined ? undefined : JSON.stringify(body)};
+        const init = {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body)};
         try {
           const response = await fetch(API + path, init);
           const json = (response.headers.get('Content-Type') || '').includes('json') ? parseJson(await response.text()) : null;
           return {status: response.status, ok: response.ok && !response.redirected, json};
         } catch (error) {
-          return {status: 0, ok: false, timedOut: error.name === 'TimeoutError' || error.name === 'AbortError', json: null};
+          return {status: 0, ok: false, json: null};
         }
       }
       const succeeded = (result) => result.ok && isObject(result.json) && result.json.status === 'OK';
@@ -184,14 +174,13 @@
         if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again and reload this page.'];
         if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
         if (json.message) return [text(json.message)];
-        if (result.timedOut) return ['No answer arrived within ' + TIMEOUT_MS / 1000 + ' seconds.'];
         if (result.status === 0) return ['The server could not be reached. Check the connection and try again.'];
         return [(result.status >= 200 && result.status < 300 ? 'Unexpected response' : 'Request failed') + ' (HTTP ' + result.status + ')'];
       }
       const showMessage = (message) => messages.replaceChildren(el('p', {}, message));
       const showError = (result) => showMessage('Error: ' + errorText(result).join('; '));
-      function showFormErrors(problems) {
-        formErrors.replaceChildren(el('p', {}, 'Error:'), el('ul'));
+      function showFormErrors(problems, heading = 'Error:') {
+        formErrors.replaceChildren(el('p', {}, heading), el('ul'));
         problems.forEach((message) => formErrors.lastChild.appendChild(el('li', {}, message)));
       }
       const guard = (handler) => async (...args) => {
@@ -274,21 +263,23 @@
         const stage = sourceType === 'DATA_ELEMENT' ? currentStage() : undefined;
         return list(stage && stage.programStageDataElements).map((link) => link.dataElement).filter(isObject);
       }
-      const rowInputs = (row) => (TARGETS[row.target.value] ? TARGETS[row.target.value].inputs[row.sourceType.value] || [] : []);
+      function rowInputs(row) {
+        const inputs = TARGETS[row.target.value] ? TARGETS[row.target.value].inputs[row.sourceType.value] || [] : [];
+        const source = inputs.includes('unit') ? sourceItems(row.sourceType.value).find((item) => item.id === row.source.value) : undefined;
+        return source && QUANTITY.includes(source.valueType) ? inputs : inputs.filter((key) => key !== 'unit');
+      }
       function rebuildSources(row) {
         const target = TARGETS[row.target.value];
         const selected = row.source.value;
-        const missing = isMissing(row.source);
         const items = target ? sourceItems(row.sourceType.value).filter((item) => target.valueTypes.includes(item.valueType)) : [];
         const placeholder = !target ? 'Select a target first' : items.length ? 'Select a source' : 'No compatible source available';
         fillSelect(row.source, placeholder, items.map((item) => [text(item.id), text(item.displayName)]));
-        setValue(row.source, selected, missing);
+        setValue(row.source, selected);
       }
-      const rebuildAllSources = () => state.rows.forEach(rebuildSources);
-      function updateRow(row) {
+      const rebuildAllSources = () => state.rows.forEach((row) => { rebuildSources(row); applyInputs(row); });
+      function applyInputs(row) {
         const target = TARGETS[row.target.value];
         const inputs = rowInputs(row);
-        row.sourceField.hidden = !WITH_SOURCE.includes(row.sourceType.value);
         Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
           const control = row.inputs[key];
           const required = inputs.includes(key) && target.requiredInputs.includes(key);
@@ -297,7 +288,11 @@
           control.label.textContent = labelText + (required ? ' (required)' : '');
         });
         row.valueMap.hidden = !inputs.includes('valueMap');
+      }
+      function updateRow(row) {
+        row.sourceField.hidden = !WITH_SOURCE.includes(row.sourceType.value);
         rebuildSources(row);
+        applyInputs(row);
       }
       function changeTarget(row) {
         const target = TARGETS[row.target.value];
@@ -306,13 +301,12 @@
         if (sources.length === 1) row.sourceType.value = sources[0];
         updateRow(row);
       }
-      function addPair(row, key, value) {
+      function addPair(row, key, value, warnings) {
         const id = row.id + '-vm' + ++state.pairCount;
         const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value'}), code: el('select', {id: id + '-code'}),
           remove: el('button', {type: 'button'}, 'Remove value')};
         pair.key.value = text(key);
         fillSelect(pair.code, null, GENDERS.map((gender) => [gender, gender]));
-        if (value !== undefined) setValue(pair.code, value, true);
         pair.remove.addEventListener('click', guard(() => {
           row.pairList = row.pairList.filter((other) => other !== pair);
           pair.node.remove();
@@ -322,6 +316,7 @@
         pair.node.append(field(id + '-value', 'DHIS2 value', pair.key).wrapper, field(id + '-code', 'FHIR gender', pair.code).wrapper, pair.remove);
         row.pairList.push(pair);
         row.pairs.appendChild(pair.node);
+        if (value !== undefined) setValue(pair.code, value, warnings);
         renumberPairs(row);
       }
       const renumberPairs = (row) => row.pairList.forEach((pair, index) => pair.remove.setAttribute('aria-label', 'Remove value ' + (index + 1)));
@@ -332,7 +327,7 @@
         });
       }
       const removeRows = () => { state.rows = []; rowsBox.replaceChildren(); };
-      function addRow(entry) {
+      function addRow(entry, warnings) {
         const id = 'fm' + ++state.rowCount;
         const row = {id, inputs: {}, pairList: [], fieldset: el('fieldset', {class: 'mapping-row'}), legend: el('legend'),
           target: el('select', {id: id + '-target'}), sourceType: el('select', {id: id + '-source-type'}),
@@ -352,6 +347,7 @@
         row.addPair.addEventListener('click', guard(() => addPair(row, '', undefined)));
         row.target.addEventListener('change', guard(() => changeTarget(row)));
         row.sourceType.addEventListener('change', guard(() => updateRow(row)));
+        row.source.addEventListener('change', guard(() => applyInputs(row)));
         row.remove.addEventListener('click', guard(() => {
           state.rows = state.rows.filter((other) => other !== row);
           row.fieldset.remove();
@@ -361,15 +357,16 @@
         state.rows.push(row);
         rowsBox.appendChild(row.fieldset);
         renumberRows();
-        setValue(row.target, entry.target, true);
+        setValue(row.target, entry.target, warnings);
         changeTarget(row);
         if (entry.sourceType) {
-          setValue(row.sourceType, entry.sourceType, true);
+          setValue(row.sourceType, entry.sourceType, warnings);
           updateRow(row);
         }
-        setValue(row.source, entry.source, true);
+        setValue(row.source, entry.source, warnings);
+        applyInputs(row);
         Object.entries(row.inputs).forEach(([key, control]) => { control.input.value = text(entry[key]); });
-        Object.entries(isObject(entry.valueMap) ? entry.valueMap : {}).forEach(([key, value]) => addPair(row, key, value));
+        Object.entries(isObject(entry.valueMap) ? entry.valueMap : {}).forEach(([key, value]) => addPair(row, key, value, warnings));
       }
       function entryOf(row) {
         const entry = {};
@@ -378,10 +375,7 @@
         if (row.sourceType.value) entry.sourceType = row.sourceType.value;
         if (WITH_SOURCE.includes(row.sourceType.value) && row.source.value) entry.source = row.source.value;
         Object.keys(TEXT_INPUTS).filter((key) => inputs.includes(key) && row.inputs[key].input.value.trim()).forEach((key) => { entry[key] = row.inputs[key].input.value.trim(); });
-        if (inputs.includes('valueMap')) {
-          const valueMap = Object.fromEntries(row.pairList.filter((pair) => pair.key.value.trim()).map((pair) => [pair.key.value, pair.code.value]));
-          if (Object.keys(valueMap).length > 0) entry.valueMap = valueMap;
-        }
+        if (inputs.includes('valueMap') && row.pairList.length > 0) entry.valueMap = Object.fromEntries(row.pairList.map((pair) => [pair.key.value, pair.code.value]));
         return entry;
       }
       const flag = (control) => { control.setAttribute('aria-invalid', 'true'); control.setAttribute('aria-describedby', 'fhir-form-errors'); };
@@ -410,7 +404,7 @@
         return body;
       }
       function formProblems() {
-        const problems = [...missingChoices(), ...duplicateKeys()];
+        const problems = duplicateKeys();
         if (state.programsPending) problems.unshift('Programs for the selected tracked entity type are still loading; wait for them before saving.');
         if (state.typesLoading) problems.unshift('Tracked entity types are still loading; wait for them before saving.');
         if (!nameInput.value.trim()) {
@@ -444,9 +438,6 @@
             showMessage('Saved mapping "' + name + '".');
             await loadMappings();
             resetForm();
-          } else if (result.timedOut) {
-            showFormErrors([UNCERTAIN + ' Your edits are kept; check the reloaded list before saving again.']);
-            guard(loadMappings)();
           } else {
             showFormErrors(errorText(result));
           }
@@ -467,7 +458,7 @@
         remove.addEventListener('click', guard(() => deleteMapping(mapping.id, name)));
         row.appendChild(el('th', {scope: 'row'}, name));
         [text(mapping.resourceType), reference(mapping.trackedEntityType), reference(mapping.program), reference(mapping.programStage),
-          Array.isArray(mapping.fieldMappings) ? String(mapping.fieldMappings.length) : 'Unknown'].forEach((value) => row.appendChild(el('td', {}, value)));
+          Array.isArray(mapping.fieldMappings) ? String(mapping.fieldMappings.length) : '0'].forEach((value) => row.appendChild(el('td', {}, value)));
         row.appendChild(el('td')).appendChild(actions);
         return row;
       }
@@ -495,7 +486,7 @@
       }
       async function editMapping(id) {
         if (state.saving) return;
-        const token = ++state.editLoad;
+        const token = ++state.editLoad, warnings = [];
         const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing');
         if (token !== state.editLoad) return;
         if (!result.ok || !isObject(result.json)) return showError(result);
@@ -504,27 +495,24 @@
         clearForm();
         state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing};
         nameInput.value = text(mapping.name);
-        setValue(resourceSelect, mapping.resourceType, true);
+        setValue(resourceSelect, mapping.resourceType, warnings);
         applyResourceType();
         byId('fhir-editing').textContent = 'Editing: ' + text(mapping.name);
         cancelButton.hidden = false;
-        setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id, true);
+        setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id, warnings);
         await loadPrograms(typeSelect.value);
         if (token !== state.editLoad) return;
-        setValue(programSelect, mapping.program && mapping.program.id, true);
+        setValue(programSelect, mapping.program && mapping.program.id, warnings);
         fillStages();
-        setValue(stageSelect, mapping.programStage && mapping.programStage.id, true);
-        mapping.fieldMappings.forEach((entry) => addRow(isObject(entry) ? entry : {}));
+        setValue(stageSelect, mapping.programStage && mapping.programStage.id, warnings);
+        mapping.fieldMappings.forEach((entry) => addRow(isObject(entry) ? entry : {}, warnings));
+        if (warnings.length > 0) showFormErrors(warnings, 'Warning: these stored values are not among the available choices and were left unselected. Saving sends the form as shown and the server decides whether the mapping is accepted.');
       }
       async function deleteMapping(id, name) {
         if (state.saving || !window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
         setSaving(true);
         try {
           const result = await api('DELETE', 'fhirResourceMappings/' + encodeURIComponent(id));
-          if (result.timedOut) {
-            showMessage('Error: ' + UNCERTAIN + ' Check the reloaded list.');
-            return guard(loadMappings)();
-          }
           if (!succeeded(result)) return showError(result);
           if (state.editing && state.editing.id === id) resetForm();
           showMessage('Deleted mapping "' + name + '".');
@@ -533,7 +521,7 @@
       }
       function clearForm() {
         state.editing = null;
-        form.querySelectorAll('option[data-missing]').forEach((option) => option.remove());
+        form.noValidate = false;
         form.querySelectorAll('[aria-invalid]').forEach(unflag);
         nameInput.value = '';
         resourceSelect.value = 'PATIENT';
@@ -559,10 +547,7 @@
       stageSelect.addEventListener('change', guard(rebuildAllSources));
       byId('fhir-add-row').addEventListener('click', guard(() => addRow({})));
       cancelButton.addEventListener('click', guard(() => { resetForm(); nameInput.focus(); }));
-      form.addEventListener('input', guard(({target}) => {
-        unflag(target);
-        if (target.tagName === 'SELECT') target.querySelectorAll('option[data-missing]:not(:checked)').forEach((option) => option.remove());
-      }));
+      form.addEventListener('input', guard(({target}) => unflag(target)));
       form.addEventListener('submit', guard(save));
       applyResourceType();
       guard(async () => {

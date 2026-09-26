@@ -30,12 +30,15 @@
 package org.hisp.dhis.fhir.mapping;
 
 import static java.util.stream.Collectors.joining;
+import static org.hisp.dhis.dxf2.webmessage.WebMessageUtils.error;
 
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.*;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.OpenApi;
+import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.query.GetObjectListParams;
 import org.hisp.dhis.webapi.controller.AbstractCrudController;
@@ -45,6 +48,7 @@ import org.springframework.web.bind.annotation.*;
 
 /** CRUD API for {@link FhirResourceMapping} metadata and host of the FHIR mapping settings page. */
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:metadata"})
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/fhirResourceMappings")
@@ -54,13 +58,21 @@ public class FhirResourceMappingController
   private final FhirResourceMappingValidator validator;
   private final FhirResourceMappingStore store;
 
-  /** Serves the FHIR mapping settings page as UTF-8 HTML that is never cached. */
+  /** Serves the settings page as uncached UTF-8 HTML, or a 500 web message when it is missing. */
   @OpenApi.Ignore
   @GetMapping(value = "/settings", produces = MediaType.TEXT_HTML_VALUE)
-  public void getSettingsPage(HttpServletResponse response) throws IOException {
-    response.setContentType("text/html;charset=UTF-8");
-    response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
-    try (InputStream page = new ClassPathResource(SETTINGS_PAGE).getInputStream()) {
+  public void getSettingsPage(HttpServletResponse response)
+      throws IOException, WebMessageException {
+    InputStream page;
+    try {
+      page = new ClassPathResource(SETTINGS_PAGE).getInputStream();
+    } catch (IOException ex) {
+      log.error("FHIR settings page {} could not be opened", SETTINGS_PAGE, ex);
+      throw new WebMessageException(error("The FHIR settings page is not available"));
+    }
+    try (page) {
+      response.setContentType("text/html;charset=UTF-8");
+      response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
       page.transferTo(response.getOutputStream());
     }
   }

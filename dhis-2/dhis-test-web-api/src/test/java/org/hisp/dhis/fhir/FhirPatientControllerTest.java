@@ -188,6 +188,23 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
+  void searchOutsideCaptureScopeWithoutConfiguredAttributeParametersNamesId() {
+    User user = userWithScope(OTHER_ORG_UNIT, ROOT_ORG_UNIT);
+    String entries =
+        GET(MAPPING_URL + "?fields=fieldMappings").content().get("fieldMappings").toJson();
+    String replace = "[{'op':'replace','path':'/fieldMappings','value':%s}]";
+    try {
+      patch(MAPPING_URL, replace.formatted("[]"));
+      asUser(user, () -> assertInvalid(PATIENT_PATH + "?_count=5", "_id"));
+      String byId = PATIENT_PATH + "?_id=" + SUMMER;
+      asUser(user, () -> assertEquals(List.of(SUMMER), entryIds(assertPatientSearchset(byId))));
+    } finally {
+      patch(MAPPING_URL, replace.formatted(entries));
+    }
+    assertFrankPatient(read(Patient.class, FRANK));
+  }
+
+  @Test
   void searchRejectsAttributeConstraintViolations() {
     String search = PATIENT_PATH + "?family=rain&";
     assertInvalid(search + "identifier=" + IDENTIFIER_SYSTEM + "|abc", "identifier");

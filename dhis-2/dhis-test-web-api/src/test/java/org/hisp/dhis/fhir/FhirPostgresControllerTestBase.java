@@ -61,10 +61,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ContextConfiguration;
 
 /**
- * Base of the FHIR controller tests on PostgreSQL with {@code fhir.api.enabled=true}. It imports
- * the Tracker fixtures and {@value #MAPPINGS_FILE} once and deletes every mapping afterwards. Each
- * test starts with public access {@value #DATA_READ} on the person type and both programs and
- * {@value #METADATA_ONLY} on the given-name attribute.
+ * Base of the FHIR controller tests on PostgreSQL with {@code fhir.api.enabled=true}. Once per
+ * class it deletes every mapping, imports the Tracker fixtures and {@value #MAPPINGS_FILE}, and
+ * deletes every mapping afterwards. Each test starts with public access {@value #DATA_READ} on the
+ * person type and both programs and {@value #METADATA_ONLY} on the given-name attribute. Its static
+ * helpers parse and assert FHIR responses for the H2-tier FHIR tests as well.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @ContextConfiguration(classes = FhirPostgresControllerTestBase.FhirApiEnabledConfig.class)

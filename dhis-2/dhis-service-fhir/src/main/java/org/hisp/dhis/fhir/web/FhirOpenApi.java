@@ -33,6 +33,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.*;
 import org.hisp.dhis.common.OpenApi;
 
+/** OpenAPI descriptions of the JSON responses and query parameters of the FHIR controllers. */
 final class FhirOpenApi {
   static final String FHIR_JSON = "application/fhir+json";
 

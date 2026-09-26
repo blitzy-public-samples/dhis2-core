@@ -43,6 +43,7 @@ public enum FhirResourceType {
     this.fhirType = fhirType;
   }
 
+  /** Returns the FHIR R4 resource type name, for example {@code Patient}. */
   public String fhirType() {
     return fhirType;
   }

@@ -63,7 +63,10 @@ public class FhirSearchTranslator {
   private static final int PATIENT_READ_PAGE_SIZE = 1;
   private final FhirSearchParameters parameters;
 
-  /** Translates a Patient search, throwing {@link FhirApiException} for a rejected filter. */
+  /**
+   * Translates a Patient search, filtering on the {@link FhirResourceMappingValidator#genderFold}
+   * of each mapped gender value, and throwing {@link FhirApiException} for a rejected filter.
+   */
   @Nonnull
   public TranslatedSearch toTrackedEntityParams(
       @Nonnull ParsedSearch parsed, @Nonnull ResolvedMapping mapping) {
@@ -257,28 +260,27 @@ public class FhirSearchTranslator {
       valueMap.forEach(
           (value, code) -> {
             if (value != null && code != null && genders.contains(code)) {
-              if (value.isBlank() || value.contains(QueryFilter.OPTION_SEP)) {
+              if (value.isBlank()) {
                 throw new IllegalArgumentException(
-                    "The "
-                        + PatientParameter.GENDER.target()
-                        + " entry for "
-                        + PatientParameter.GENDER
-                        + " maps an attribute value that is blank or contains '"
-                        + QueryFilter.OPTION_SEP
-                        + "' to "
-                        + code);
+                    PatientParameter.GENDER.target() + " maps a blank attribute value to " + code);
               }
-              values.add(value);
+              values.add(FhirResourceMappingValidator.genderFold(value));
             }
           });
     }
     if (values.isEmpty()) {
       return null;
     }
-    return values.size() == 1
-        ? new AttributeFilter(teaUid, QueryOperator.EQ, values.iterator().next())
-        : new AttributeFilter(
-            teaUid, QueryOperator.IN, String.join(QueryFilter.OPTION_SEP, values));
+    if (values.size() == 1) {
+      return new AttributeFilter(teaUid, QueryOperator.EQ, values.iterator().next());
+    }
+    if (values.stream().anyMatch(value -> value.contains(QueryFilter.OPTION_SEP))) {
+      throw FhirApiException.invalidParameter(
+          PatientParameter.GENDER.parameter(),
+          "matches attribute values that cannot be searched together");
+    }
+    return new AttributeFilter(
+        teaUid, QueryOperator.IN, String.join(QueryFilter.OPTION_SEP, values));
   }
 
   private static String attributeOf(PatientParameter parameter, ResolvedMapping mapping) {

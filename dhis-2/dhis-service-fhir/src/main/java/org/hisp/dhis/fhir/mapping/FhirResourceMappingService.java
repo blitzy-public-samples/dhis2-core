@@ -75,17 +75,17 @@ public class FhirResourceMappingService {
   }
 
   private List<ResolvedMapping> guard(List<FhirResourceMapping> stored) {
-    List<FhirResourceMapping> candidates = stored.stream().filter(Objects::nonNull).toList();
+    List<FhirResourceMapping> candidates =
+        stored.stream()
+            .filter(Objects::nonNull)
+            .filter(mapping -> accepted(mapping, validator.validateStructure(mapping)))
+            .toList();
     BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata =
         metadata(candidates);
     Map<String, List<FhirResourceMapping>> byKey = new LinkedHashMap<>();
     List<FhirResourceMapping> usable = new ArrayList<>();
     for (FhirResourceMapping mapping : candidates) {
-      List<ErrorReport> reports = validator.validate(mapping, List.of(), metadata);
-      if (!reports.isEmpty()) {
-        logIgnored(
-            escapedUids(List.of(mapping)),
-            reports.stream().map(ErrorReport::getErrorCode).toList());
+      if (!accepted(mapping, validator.validate(mapping, List.of(), metadata))) {
         continue;
       }
       String key = FhirResourceMappingValidator.uniquenessKey(mapping);
@@ -109,6 +109,14 @@ public class FhirResourceMappingService {
             Comparator.comparing(
                 ResolvedMapping::uid, Comparator.nullsLast(Comparator.naturalOrder())))
         .toList();
+  }
+
+  private boolean accepted(FhirResourceMapping mapping, List<ErrorReport> reports) {
+    if (!reports.isEmpty()) {
+      logIgnored(
+          escapedUids(List.of(mapping)), reports.stream().map(ErrorReport::getErrorCode).toList());
+    }
+    return reports.isEmpty();
   }
 
   void logIgnored(List<String> uids, List<ErrorCode> errorCodes) {
@@ -139,6 +147,10 @@ public class FhirResourceMappingService {
     return escaped.toString();
   }
 
+  /**
+   * Returns a lookup over no-ACL batch loads of the mappings' tracked entity types, programs and
+   * stages; attributes and data elements resolve only as members of those loaded owners.
+   */
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata(
       List<FhirResourceMapping> mappings) {
     Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded =
@@ -167,17 +179,23 @@ public class FhirResourceMappingService {
             .map(FhirResourceMapping::getProgramStage)
             .filter(Objects::nonNull)
             .map(ProgramStage::getUid));
-    load(
-        loaded,
-        TrackedEntityAttribute.class,
-        TrackedEntityAttribute::getUid,
-        sources(mappings, FhirSourceType.ATTRIBUTE));
-    load(
-        loaded,
-        DataElement.class,
-        DataElement::getUid,
-        sources(mappings, FhirSourceType.DATA_ELEMENT));
+    Map<String, IdentifiableObject> attributes = new HashMap<>();
+    Map<String, IdentifiableObject> dataElements = new HashMap<>();
+    for (Map<String, IdentifiableObject> owners : loaded.values()) {
+      for (IdentifiableObject owner : owners.values()) {
+        if (owner instanceof TrackedEntityType t && t.getTrackedEntityTypeAttributes() != null) {
+          putMembers(attributes, t.getTrackedEntityAttributes());
+        } else if (owner instanceof Program p && p.getProgramAttributes() != null) {
+          putMembers(attributes, p.getTrackedEntityAttributes());
+        } else if (owner instanceof ProgramStage s && s.getProgramStageDataElements() != null) {
+          putMembers(dataElements, s.getDataElements());
+        }
+      }
+    }
     return (klass, uid) -> {
+      if (klass == TrackedEntityAttribute.class || klass == DataElement.class) {
+        return (klass == DataElement.class ? dataElements : attributes).get(uid);
+      }
       Map<String, IdentifiableObject> byUid = loaded.get(klass);
       return byUid != null && byUid.containsKey(uid)
           ? byUid.get(uid)
@@ -204,14 +222,13 @@ public class FhirResourceMappingService {
     loaded.put(klass, byUid);
   }
 
-  private static Stream<String> sources(
-      List<FhirResourceMapping> mappings, FhirSourceType sourceType) {
-    return mappings.stream()
-        .map(FhirResourceMapping::getFieldMappings)
-        .filter(Objects::nonNull)
-        .flatMap(List::stream)
-        .filter(entry -> entry != null && entry.getSourceType() == sourceType)
-        .map(FhirFieldMapping::getSource);
+  private static void putMembers(
+      Map<String, IdentifiableObject> byUid, Collection<? extends IdentifiableObject> members) {
+    for (IdentifiableObject member : members) {
+      if (member != null && member.getUid() != null) {
+        byUid.put(member.getUid(), member);
+      }
+    }
   }
 
   private ResolvedMapping toResolved(
