@@ -50,7 +50,7 @@ class FhirLogicalIdTest {
   private static final Pattern R4_ID = Pattern.compile("[A-Za-z0-9\\-\\.]{1,64}");
 
   @Test
-  void composesEncounterAndPerDataElementIds() {
+  void composesAndParsesEncounterAndPerDataElementIds() {
     FhirLogicalId encounter = FhirLogicalId.encounter(ENR, EVT);
     FhirLogicalId perDataElement = FhirLogicalId.perDataElement(ENR, EVT, DE);
     for (FhirLogicalId id : List.of(encounter, perDataElement)) {
@@ -62,27 +62,13 @@ class FhirLogicalIdTest {
     assertEquals(ENCOUNTER_ID, encounter.compose());
     assertEquals(DE, perDataElement.dataElement());
     assertEquals(PER_DATA_ELEMENT_ID, perDataElement.compose());
-  }
-
-  @Test
-  void constructorRequiresEnrollmentAndAnEventForADataElement() {
+    assertEquals(Optional.of(encounter), FhirLogicalId.parse(ENCOUNTER, ENCOUNTER_ID));
+    for (FhirResourceType type : List.of(IMMUNIZATION, OBSERVATION)) {
+      assertEquals(Optional.of(perDataElement), FhirLogicalId.parse(type, PER_DATA_ELEMENT_ID));
+    }
     assertThrows(NullPointerException.class, () -> new FhirLogicalId(null, EVT, null));
     assertThrows(IllegalArgumentException.class, () -> new FhirLogicalId(ENR, null, DE));
     assertEquals(ENR, new FhirLogicalId(ENR, null, null).compose());
-  }
-
-  @Test
-  void parseRoundTripsComposedIds() {
-    Optional<FhirLogicalId> encounter = FhirLogicalId.parse(ENCOUNTER, ENCOUNTER_ID);
-    assertEquals(Optional.of(FhirLogicalId.encounter(ENR, EVT)), encounter);
-    for (FhirResourceType type : List.of(IMMUNIZATION, OBSERVATION)) {
-      Optional<FhirLogicalId> perDataElement = FhirLogicalId.parse(type, PER_DATA_ELEMENT_ID);
-      assertEquals(Optional.of(FhirLogicalId.perDataElement(ENR, EVT, DE)), perDataElement);
-    }
-  }
-
-  @Test
-  void parseRejectsMalformedIdsAndPatientOrMissingType() {
     for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
       assertTrue(FhirLogicalId.parse(type, null).isEmpty(), type::name);
       for (String id : malformedIds(type)) {
@@ -98,14 +84,13 @@ class FhirLogicalIdTest {
 
   private static List<String> malformedIds(FhirResourceType type) {
     List<String> segments = type == ENCOUNTER ? List.of(ENR, EVT) : List.of(ENR, EVT, DE);
-    String valid = String.join("-", segments);
+    String ok = String.join("-", segments);
     List<String> ids = new ArrayList<>(List.of("", ENR, String.join("-", ENR, EVT, DE, ENR)));
     ids.add(type == ENCOUNTER ? PER_DATA_ELEMENT_ID : ENCOUNTER_ID);
-    Collections.addAll(ids, ENR + "--" + EVT, "-" + valid, valid + "-", " " + valid, valid + " ");
-    Collections.addAll(ids, valid.replace('-', '_'), valid.replace('-', '.'));
-    Collections.addAll(
-        ids, valid.replace("-", ""), valid.substring(0, 12) + "-" + valid.substring(13));
-    ids.add(valid.substring(0, 11) + valid.charAt(12) + "-" + valid.substring(13));
+    Collections.addAll(ids, ENR + "--" + EVT, "-" + ok, ok + "-", " " + ok, ok + " ");
+    Collections.addAll(ids, ok.replace('-', '_'), ok.replace('-', '.'), ok.replace("-", ""));
+    ids.add(ok.substring(0, 12) + "-" + ok.substring(13));
+    ids.add(ok.substring(0, 11) + ok.charAt(12) + "-" + ok.substring(13));
     for (int position = 0; position < segments.size(); position++) {
       for (String malformed : MALFORMED_SEGMENTS) {
         List<String> corrupted = new ArrayList<>(segments);

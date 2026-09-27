@@ -53,11 +53,9 @@ import org.junit.jupiter.params.provider.*;
 
 /** Positive cases expect no reports; negative ones break one rule and expect only its code. */
 class FhirResourceMappingValidatorTest {
-  private static final String SYSTEM = "urn:test:id", LDAP = "ldap://directory.example.org/ids";
+  private static final String SYSTEM = "urn:test:id";
+  private static final String LDAP = "ldap://directory.example.org/ids";
   private static final Map<String, String> GENDER_MAP = Map.of("M", "male", "F", "female");
-  private static final Entry AMBULATORY =
-      Entry.constant(
-          ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
   private static final Set<ErrorCode> VALIDATOR_CODES =
       EnumSet.of(E4000, E4010, E4014, E4027, E5002, E5003);
   private static final Map<FhirTargetField, Set<ValueType>> ACCEPTED =
@@ -111,34 +109,16 @@ class FhirResourceMappingValidatorTest {
     }
   }
 
-  @Test
-  void validateWithoutLookupResolvesMetadataThroughManagerWithoutAcl() {
-    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
-    when(manager.getNoAcl(any(), anyString()))
-        .thenAnswer(call -> lookup.apply(call.getArgument(0), call.getArgument(1)));
-    assertEquals(List.of(), validator.validate(validMapping(ENCOUNTER), null));
-    verify(manager).getNoAcl(Program.class, program.getUid());
-    verify(manager).getNoAcl(ProgramStage.class, stage.getUid());
-  }
-
   @ParameterizedTest
   @CsvSource({
-    "PATIENT_FAMILY_NAME, fieldMappings",
-    "PATIENT_FAMILY_NAME, target",
-    "PATIENT_FAMILY_NAME, sourceType",
-    "PATIENT_FAMILY_NAME, source",
-    "PATIENT_IDENTIFIER, system",
-    "ENCOUNTER_CLASS, code",
-    "OBSERVATION_VALUE, code",
-    "PATIENT_FAMILY_NAME, resourceType",
-    "ENCOUNTER_CLASS, resourceType",
-    "PATIENT_FAMILY_NAME, trackedEntityType",
-    "ENCOUNTER_CLASS, trackedEntityType",
-    "ENCOUNTER_CLASS, program",
-    "IMMUNIZATION_VACCINE_CODE, program",
-    "OBSERVATION_VALUE, program",
-    "ENCOUNTER_CLASS, programStage",
-    "IMMUNIZATION_VACCINE_CODE, programStage",
+    "PATIENT_FAMILY_NAME, fieldMappings", "PATIENT_FAMILY_NAME, target",
+    "PATIENT_FAMILY_NAME, sourceType", "PATIENT_FAMILY_NAME, source",
+    "PATIENT_IDENTIFIER, system", "ENCOUNTER_CLASS, code",
+    "OBSERVATION_VALUE, code", "PATIENT_FAMILY_NAME, resourceType",
+    "ENCOUNTER_CLASS, resourceType", "PATIENT_FAMILY_NAME, trackedEntityType",
+    "ENCOUNTER_CLASS, trackedEntityType", "ENCOUNTER_CLASS, program",
+    "IMMUNIZATION_VACCINE_CODE, program", "OBSERVATION_VALUE, program",
+    "ENCOUNTER_CLASS, programStage", "IMMUNIZATION_VACCINE_CODE, programStage",
     "OBSERVATION_VALUE, programStage"
   })
   void entryWithoutPropertyIsMissingRequiredProperty(FhirTargetField target, String property) {
@@ -153,14 +133,10 @@ class FhirResourceMappingValidatorTest {
   }
 
   @Test
-  void targetOfAnotherResourceTypeIsNotSupported() {
+  void targetCatalogEnumNamesAndSourceReferencesFollowExpectedTables() {
     FhirResourceMapping mapping = validMapping(PATIENT);
     mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_HEIGHT_CODE, null).build());
     assertOnly(validate(mapping), E4010, "OBSERVATION_VALUE", "PATIENT");
-  }
-
-  @Test
-  void targetCatalogAndEnumNamesMatchExpectedTables() {
     List<String[]> rows = catalog().toList();
     assertEquals(rows.size(), FhirTargetField.values().length);
     for (FhirTargetField target : FhirTargetField.values()) {
@@ -175,22 +151,20 @@ class FhirResourceMappingValidatorTest {
     assertEquals("[PATIENT, ENCOUNTER, IMMUNIZATION, OBSERVATION]", Arrays.toString(types));
     List<String> fhirTypes = Stream.of(types).map(FhirResourceType::fhirType).toList();
     assertEquals(List.of("Patient", "Encounter", "Immunization", "Observation"), fhirTypes);
-  }
-
-  @Test
-  void sourceThatIsNotAUidIsInvalid() {
-    var mapping = withValue(PATIENT_FAMILY_NAME, "source", "not-a-uid");
+    for (IdentifiableObject source : List.of(strayTea, programTea, strayDe)) {
+      FhirTargetField target = source == strayDe ? ENCOUNTER_TYPE : PATIENT_FAMILY_NAME;
+      FhirResourceMapping m = withEntries(target, entry(target, source));
+      assertOnly(validate(m), E5002, source.getUID().getValue(), m.getUid(), target.name());
+    }
+    mapping = withValue(PATIENT_FAMILY_NAME, "source", "not-a-uid");
     assertOnly(validate(mapping), E4014, "not-a-uid", "source");
   }
 
   @ParameterizedTest
   @CsvSource({
-    "M, man, F, female, E4027, man",
-    "'  ', male, F, female, E4027, '  '",
-    "A;B, male, F, female, E4027, A;B",
-    "A;B, male, C, male, E4027, A;B",
-    "Ä, male, ä, female, E5003, ä",
-    "ΟΔΟΣ, other, οδοσ, female, E5003, οδοσ"
+    "M, man, F, female, E4027, man", "'  ', male, F, female, E4027, '  '",
+    "A;B, male, F, female, E4027, A;B", "A;B, male, C, male, E4027, A;B",
+    "Ä, male, ä, female, E5003, ä", "ΟΔΟΣ, other, οδοσ, female, E5003, οδοσ"
   })
   void genderValueMapOutsideAdministrativeGenderIsInvalid(
       String k1, String v1, String k2, String v2, ErrorCode code, String arg) {
@@ -200,19 +174,6 @@ class FhirResourceMappingValidatorTest {
     String[] args =
         code == E5003 ? new String[] {"valueMap", arg, id, id} : new String[] {arg, "valueMap"};
     assertOnly(validate(mapping), code, args);
-  }
-
-  @Test
-  void genderValueMapKeysFoldPerCodePointAndSeparatorKeyStandsAlone() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
-    var gender = entryOf(mapping, PATIENT_GENDER);
-    gender.setValueMap(Map.of("ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
-    assertEquals(List.of(), validate(mapping));
-    gender.setValueMap(Map.of("A;B", "male"));
-    assertEquals(List.of(), validate(mapping));
-    assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
-    assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
-    assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
   }
 
   @ParameterizedTest
@@ -244,10 +205,8 @@ class FhirResourceMappingValidatorTest {
 
   @ParameterizedTest
   @CsvSource({
-    "PATIENT, program",
-    "PATIENT, trackedEntityType",
-    "PATIENT, programStage",
-    "ENCOUNTER, programStage"
+    "PATIENT, program", "PATIENT, trackedEntityType",
+    "PATIENT, programStage", "ENCOUNTER, programStage"
   })
   void programOrStageOutsideItsScopeIsInvalidReference(FhirResourceType type, String property) {
     FhirResourceMapping mapping = validMapping(type);
@@ -256,19 +215,8 @@ class FhirResourceMappingValidatorTest {
       case "trackedEntityType" -> mapping.setProgram(otherTypeProgram);
       default -> mapping.setProgramStage(type == PATIENT ? stage : otherStage);
     }
-    IdentifiableObject reference =
-        property.equals("programStage") ? mapping.getProgramStage() : mapping.getProgram();
-    assertOnly(validate(mapping), E5002, reference.getUID().getValue(), mapping.getUid(), property);
-  }
-
-  @Test
-  void sourceOutsideTypeProgramOrStageIsInvalidReference() {
-    for (IdentifiableObject source : List.of(strayTea, programTea, strayDe)) {
-      FhirTargetField target = source == strayDe ? ENCOUNTER_TYPE : PATIENT_FAMILY_NAME;
-      FhirResourceMapping mapping = withEntries(target, entry(target, source));
-      assertOnly(
-          validate(mapping), E5002, source.getUID().getValue(), mapping.getUid(), target.name());
-    }
+    var ref = property.equals("programStage") ? mapping.getProgramStage() : mapping.getProgram();
+    assertOnly(validate(mapping), E5002, ref.getUID().getValue(), mapping.getUid(), property);
   }
 
   @ParameterizedTest
@@ -283,12 +231,6 @@ class FhirResourceMappingValidatorTest {
     assertOnly(reports, E5003, "resourceType", key, mapping.getUid(), OTHER_MAPPING);
     String message = reports.get(0).getMessage();
     assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
-  }
-
-  @Test
-  void immunizationWithDifferentAdministeredDataElementIsAllowed() {
-    var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
-    assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
   }
 
   @ParameterizedTest
@@ -313,31 +255,21 @@ class FhirResourceMappingValidatorTest {
   }
 
   @Test
-  void duplicateIdentifierSystemIsDuplicate() {
+  void duplicateSystemSourceAndDataElementAreDuplicateButFoldedGenderKeysAreNot() {
     FhirResourceMapping mapping =
         withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
     String id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "system", SYSTEM, id, id);
-  }
-
-  @Test
-  void attributeOnTwoPatientTargetsIsDuplicate() {
-    FhirResourceMapping mapping = validMapping(PATIENT);
+    mapping = validMapping(PATIENT);
     entryOf(mapping, PATIENT_GIVEN_NAME).setSource(textTea.getUid());
-    String id = mapping.getUid();
+    id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "source", textTea.getUid(), id, id);
-  }
-
-  @Test
-  void duplicateObservationDataElementIsDuplicate() {
-    FhirResourceMapping mapping = validMapping(OBSERVATION);
+    mapping = validMapping(OBSERVATION);
     mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_WEIGHT_CODE, null).build());
-    String id = mapping.getUid();
+    id = mapping.getUid();
     assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), id, id);
-  }
-
-  @Test
-  void uniquenessKeyPerResourceType() {
+    var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
+    assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
     assertEquals("PATIENT", uniquenessKey(validMapping(PATIENT)));
     assertEquals("ENCOUNTER:" + stage.getUid(), uniquenessKey(validMapping(ENCOUNTER)));
     assertEquals("OBSERVATION:" + stage.getUid(), uniquenessKey(validMapping(OBSERVATION)));
@@ -348,30 +280,32 @@ class FhirResourceMappingValidatorTest {
     assertNull(uniquenessKey(withValue(PATIENT_FAMILY_NAME, "resourceType", null)));
     assertNull(uniquenessKey(withValue(ENCOUNTER_CLASS, "programStage", null)));
     assertNull(uniquenessKey(withEntries(IMMUNIZATION_ADMINISTERED)));
+    mapping = validMapping(PATIENT);
+    var gender = entryOf(mapping, PATIENT_GENDER);
+    gender.setValueMap(Map.of("ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
+    assertEquals(List.of(), validate(mapping));
+    gender.setValueMap(Map.of("A;B", "male"));
+    assertEquals(List.of(), validate(mapping));
+    assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
+    assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
+    assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
   }
 
   @ParameterizedTest
   @CsvSource({
-    "OBSERVATION_VALUE, code, '8302-2 ', false",
-    "ENCOUNTER_CLASS, code, 'a  b', false",
-    "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', false",
-    "OBSERVATION_VALUE, code, 'a\u00a0b', false",
-    "ENCOUNTER_TYPE, system, 'urn:bad uri', false",
-    "ENCOUNTER_TYPE, system, codes/local, false",
-    "PATIENT_IDENTIFIER, system, urn:oid:1.02.3, false",
-    "OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, false",
-    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, true",
-    "ENCOUNTER_CLASS, system, http:foo, true",
-    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, true",
-    "PATIENT_IDENTIFIER, system, ftp://fhir.example.org/codes, true",
-    "OBSERVATION_VALUE, system, " + LDAP + ", true",
-    "OBSERVATION_VALUE, code, a b, true",
-    "ENCOUNTER_CLASS, code, \u00e4, true",
-    "PATIENT_IDENTIFIER, system, " + LDAP + ", true",
-    "ENCOUNTER_TYPE, system, https://fhir.example.org:8443/x, true",
-    "PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1, true",
-    "OBSERVATION_VALUE, system, urn:uuid:53fefa32-fcbb-4ff8-8a92-55ee120877b7, true"
+    "OBSERVATION_VALUE, code, '8302-2 ', false", "PATIENT_IDENTIFIER, system, " + LDAP + ", true",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.02.3, false", "ENCOUNTER_CLASS, code, 'a  b', false",
+    "ENCOUNTER_CLASS, system, http:foo, true", "OBSERVATION_VALUE, system, " + LDAP + ", true",
+    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, true", "ENCOUNTER_CLASS, code, \u00e4, true",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, true", "OBSERVATION_VALUE, code, a b, true",
+    "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', false", "OBSERVATION_VALUE, code, 'a\u00a0b', false",
+    "ENCOUNTER_TYPE, system, 'urn:bad uri', false", "ENCOUNTER_TYPE, system, codes/local, false"
   })
+  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, false")
+  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53fefa32-fcbb-4ff8-8a92-55ee120877b7, true")
+  @CsvSource("PATIENT_IDENTIFIER, system, ftp://fhir.example.org/codes, true")
+  @CsvSource("ENCOUNTER_TYPE, system, https://fhir.example.org:8443/x, true")
+  @CsvSource("PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1, true")
   void codeOrSystemFollowsR4CodeAndUriRules(
       FhirTargetField target, String property, String value, boolean valid) {
     List<ErrorReport> reports = validate(withValue(target, property, value));
@@ -383,12 +317,10 @@ class FhirResourceMappingValidatorTest {
   }
 
   @ParameterizedTest
-  @CsvSource({
-    "entries, fieldMappings, size 501 > 500",
-    "pairs, valueMap, size 101 > 100",
-    "total, fieldMappings, length 100001 > 100000",
-    "text, source system code display unit valueMap.key valueMap.value, length 1025 > 1024"
-  })
+  @CsvSource({"entries, fieldMappings, size 501 > 500", "pairs, valueMap, size 101 > 100"})
+  @CsvSource("total, fieldMappings, length 100001 > 100000")
+  @CsvSource(
+      "text, source system code display unit valueMap.key valueMap.value, length 1025 > 1024")
   void mappingOverASizeBoundGetsOnlyThatReport(String bound, String properties, String value) {
     for (String property : properties.split(" ")) {
       assertEquals(List.of(), validate(sized(bound, property, 0)), property);
@@ -410,6 +342,12 @@ class FhirResourceMappingValidatorTest {
     entryOf(mapping, ENCOUNTER_TYPE).setTarget(null);
     assertOnly(validator.validateStructure(mapping), E4000, "target");
     verifyNoInteractions(manager);
+    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
+    when(manager.getNoAcl(any(), anyString()))
+        .thenAnswer(call -> lookup.apply(call.getArgument(0), call.getArgument(1)));
+    assertEquals(List.of(), validator.validate(validMapping(ENCOUNTER), null));
+    verify(manager).getNoAcl(Program.class, program.getUid());
+    verify(manager).getNoAcl(ProgramStage.class, stage.getUid());
   }
 
   private <T extends IdentifiableObject> T register(T object) {
@@ -515,10 +453,8 @@ class FhirResourceMappingValidatorTest {
   }
 
   private static FhirFieldMapping entryOf(FhirResourceMapping mapping, FhirTargetField target) {
-    return mapping.getFieldMappings().stream()
-        .filter(entry -> entry.getTarget() == target)
-        .findFirst()
-        .orElseThrow();
+    var matching = mapping.getFieldMappings().stream().filter(e -> e.getTarget() == target);
+    return matching.findFirst().orElseThrow();
   }
 
   private static Entry entry(FhirTargetField target, IdentifiableObject source) {

@@ -31,7 +31,6 @@ package org.hisp.dhis.fhir;
 
 import static org.awaitility.Awaitility.await;
 import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
-import static org.hisp.dhis.fhir.FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -39,41 +38,43 @@ import static org.springframework.transaction.support.TransactionSynchronization
 
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.servlet.Filter;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.*;
 import javax.sql.DataSource;
 import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.http.HttpStatus;
+import org.hisp.dhis.test.config.PostgresDhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.json.domain.JsonWebMessage;
+import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.filter.*;
 import org.hl7.fhir.r4.model.Bundle;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockFilterConfig;
+import org.springframework.security.core.context.*;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-/**
- * Tests FHIR R4 requests on the test thread: four successful requests sent with and without the
- * production {@link ConditionalOpenEntityManagerInViewFilter}, and an expired-deadline and a
- * disabled-route request sent behind it. Each request unbinds any test-thread {@code EntityManager}
- * and rebinds it afterwards only when one was bound.
- */
+/** Tests FHIR requests with and without the open-EntityManager-in-view filter on a small pool. */
+@ContextConfiguration(classes = FhirRequestLifecycleTest.SmallPoolConfig.class)
 class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
+  private static final int POOL_SIZE = 10;
   private static final String PATIENT_READ = "/api/fhir/Patient/" + FRANK;
-  private static final String PATIENT_EVERYTHING = PATIENT_READ + "/$everything";
+  private static final String EVERYTHING = PATIENT_READ + "/$everything";
+  private static final String OBSERVATION_SEARCH = "/api/fhir/Observation?patient=" + FRANK;
   private static final List<String> FHIR_REQUESTS =
-      List.of(
-          PATIENT_READ,
-          "/api/fhir/Patient?family=rain",
-          "/api/fhir/Observation?patient=" + FRANK,
-          PATIENT_EVERYTHING);
+      List.of(PATIENT_READ, "/api/fhir/Patient?family=rain", OBSERVATION_SEARCH, EVERYTHING);
 
   @MockitoSpyBean private FhirResourceSerializer serializer;
+  @MockitoSpyBean private TrackerExportTimeout trackerExportTimeout;
   @Autowired private EntityManagerFactory entityManagerFactory;
   @Autowired private RequestIdFilter requestIdFilter;
   @Autowired private ApiVersionFilter apiVersionFilter;
@@ -81,6 +82,19 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   private ConditionalOpenEntityManagerInViewFilter openInViewFilter;
   private MockMvc withFilter;
   private MockMvc withoutFilter;
+
+  public static class SmallPoolConfig {
+    @Bean
+    public DhisConfigurationProvider dhisConfigurationProvider() {
+      Properties override = new Properties();
+      override.put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
+      override.put(ConfigurationKey.CONNECTION_POOL_MAX_SIZE.getKey(), String.valueOf(POOL_SIZE));
+      override.put(ConfigurationKey.CONNECTION_POOL_TIMEOUT.getKey(), "20000");
+      PostgresDhisConfigurationProvider provider = new PostgresDhisConfigurationProvider(null);
+      provider.addProperties(override);
+      return provider;
+    }
+  }
 
   @BeforeEach
   void setUpChains() throws Exception {
@@ -118,8 +132,7 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
         for (MockMvc chain : List.of(withFilter, withoutFilter)) {
           states.clear();
           fhirBody(perform(chain, path), HttpStatus.OK);
-          List<Boolean> boundAndInTransaction = List.of(chain == withFilter, false);
-          assertEquals(List.of(boundAndInTransaction), states, path);
+          assertEquals(List.of(List.of(chain == withFilter, false)), states, path);
         }
       }
     } finally {
@@ -141,20 +154,13 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   @Test
   void expiredDeadlineAnswersPlatformTimeoutBehindOpenEntityManagerInView() throws Exception {
     int baseline = activeConnections();
-    HttpResponse response;
     DeadlineHolder.set(Deadline.in(Duration.ZERO));
     try {
-      response = perform(withFilter, PATIENT_EVERYTHING);
+      platformTimeout(perform(withFilter, EVERYTHING), EVERYTHING);
     } finally {
       DeadlineHolder.clear();
     }
-    JsonWebMessage message = response.content(HttpStatus.GATEWAY_TIMEOUT).as(JsonWebMessage.class);
-    MediaType contentType = MediaType.parseMediaType(response.getContentType());
-    assertFalse(contentType.equalsTypeAndSubtype(FHIR_JSON_MEDIA_TYPE), contentType::toString);
-    assertTrue(contentType.isCompatibleWith(MediaType.APPLICATION_JSON), contentType::toString);
-    assertEquals(504, message.getHttpStatusCode());
-    assertEquals("ERROR", message.getStatus());
-    assertConnectionsReturnTo(baseline, PATIENT_EVERYTHING);
+    assertConnectionsReturnTo(baseline, EVERYTHING);
   }
 
   @Test
@@ -162,40 +168,111 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
     Filter security = webApplicationContext.getBean("springSecurityFilterChain", Filter.class);
     MockMvc disabledChain = chain(openInViewFilter, security, requestIdFilter, apiVersionFilter);
     int baseline = activeConnections();
-    HttpResponse response;
     String flag = ConfigurationKey.FHIR_API_ENABLED.getKey();
     config.getProperties().setProperty(flag, "false");
     try {
-      response = perform(disabledChain, PATIENT_READ);
+      assertNotFound(perform(disabledChain, PATIENT_READ));
     } finally {
       config.getProperties().setProperty(flag, "true");
     }
-    assertNotFound(response);
     assertConnectionsReturnTo(baseline, PATIENT_READ);
+  }
+
+  @Test
+  void concurrentRequestsBeyondFreeConnectionsAllSucceedBehindOpenEntityManagerInView()
+      throws Exception {
+    List<String> paths = new ArrayList<>(FHIR_REQUESTS);
+    paths.addAll(FHIR_REQUESTS);
+    int baseline = activeConnections();
+    assertEquals(POOL_SIZE, hikari("getMaximumPoolSize"));
+    List<Connection> held = new ArrayList<>();
+    ExecutorService executor = Executors.newFixedThreadPool(paths.size());
+    try {
+      await().atMost(Duration.ofSeconds(10)).until(() -> holdAllButOne(held));
+      SecurityContext context = SecurityContextHolder.getContext();
+      CountDownLatch ready = new CountDownLatch(paths.size());
+      CountDownLatch release = new CountDownLatch(1);
+      List<Future<HttpResponse>> responses = new ArrayList<>();
+      for (String path : paths)
+        responses.add(
+            executor.submit(
+                () -> {
+                  SecurityContextHolder.setContext(context);
+                  try {
+                    ready.countDown();
+                    assertTrue(release.await(30, TimeUnit.SECONDS), "requests released");
+                    return perform(withFilter, path);
+                  } finally {
+                    SecurityContextHolder.clearContext();
+                  }
+                }));
+      assertTrue(ready.await(30, TimeUnit.SECONDS), "every request thread is ready");
+      release.countDown();
+      for (int i = 0; i < paths.size(); i++) {
+        HttpResponse response = responses.get(i).get(2, TimeUnit.MINUTES);
+        assertTrue(fhirBody(response, HttpStatus.OK).contains(FRANK), paths.get(i));
+      }
+    } finally {
+      executor.shutdownNow();
+      for (Connection connection : held) connection.close();
+      assertTrue(executor.awaitTermination(1, TimeUnit.MINUTES), "request threads end");
+    }
+    assertConnectionsReturnTo(baseline, "concurrent requests");
+  }
+
+  @Test
+  void queryTimeoutDuringMappingResolutionAnswersPlatformTimeout() throws Exception {
+    doAnswer(i -> Deadline.in(Duration.ofSeconds(1))).when(trackerExportTimeout).newDeadline();
+    int baseline = activeConnections();
+    try (Connection lock = dataSource().getConnection()) {
+      lock.setAutoCommit(false);
+      try (Statement statement = lock.createStatement()) {
+        statement.execute("set local lock_timeout = '10s'");
+        statement.execute("lock table fhirresourcemapping in access exclusive mode");
+        for (String path : List.of(PATIENT_READ, OBSERVATION_SEARCH, EVERYTHING)) {
+          JsonWebMessage message = platformTimeout(perform(withFilter, path), path);
+          assertEquals("Request exceeded its time budget of 1s", message.getMessage(), path);
+        }
+      } finally {
+        lock.rollback();
+      }
+    } finally {
+      reset(trackerExportTimeout);
+    }
+    assertConnectionsReturnTo(baseline, "mapping resolution timed out");
+  }
+
+  private static JsonWebMessage platformTimeout(HttpResponse response, String path) {
+    JsonWebMessage message = response.content(HttpStatus.GATEWAY_TIMEOUT).as(JsonWebMessage.class);
+    MediaType contentType = MediaType.parseMediaType(response.getContentType());
+    assertTrue(contentType.isCompatibleWith(MediaType.APPLICATION_JSON), path);
+    assertEquals(504, message.getHttpStatusCode(), path);
+    assertEquals("ERROR", message.getStatus(), path);
+    return message;
+  }
+
+  private boolean holdAllButOne(List<Connection> held) throws Exception {
+    while (activeConnections() < POOL_SIZE - 1) held.add(dataSource().getConnection());
+    return activeConnections() == POOL_SIZE - 1;
   }
 
   private MockMvc chain(Filter... filters) {
     return MockMvcBuilders.webAppContextSetup(webApplicationContext).addFilters(filters).build();
   }
 
-  /** Sends {@code GET path} and asserts that the request leaves no {@code EntityManager} bound. */
   private HttpResponse perform(MockMvc chain, String path) throws Exception {
     Object testEntityManager = unbindResourceIfPossible(entityManagerFactory);
     try {
-      HttpResponse response =
-          new HttpResponse(
-              toResponse(chain.perform(get(path).session(session)).andReturn().getResponse()));
+      var result = chain.perform(get(path).session(session)).andReturn().getResponse();
+      HttpResponse response = new HttpResponse(toResponse(result));
       assertFalse(hasResource(entityManagerFactory), "EntityManager left bound after " + path);
       return response;
     } finally {
       unbindResourceIfPossible(entityManagerFactory);
-      if (testEntityManager != null) {
-        bindResource(entityManagerFactory, testEntityManager);
-      }
+      if (testEntityManager != null) bindResource(entityManagerFactory, testEntityManager);
     }
   }
 
-  /** Waits, bounded, until the pool's active connection count equals {@code baseline}. */
   private void assertConnectionsReturnTo(int baseline, String description) {
     await()
         .atMost(Duration.ofSeconds(10))
@@ -203,11 +280,16 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   }
 
   private int activeConnections() throws Exception {
-    DataSource dataSource = webApplicationContext.getBean("actualDataSource", DataSource.class);
-    Class<?> dataSourceType = Class.forName("com.zaxxer.hikari.HikariDataSource");
-    Class<?> poolType = Class.forName("com.zaxxer.hikari.HikariPoolMXBean");
-    Object pool =
-        dataSourceType.getMethod("getHikariPoolMXBean").invoke(dataSource.unwrap(dataSourceType));
-    return (int) poolType.getMethod("getActiveConnections").invoke(pool);
+    return (int) hikari("getHikariPoolMXBean", "getActiveConnections");
+  }
+
+  private Object hikari(String... getters) throws Exception {
+    Object target = dataSource().unwrap(Class.forName("com.zaxxer.hikari.HikariDataSource"));
+    for (String getter : getters) target = target.getClass().getMethod(getter).invoke(target);
+    return target;
+  }
+
+  private DataSource dataSource() {
+    return webApplicationContext.getBean("actualDataSource", DataSource.class);
   }
 }

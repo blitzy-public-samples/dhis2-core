@@ -42,8 +42,7 @@ import java.time.Instant;
 import java.util.*;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.event.EventStatus;
-import org.hisp.dhis.fhir.FhirR4Validation;
-import org.hisp.dhis.fhir.FhirTestFixtures;
+import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
@@ -62,11 +61,11 @@ class FhirImmunizationMapperTest {
   private static final String DE_LOT = uid();
   private static final String DE_DOSE = uid();
   private static final String DE_OTHER = uid();
+  private static final String LOT = "LOT-42";
+  private static final String OTHER_VALUE = "other-distinctive-value";
   private static final Map<String, ValueType> VALUE_TYPES =
       Map.of(DE_ADMINISTERED, BOOLEAN, DE_TEXT, TEXT, DE_LOT, TEXT, DE_DOSE, TEXT, DE_OTHER, TEXT);
   private static final Instant UPDATED_AT = Instant.parse("2024-03-12T08:30:45.123Z");
-  private static final String LOT = "LOT-42";
-  private static final String OTHER_VALUE = "other-distinctive-value";
   private final FhirImmunizationMapper mapper =
       new FhirImmunizationMapper(new FhirValueConverter());
 
@@ -88,6 +87,28 @@ class FhirImmunizationMapperTest {
             Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, CVX_DISPLAY),
             Entry.field(IMMUNIZATION_LOT_NUMBER, DATA_ELEMENT, DE_LOT),
             Entry.field(IMMUNIZATION_DOSE_NUMBER, DATA_ELEMENT, DE_DOSE)));
+    Event given = completed(administered("true"));
+    Event noUid =
+        FhirTestFixtures.event(
+            null, STAGE, EventStatus.COMPLETED, OCCURRED, null, UPDATED_AT, administered("true"));
+    Enrollment enr = enrollment(ENR, TE, PROGRAM);
+    Enrollment noEnr = enrollment(null, TE, PROGRAM);
+    Enrollment noTe = enrollment(ENR, null, PROGRAM);
+    ResolvedMapping full = fullMapping();
+    Object[][] rows = {
+      {"enrollment", null, given, full}, {"event", enr, null, full},
+      {"mapping", enr, given, null}, {"event UID", enr, noUid, full},
+      {"enrollment UID", noEnr, given, full}, {"enrollment tracked entity UID", noTe, given, full}
+    };
+    for (Object[] r : rows) {
+      var thrown =
+          assertThrows(
+              NullPointerException.class,
+              () -> mapper.map((Enrollment) r[1], (Event) r[2], (ResolvedMapping) r[3], true));
+      assertEquals(r[0] + " must not be null", thrown.getMessage());
+    }
+    noUid.setOccurredAt(null);
+    assertTrue(mapper.map(enrollment(null, null, PROGRAM), noUid, full, true).isEmpty());
   }
 
   @Test
@@ -151,9 +172,8 @@ class FhirImmunizationMapperTest {
     DataValue dose = dataValue(DE_DOSE, "DOSE-UNMAPPED");
     Event event = completed(administered("true"), lot, dose, dataValue(DE_OTHER, OTHER_VALUE));
     assertSuppressed(event, mapping());
-    ResolvedMapping administeredOnly =
-        mapping(Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_ADMINISTERED));
-    Immunization immunization = mapPresent(event, administeredOnly, false);
+    var only = mapping(Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_ADMINISTERED));
+    Immunization immunization = mapPresent(event, only, false);
     var populated = immunization.children().stream().filter(Property::hasValues);
     var names = populated.map(Property::getName).collect(toSet());
     assertEquals(Set.of("id", "meta", "occurrence[x]", "patient", "status"), names);
@@ -178,33 +198,6 @@ class FhirImmunizationMapperTest {
     assertEquals(NOTDONE, notDone.getStatus());
     assertInstanceOf(StringType.class, doseNumber(notDone));
     FhirR4Validation.assertValid(notDone);
-  }
-
-  @Test
-  void nullArgumentsAndIdentityUidsAreRejectedWithNamedMessages() {
-    Event given = completed(administered("true"));
-    Event noUid =
-        FhirTestFixtures.event(
-            null, STAGE, EventStatus.COMPLETED, OCCURRED, null, UPDATED_AT, administered("true"));
-    Enrollment enr = enrollment(ENR, TE, PROGRAM);
-    ResolvedMapping full = fullMapping();
-    Object[][] rows = {
-      {"enrollment", null, given, full},
-      {"event", enr, null, full},
-      {"mapping", enr, given, null},
-      {"enrollment UID", enrollment(null, TE, PROGRAM), given, full},
-      {"event UID", enr, noUid, full},
-      {"enrollment tracked entity UID", enrollment(ENR, null, PROGRAM), given, full}
-    };
-    for (Object[] r : rows) {
-      var thrown =
-          assertThrows(
-              NullPointerException.class,
-              () -> mapper.map((Enrollment) r[1], (Event) r[2], (ResolvedMapping) r[3], true));
-      assertEquals(r[0] + " must not be null", thrown.getMessage());
-    }
-    noUid.setOccurredAt(null);
-    assertTrue(mapper.map(enrollment(null, null, PROGRAM), noUid, full, true).isEmpty());
   }
 
   private Optional<Immunization> map(Event event, ResolvedMapping mapping, boolean withEncounter) {

@@ -29,10 +29,11 @@
  */
 package org.hisp.dhis.fhir;
 
+import static org.hisp.dhis.fhir.mapping.FhirTargetField.ENCOUNTER_CLASS;
+
 import java.time.Instant;
 import java.util.*;
 import java.util.function.BiFunction;
-import java.util.stream.Collectors;
 import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
 import org.hisp.dhis.event.EventStatus;
@@ -40,13 +41,14 @@ import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.program.*;
 import org.hisp.dhis.trackedentity.*;
+import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
 
 /**
- * Enrollment, metadata and uid-less {@code resolved} builders use timestamps {@link #UPDATED};
- * tracked entity, event and {@code resolved(uid, ...)} keep the given ones. {@link #uid()} and
- * uid-less {@code resolved} use a new random UID. Builders other than {@code resolved} store new
- * mutable collections and {@code null} scalars as given, and reject a {@code null} varargs array.
+ * Enrollment, metadata and {@code resolved} builders use timestamps {@link #UPDATED}; tracked
+ * entity and event keep the given ones. {@link #uid()} and {@code resolved} use a new random UID.
+ * Builders other than {@code resolved} store new mutable collections and {@code null} scalars as
+ * given, and reject a {@code null} varargs array.
  */
 public final class FhirTestFixtures {
   public static final Instant UPDATED = Instant.parse("2024-03-15T10:15:30Z");
@@ -61,12 +63,15 @@ public final class FhirTestFixtures {
   public static final String CVX_DISPLAY = "MMR";
   public static final String LOINC_SYSTEM = "http://loinc.org";
   public static final String LOINC_BODY_HEIGHT_CODE = "8302-2";
-  public static final String LOINC_BODY_HEIGHT_DISPLAY = "Body height";
   public static final String BODY_HEIGHT_UNIT = "cm";
+  public static final String LOINC_BODY_HEIGHT_DISPLAY = "Body height";
   public static final String LOINC_BODY_WEIGHT_CODE = "29463-7";
-  public static final String LOINC_BODY_WEIGHT_DISPLAY = "Body weight";
   public static final String BODY_WEIGHT_UNIT = "kg";
+  public static final String LOINC_BODY_WEIGHT_DISPLAY = "Body weight";
   public static final String IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:national-id";
+  public static final Entry AMBULATORY =
+      Entry.constant(
+          ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
 
   private FhirTestFixtures() {}
 
@@ -77,12 +82,8 @@ public final class FhirTestFixtures {
 
   public static TrackedEntity trackedEntity(
       String uid, String type, Instant updatedAt, Attribute... attributes) {
-    return TrackedEntity.builder()
-        .trackedEntity(UID.ofNullable(uid))
-        .trackedEntityType(type)
-        .updatedAt(updatedAt)
-        .attributes(new ArrayList<>(Arrays.asList(attributes)))
-        .build();
+    var te = TrackedEntity.builder().trackedEntity(UID.ofNullable(uid)).trackedEntityType(type);
+    return te.updatedAt(updatedAt).attributes(new ArrayList<>(Arrays.asList(attributes))).build();
   }
 
   public static Attribute attribute(String uid, ValueType valueType, String value) {
@@ -91,13 +92,9 @@ public final class FhirTestFixtures {
 
   public static Enrollment enrollment(
       String enrollment, String trackedEntity, String program, Event... events) {
-    return Enrollment.builder()
-        .enrollment(UID.ofNullable(enrollment))
-        .trackedEntity(UID.ofNullable(trackedEntity))
-        .program(program)
-        .updatedAt(UPDATED)
-        .events(new ArrayList<>(Arrays.asList(events)))
-        .build();
+    var builder = Enrollment.builder().enrollment(UID.ofNullable(enrollment)).program(program);
+    builder.trackedEntity(UID.ofNullable(trackedEntity)).updatedAt(UPDATED);
+    return builder.events(new ArrayList<>(Arrays.asList(events))).build();
   }
 
   public static Event event(
@@ -108,19 +105,19 @@ public final class FhirTestFixtures {
       Instant scheduledAt,
       Instant updatedAt,
       DataValue... values) {
-    return Event.builder()
-        .event(UID.ofNullable(event))
-        .programStage(stage)
-        .status(status)
-        .occurredAt(occurredAt)
-        .scheduledAt(scheduledAt)
-        .updatedAt(updatedAt)
-        .dataValues(new HashSet<>(Arrays.asList(values)))
-        .build();
+    var builder = Event.builder().event(UID.ofNullable(event)).programStage(stage).status(status);
+    builder.occurredAt(occurredAt).scheduledAt(scheduledAt).updatedAt(updatedAt);
+    return builder.dataValues(new HashSet<>(Arrays.asList(values))).build();
   }
 
   public static DataValue dataValue(String dataElement, String value) {
     return DataValue.builder().dataElement(dataElement).value(value).build();
+  }
+
+  /** Returns one unpaged page of the items with all fields. */
+  @SafeVarargs
+  public static <T> FilteredPage<T> page(T... items) {
+    return new FilteredPage<>(Page.withoutPager("items", List.of(items)), Fields.all());
   }
 
   /** Builds each entry into a new mutable list, in order. */
@@ -136,37 +133,8 @@ public final class FhirTestFixtures {
       String stage,
       List<FhirFieldMapping> entries,
       Map<String, ValueType> valueTypes) {
-    return resolved(type, entityType, program, stage, entries, valueTypes, Map.of(), Map.of());
-  }
-
-  /** Builds a resolved mapping with a new UID. */
-  public static ResolvedMapping resolved(
-      FhirResourceType type,
-      String entityType,
-      String program,
-      String stage,
-      List<FhirFieldMapping> entries,
-      Map<String, ValueType> valueTypes,
-      Map<String, Set<QueryOperator>> blocked,
-      Map<String, Integer> minChars) {
-    return resolved(
-        uid(), UPDATED, type, entityType, program, stage, entries, valueTypes, blocked, minChars);
-  }
-
-  /** Builds a resolved mapping of unmodifiable entries and collections, empty for {@code null}. */
-  public static ResolvedMapping resolved(
-      String uid,
-      Instant lastUpdated,
-      FhirResourceType type,
-      String entityType,
-      String program,
-      String stage,
-      List<FhirFieldMapping> entries,
-      Map<String, ValueType> valueTypes,
-      Map<String, Set<QueryOperator>> blocked,
-      Map<String, Integer> minChars) {
     return new ResolvedMapping(
-        uid, type, entityType, program, stage, entries, valueTypes, blocked, minChars, lastUpdated);
+        uid(), type, entityType, program, stage, entries, valueTypes, Map.of(), Map.of(), UPDATED);
   }
 
   /** Builds a stored mapping with the entries, {@code null} ones included, in a mutable list. */
@@ -197,10 +165,8 @@ public final class FhirTestFixtures {
   public static TrackedEntityType trackedEntityType(String uid, TrackedEntityAttribute... attrs) {
     TrackedEntityType type = identified(new TrackedEntityType(), uid, "Type ");
     type.setShortName(type.getName());
-    type.setTrackedEntityTypeAttributes(
-        Arrays.stream(attrs)
-            .map(attribute -> new TrackedEntityTypeAttribute(type, attribute))
-            .collect(Collectors.toCollection(ArrayList::new)));
+    var members = Arrays.stream(attrs).map(a -> new TrackedEntityTypeAttribute(type, a));
+    type.setTrackedEntityTypeAttributes(new ArrayList<>(members.toList()));
     return type;
   }
 
@@ -218,10 +184,8 @@ public final class FhirTestFixtures {
     program.setShortName(program.getName());
     program.setProgramType(kind);
     program.setTrackedEntityType(type);
-    program.setProgramAttributes(
-        Arrays.stream(attributes)
-            .map(attribute -> new ProgramTrackedEntityAttribute(program, attribute))
-            .collect(Collectors.toCollection(ArrayList::new)));
+    var members = Arrays.stream(attributes).map(a -> new ProgramTrackedEntityAttribute(program, a));
+    program.setProgramAttributes(new ArrayList<>(members.toList()));
     return program;
   }
 
@@ -230,10 +194,8 @@ public final class FhirTestFixtures {
     ProgramStage stage = identified(new ProgramStage(), uid, "Stage ");
     stage.setShortName(stage.getName());
     stage.setProgram(program);
-    stage.setProgramStageDataElements(
-        Arrays.stream(elements)
-            .map(dataElement -> new ProgramStageDataElement(stage, dataElement))
-            .collect(Collectors.toCollection(HashSet::new)));
+    var members = Arrays.stream(elements).map(e -> new ProgramStageDataElement(stage, e));
+    stage.setProgramStageDataElements(new HashSet<>(members.toList()));
     if (program != null) {
       program.getProgramStages().add(stage);
     }
@@ -248,16 +210,14 @@ public final class FhirTestFixtures {
     return object;
   }
 
-  /** Finds the first instance of the class with the given valid UID, else {@code null}. */
+  /** Finds the first instance of the class with the given UID, else {@code null}. */
   public static BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup(
       IdentifiableObject... objects) {
     List<IdentifiableObject> registered = new ArrayList<>(Arrays.asList(objects));
-    return (klass, uid) ->
-        registered.stream()
-            .filter(o -> klass != null && klass.isInstance(o))
-            .filter(o -> uid != null && uid.equals(uidValue(o)))
-            .findFirst()
-            .orElse(null);
+    return (klass, uid) -> {
+      var ofClass = registered.stream().filter(o -> klass != null && klass.isInstance(o));
+      return ofClass.filter(o -> uid != null && uid.equals(uidValue(o))).findFirst().orElse(null);
+    };
   }
 
   private static String uidValue(IdentifiableObject object) {

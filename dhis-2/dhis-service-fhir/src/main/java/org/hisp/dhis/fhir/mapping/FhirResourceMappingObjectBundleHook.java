@@ -74,6 +74,7 @@ public class FhirResourceMappingObjectBundleHook
             : aclService.canCreate(user, FhirResourceMapping.class));
   }
 
+  /** Returns the stored, then the bundle mappings holding the mapping's key, except its own UID. */
   private List<FhirResourceMapping> others(FhirResourceMapping mapping, ObjectBundle bundle) {
     String key = FhirResourceMappingValidator.uniquenessKey(mapping);
     String uid = mapping.getUid();
@@ -84,19 +85,17 @@ public class FhirResourceMappingObjectBundleHook
             .toList();
   }
 
-  /** Groups the stored mappings, replaced by bundle mappings of equal UID, by uniqueness key. */
+  /** Groups the mappings of one store read, then the bundle mappings, by uniqueness key. */
   private UniquenessView view(FhirResourceMapping mapping, ObjectBundle bundle) {
     if (bundle.getExtras(mapping, UNIQUENESS_VIEW) instanceof UniquenessView kept) {
       return kept;
     }
     Iterable<FhirResourceMapping> imported = bundle.getObjects(FhirResourceMapping.class);
-    Map<Object, FhirResourceMapping> byUid = new LinkedHashMap<>();
-    Stream.concat(store.getAllNoAcl().stream(), StreamSupport.stream(imported.spliterator(), false))
-        .filter(Objects::nonNull)
-        .forEach(m -> byUid.put(Objects.requireNonNullElseGet(m.getUid(), Object::new), m));
     UniquenessView view =
         new UniquenessView(
-            byUid.values().stream()
+            Stream.concat(
+                    store.getAllNoAcl().stream(),
+                    StreamSupport.stream(imported.spliterator(), false))
                 .filter(each -> FhirResourceMappingValidator.uniquenessKey(each) != null)
                 .collect(Collectors.groupingBy(FhirResourceMappingValidator::uniquenessKey)));
     imported.forEach(candidate -> bundle.putExtras(candidate, UNIQUENESS_VIEW, view));

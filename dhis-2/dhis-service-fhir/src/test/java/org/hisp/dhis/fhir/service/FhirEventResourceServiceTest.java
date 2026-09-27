@@ -41,19 +41,16 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
-import org.hisp.dhis.common.UID;
-import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.event.EventStatus;
 import org.hisp.dhis.feedback.ForbiddenException;
-import org.hisp.dhis.fhir.FhirApiException;
-import org.hisp.dhis.fhir.FhirR4Validation;
+import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.fhir.mapper.*;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.fhir.search.*;
 import org.hisp.dhis.setting.*;
-import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
 import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.FhirTrackedEntityExportAdapter;
@@ -111,23 +108,19 @@ class FhirEventResourceServiceTest {
   void setUp() {
     lenient().when(settingsProvider.getCurrentSettings()).thenReturn(SystemSettings.of(Map.of()));
     lenient().when(timeout.newDeadline()).thenAnswer(i -> Deadline.in(BUDGET, () -> nanos));
-    FhirSearchParameters parameters = new FhirSearchParameters(settingsProvider);
-    FhirSearchTranslator translator = new FhirSearchTranslator(parameters);
-    FhirTrackerReader reader = new FhirTrackerReader(teAdapter, enrollmentAdapter, timeout);
-    FhirValueConverter converter = new FhirValueConverter();
+    var params = new FhirSearchParameters(settingsProvider);
+    var translator = new FhirSearchTranslator(params);
+    var reader = new FhirTrackerReader(teAdapter, enrollmentAdapter, timeout);
+    var converter = new FhirValueConverter();
     encounterMapper = spy(new FhirEncounterMapper(converter));
+    var immunization = new FhirImmunizationMapper(converter);
+    var observation = new FhirObservationMapper(converter);
     service =
         new FhirEventResourceService(
-            mappingService,
-            parameters,
-            translator,
-            reader,
-            encounterMapper,
-            new FhirImmunizationMapper(converter),
-            new FhirObservationMapper(converter));
+            mappingService, params, translator, reader, encounterMapper, immunization, observation);
     FhirPatientMapper mapper = new FhirPatientMapper(converter);
     patientService =
-        new FhirPatientService(mappingService, parameters, translator, reader, mapper, service);
+        new FhirPatientService(mappingService, params, translator, reader, mapper, service);
   }
 
   @AfterEach
@@ -162,11 +155,10 @@ class FhirEventResourceServiceTest {
     reset(enrollmentAdapter);
     forbid(P1);
     answer(P2, enrollment);
-    Encounter encounter =
-        assertInstanceOf(Encounter.class, service.read(ENCOUNTER, ENCOUNTER_ID, request()));
-    assertEquals(ENCOUNTER_ID, encounter.getIdElement().getIdPart());
-    assertEquals("Patient/" + TE, encounter.getSubject().getReference());
-    FhirR4Validation.assertValid(encounter);
+    var enc = assertInstanceOf(Encounter.class, service.read(ENCOUNTER, ENCOUNTER_ID, request()));
+    assertEquals(ENCOUNTER_ID, enc.getIdElement().getIdPart());
+    assertEquals("Patient/" + TE, enc.getSubject().getReference());
+    FhirR4Validation.assertValid(enc);
     verify(enrollmentAdapter)
         .find(forProgram(P2, params -> Set.of(UID.of(ENR)).equals(params.getEnrollments())), any());
     Bundle bundle = service.search(ENCOUNTER, searchRequest());
@@ -183,22 +175,42 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void deadlineStartsBeforeMappingResolution() {
+  void deadlineStartsBeforeMappingResolution() throws Exception {
     when(mappingService.resolve(ENCOUNTER)).thenAnswer(i -> recorded(spent(List.of(m1, m2))));
     when(mappingService.resolveAll())
         .thenAnswer(i -> recorded(spent(List.of(observationMapping(), m1))));
     assertExpired(() -> service.read(ENCOUNTER, ENCOUNTER_ID, request()));
-    assertNull(DeadlineHolder.get());
     assertExpired(() -> service.search(ENCOUNTER, searchRequest()));
-    assertNull(DeadlineHolder.get());
     assertExpired(() -> service.read(OBSERVATION, ENCOUNTER_ID + "-" + DE_A, request()));
-    assertNull(DeadlineHolder.get());
     assertExpired(() -> service.search(OBSERVATION, searchRequest()));
-    assertNull(DeadlineHolder.get());
     assertEquals(4, seen.size());
     assertFalse(seen.contains(null), "a deadline is held while mappings resolve");
     verify(timeout, times(4)).newDeadline();
     verifyNoInteractions(enrollmentAdapter, teAdapter);
+    doReturn(List.of(m2)).when(mappingService).resolve(ENCOUNTER);
+    when(enrollmentAdapter.find(forProgram(P2), any()))
+        .thenReturn(page(enrollment))
+        .thenAnswer(i -> spent(page()))
+        .thenAnswer(
+            i -> {
+              throw spent(denied(P2));
+            })
+        .thenReturn(page(enrollment));
+    var mapper = doAnswer(i -> spent(i.callRealMethod())).doCallRealMethod().when(encounterMapper);
+    mapper.map(any(), any(), any());
+    Executable read = () -> service.read(ENCOUNTER, ENCOUNTER_ID, request());
+    assertThrows(DeadlineExceededException.class, read, "spent mapping the event: no 200");
+    assertThrows(DeadlineExceededException.class, read, "spent by an empty export: no 404");
+    assertThrows(DeadlineExceededException.class, read, "spent by a forbidden export: no 403");
+    assertExpired(() -> service.search(ENCOUNTER, expiringOnLinks("patient", TE)));
+    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
+    doReturn(List.of(patientMapping())).when(mappingService).resolveAll();
+    FilteredPage<TrackedEntity> patient = page(trackedEntity(TE, TET, UPDATED));
+    when(teAdapter.find(any(), any())).thenAnswer(i -> spent(patient)).thenReturn(patient);
+    assertExpired(() -> patientService.read(TE, request()));
+    assertExpired(() -> patientService.everything(TE, expiringOnLinks()));
+    verify(teAdapter, times(2)).find(any(), any());
+    verify(enrollmentAdapter, times(4)).find(any(), any());
   }
 
   @Test
@@ -208,43 +220,11 @@ class FhirEventResourceServiceTest {
     assertExpired(() -> service.search(ENCOUNTER, searchRequest()));
     verify(enrollmentAdapter, times(2)).find(any(), any());
     verify(timeout, times(1)).newDeadline();
-    assertNull(DeadlineHolder.get());
     verifyNoInteractions(teAdapter);
   }
 
   @Test
-  void readAndSearchCheckTheDeadlineBeforeAnswering() throws Exception {
-    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
-    when(enrollmentAdapter.find(forProgram(P2), any()))
-        .thenReturn(page(enrollment))
-        .thenAnswer(i -> spent(page()))
-        .thenAnswer(
-            i -> {
-              throw spent(denied(P2));
-            })
-        .thenReturn(page(enrollment));
-    doAnswer(i -> spent(i.callRealMethod()))
-        .doCallRealMethod()
-        .when(encounterMapper)
-        .map(any(), any(), any());
-    Executable read = () -> service.read(ENCOUNTER, ENCOUNTER_ID, request());
-    assertThrows(DeadlineExceededException.class, read, "spent mapping the event: no 200");
-    assertThrows(DeadlineExceededException.class, read, "spent by an empty export: no 404");
-    assertThrows(DeadlineExceededException.class, read, "spent by a forbidden export: no 403");
-    assertExpired(() -> service.search(ENCOUNTER, expiringOnLinks("patient", TE)));
-    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
-    when(mappingService.resolveAll()).thenReturn(List.of(patientMapping()));
-    FilteredPage<TrackedEntity> patient = page(trackedEntity(TE, TET, UPDATED));
-    when(teAdapter.find(any(), any())).thenAnswer(i -> spent(patient)).thenReturn(patient);
-    assertExpired(() -> patientService.read(TE, request()));
-    assertExpired(() -> patientService.everything(TE, expiringOnLinks()));
-    verify(teAdapter, times(2)).find(any(), any());
-    verify(enrollmentAdapter, times(4)).find(any(), any());
-    assertNull(DeadlineHolder.get());
-  }
-
-  @Test
-  void everythingRunsWithinOneDeadlineOverMappingsResolvedOnce() throws Exception {
+  void operationsResolveMappingsOnceAndBundleUrlsFollowTheRequestBase() throws Exception {
     ResolvedMapping otherType = encounterMapping("fhirTeType2", P3, S3);
     when(mappingService.resolveAll())
         .thenReturn(List.of(patientMapping(), m2, otherType, observationMapping(), m1));
@@ -255,17 +235,17 @@ class FhirEventResourceServiceTest {
     when(enrollmentAdapter.find(forProgram(P1), any())).thenAnswer(i -> recorded(page(first)));
     Enrollment other = enrollment(ENR2, TE, P2, completed(EVT3, S2));
     when(enrollmentAdapter.find(forProgram(P2), any())).thenAnswer(i -> recorded(page(other)));
-    Bundle bundle = patientService.everything(TE, request());
+    Bundle all = patientService.everything(TE, request());
     String second = ENR + "-" + EVT2;
     assertEntries(
-        bundle,
+        all,
         "Patient/" + TE,
         "Encounter/" + ENCOUNTER_ID,
         "Encounter/" + second,
         "Observation/" + second + "-" + DE_A,
         "Encounter/" + ENR2 + "-" + EVT3);
-    assertEquals(1, bundle.getLink().size());
-    String self = bundle.getLink(Bundle.LINK_SELF).getUrl();
+    assertEquals(1, all.getLink().size());
+    String self = all.getLink(Bundle.LINK_SELF).getUrl();
     assertEquals("http://localhost/api/fhir/Patient/" + TE + "/$everything", self);
     assertNotNull(seen.get(0));
     assertEquals(Collections.nCopies(3, seen.get(0)), seen);
@@ -274,42 +254,25 @@ class FhirEventResourceServiceTest {
     verify(mappingService, never()).resolve(any());
     verify(enrollmentAdapter, times(2)).find(any(), any());
     assertNull(DeadlineHolder.get());
-  }
-
-  @Test
-  void searchWithUnmappedGenderReturnsEmptySearchsetWithoutExportCall() throws Exception {
-    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
-    Bundle empty = patientService.search(request(FhirSearchParameters.GENDER, "unknown"));
-    assertEquals(Bundle.BundleType.SEARCHSET, empty.getType());
-    assertTrue(empty.getEntry().isEmpty());
-    assertFalse(empty.hasTotal());
-    assertEquals(1, empty.getLink().size());
-    assertNotNull(empty.getLink(Bundle.LINK_SELF));
-    verifyNoInteractions(teAdapter, enrollmentAdapter);
-    Attribute male = attribute(GENDER_TEA, ValueType.TEXT, "M");
-    var other = trackedEntity(uid(), TET, UPDATED, attribute(GENDER_TEA, ValueType.TEXT, "\u0130"));
-    when(teAdapter.find(any(), any()))
-        .thenReturn(page(trackedEntity(TE, TET, UPDATED, male), other));
-    Bundle found = patientService.search(request(FhirSearchParameters.GENDER, "male"));
-    assertEquals(List.of("Patient/" + TE), references(found));
-    verify(teAdapter)
-        .find(argThat(p -> p.getFilter() != null && p.getFilter().contains(GENDER_TEA)), any());
-  }
-
-  @Test
-  void idsAndFullUrlsAreUniqueWithinBundle() throws Exception {
-    stubObservationSearch();
-    Bundle bundle = service.search(OBSERVATION, searchRequest());
-    List<String> expected = new ArrayList<>();
-    for (String event : List.of(ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3)) {
-      expected.add("Observation/" + event + "-" + DE_A);
-      expected.add("Observation/" + event + "-" + DE_B);
-    }
-    assertEntries(bundle, expected.toArray(String[]::new));
-  }
-
-  @Test
-  void bundleUrlsFollowTheRequestBaseAndIgnoreForwardedHeaders() throws Exception {
+    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, CVX_DISPLAY);
+    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_C);
+    var types = Map.of(DE_C, ValueType.BOOLEAN);
+    var immunization = resolved(IMMUNIZATION, TET, P1, S1, entries(vaccine, administered), types);
+    when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), immunization, m1));
+    DataValue[] values = {dataValue(DE_A, "172.5"), dataValue(DE_C, "true")};
+    answer(P1, enrollment(ENR, TE, P1, completed(EVT, S1, values)));
+    String observationId = ENCOUNTER_ID + "-" + DE_A;
+    String immunizationId = ENCOUNTER_ID + "-" + DE_C;
+    Observation observation =
+        assertInstanceOf(Observation.class, service.read(OBSERVATION, observationId, request()));
+    assertEquals("Encounter/" + ENCOUNTER_ID, observation.getEncounter().getReference());
+    assertEntries(service.search(OBSERVATION, searchRequest()), "Observation/" + observationId);
+    Immunization vaccination =
+        assertInstanceOf(Immunization.class, service.read(IMMUNIZATION, immunizationId, request()));
+    assertEquals("Encounter/" + ENCOUNTER_ID, vaccination.getEncounter().getReference());
+    assertEntries(service.search(IMMUNIZATION, searchRequest()), "Immunization/" + immunizationId);
+    verify(mappingService, times(5)).resolveAll();
+    verify(mappingService, never()).resolve(any());
     stubObservationSearch();
     when(mappingService.resolveAll()).thenReturn(List.of(patientMapping(), observationMapping()));
     when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED)));
@@ -332,7 +295,42 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void observationCodeSelectsEntriesAndProgramAccessAloneDecidesForbidden() throws Exception {
+  void idAndCodeSearchesSelectRequestedEntriesAndProgramAccessDecidesForbidden() throws Exception {
+    when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
+    Bundle empty = patientService.search(request(FhirSearchParameters.GENDER, "unknown"));
+    assertEquals(Bundle.BundleType.SEARCHSET, empty.getType());
+    assertTrue(empty.getEntry().isEmpty());
+    assertFalse(empty.hasTotal());
+    assertEquals(1, empty.getLink().size());
+    assertNotNull(empty.getLink(Bundle.LINK_SELF));
+    verifyNoInteractions(teAdapter, enrollmentAdapter);
+    Attribute male = attribute(GENDER_TEA, ValueType.TEXT, "M");
+    var dot = trackedEntity(uid(), TET, UPDATED, attribute(GENDER_TEA, ValueType.TEXT, "\u0130"));
+    when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED, male), dot));
+    Bundle found = patientService.search(request(FhirSearchParameters.GENDER, "male"));
+    assertEquals(List.of("Patient/" + TE), references(found));
+    verify(teAdapter)
+        .find(argThat(p -> p.getFilter() != null && p.getFilter().contains(GENDER_TEA)), any());
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
+    Event other = completed(EVT2, S2);
+    answer(P2, enrollment(ENR, TE, P2, other, completed(EVT, S2), completed(EVT3, S2)));
+    Bundle bundle = service.search(ENCOUNTER, request("_id", ENCOUNTER_ID));
+    assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
+    verify(encounterMapper, times(1)).map(any(), any(), any());
+    verify(encounterMapper).map(any(), argThat(e -> EVT.equals(e.getEvent().getValue())), any());
+    verify(mappingService).resolve(ENCOUNTER);
+    verify(mappingService, never()).resolveAll();
+    var mappings = Stream.of(S1, S3, "fhirStage04").map(s -> encounterMapping(TET, P1, s)).toList();
+    when(mappingService.resolve(ENCOUNTER)).thenReturn(mappings);
+    Event last = completed("fhirEvent04", "fhirStage04");
+    Event[] events = {last, completed(EVT3, S3), completed(EVT2, S2), completed(EVT, S1)};
+    answer(P1, enrollment(ENR, TE, P1, events));
+    assertEntries(
+        service.search(ENCOUNTER, searchRequest()),
+        "Encounter/" + ENCOUNTER_ID,
+        "Encounter/" + ENR + "-" + EVT3,
+        "Encounter/" + ENR + "-fhirEvent04");
+    clearInvocations(enrollmentAdapter);
     stubObservationSearch();
     String height = LOINC_SYSTEM + "|" + LOINC_BODY_HEIGHT_CODE;
     String unknown = LOINC_SYSTEM + "|unknown";
@@ -341,6 +339,12 @@ class FhirEventResourceServiceTest {
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", height)), heights);
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
     verify(enrollmentAdapter, times(2)).find(forProgram(P1), any());
+    List<String> expected = new ArrayList<>();
+    for (String event : List.of(ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3)) {
+      expected.add("Observation/" + event + "-" + DE_A);
+      expected.add("Observation/" + event + "-" + DE_B);
+    }
+    assertEntries(service.search(OBSERVATION, searchRequest()), expected.toArray(String[]::new));
     var p2 = resolved(OBSERVATION, TET, P2, S2, observationMapping().entries(), Map.of());
     when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), p2, m1));
     forbid(P2);
@@ -354,56 +358,6 @@ class FhirEventResourceServiceTest {
       assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, forbidden);
       assertEquals(FhirApiException.forbidden().getDiagnostics(), forbidden.getDiagnostics());
     }
-  }
-
-  @Test
-  void immunizationAndObservationResolveMappingsOncePerOperation() throws Exception {
-    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, CVX_DISPLAY);
-    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_C);
-    var types = Map.of(DE_C, ValueType.BOOLEAN);
-    var immunization = resolved(IMMUNIZATION, TET, P1, S1, entries(vaccine, administered), types);
-    when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), immunization, m1));
-    DataValue[] values = {dataValue(DE_A, "172.5"), dataValue(DE_C, "true")};
-    answer(P1, enrollment(ENR, TE, P1, completed(EVT, S1, values)));
-    String observationId = ENCOUNTER_ID + "-" + DE_A;
-    String immunizationId = ENCOUNTER_ID + "-" + DE_C;
-    Observation observation =
-        assertInstanceOf(Observation.class, service.read(OBSERVATION, observationId, request()));
-    assertEquals("Encounter/" + ENCOUNTER_ID, observation.getEncounter().getReference());
-    assertEntries(service.search(OBSERVATION, searchRequest()), "Observation/" + observationId);
-    Immunization vaccination =
-        assertInstanceOf(Immunization.class, service.read(IMMUNIZATION, immunizationId, request()));
-    assertEquals("Encounter/" + ENCOUNTER_ID, vaccination.getEncounter().getReference());
-    assertEntries(service.search(IMMUNIZATION, searchRequest()), "Immunization/" + immunizationId);
-    verify(mappingService, times(4)).resolveAll();
-    verify(mappingService, never()).resolve(any());
-  }
-
-  @Test
-  void idSearchMapsOnlyTheRequestedEvents() throws Exception {
-    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
-    Event other = completed(EVT2, S2);
-    answer(P2, enrollment(ENR, TE, P2, other, completed(EVT, S2), completed(EVT3, S2)));
-    Bundle bundle = service.search(ENCOUNTER, request("_id", ENCOUNTER_ID));
-    assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
-    verify(encounterMapper, times(1)).map(any(), any(), any());
-    verify(encounterMapper).map(any(), argThat(e -> EVT.equals(e.getEvent().getValue())), any());
-    verify(mappingService).resolve(ENCOUNTER);
-    verify(mappingService, never()).resolveAll();
-  }
-
-  @Test
-  void manyStageSearchMapsOnlyEventsOfMappedStagesInOrder() throws Exception {
-    var mappings = Stream.of(S1, S3, "fhirStage04").map(s -> encounterMapping(TET, P1, s)).toList();
-    when(mappingService.resolve(ENCOUNTER)).thenReturn(mappings);
-    Event last = completed("fhirEvent04", "fhirStage04");
-    Event[] events = {last, completed(EVT3, S3), completed(EVT2, S2), completed(EVT, S1)};
-    answer(P1, enrollment(ENR, TE, P1, events));
-    assertEntries(
-        service.search(ENCOUNTER, searchRequest()),
-        "Encounter/" + ENCOUNTER_ID,
-        "Encounter/" + ENR + "-" + EVT3,
-        "Encounter/" + ENR + "-fhirEvent04");
   }
 
   private FhirApiException readError(FhirResourceType type, String id, String... query) {
@@ -420,10 +374,9 @@ class FhirEventResourceServiceTest {
 
   private void stubObservationSearch() throws Exception {
     when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), m1));
-    DataValue[] observed = {dataValue(DE_A, "172.5"), dataValue(DE_B, "70")};
-    Enrollment first =
-        enrollment(ENR, TE, P1, completed(EVT2, S1, observed), completed(EVT, S1, observed));
-    answer(P1, first, enrollment(ENR2, TE, P1, completed(EVT3, S1, observed)));
+    DataValue[] values = {dataValue(DE_A, "172.5"), dataValue(DE_B, "70")};
+    var first = enrollment(ENR, TE, P1, completed(EVT2, S1, values), completed(EVT, S1, values));
+    answer(P1, first, enrollment(ENR2, TE, P1, completed(EVT3, S1, values)));
   }
 
   private static ForbiddenException denied(String program) {
@@ -441,11 +394,6 @@ class FhirEventResourceServiceTest {
   private static EnrollmentRequestParams forProgram(
       String program, Predicate<EnrollmentRequestParams> matches) {
     return argThat(p -> p != null && UID.of(program).equals(p.getProgram()) && matches.test(p));
-  }
-
-  @SafeVarargs
-  private static <T> FilteredPage<T> page(T... items) {
-    return new FilteredPage<>(Page.withoutPager("items", List.of(items)), Fields.all());
   }
 
   private static List<String> references(Bundle bundle) {
@@ -472,10 +420,7 @@ class FhirEventResourceServiceTest {
   }
 
   private static ResolvedMapping encounterMapping(String type, String program, String stage) {
-    Entry ambulatory =
-        Entry.constant(
-            ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
-    return resolved(ENCOUNTER, type, program, stage, entries(ambulatory), Map.of());
+    return resolved(ENCOUNTER, type, program, stage, entries(AMBULATORY), Map.of());
   }
 
   private static ResolvedMapping observationMapping() {
@@ -527,11 +472,11 @@ class FhirEventResourceServiceTest {
 
   private static void assertExpired(Executable operation) {
     assertThrows(DeadlineExceededException.class, operation);
+    assertNull(DeadlineHolder.get());
   }
 
-  private static void assertError(
-      HttpStatus status, IssueType issueType, FhirApiException exception) {
+  private static void assertError(HttpStatus status, IssueType issue, FhirApiException exception) {
     assertEquals(status, exception.getStatus(), exception.getDiagnostics());
-    assertEquals(issueType, exception.getIssueType(), exception.getDiagnostics());
+    assertEquals(issue, exception.getIssueType(), exception.getDiagnostics());
   }
 }

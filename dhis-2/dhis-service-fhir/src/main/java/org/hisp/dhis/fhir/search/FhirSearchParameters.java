@@ -30,7 +30,12 @@
 package org.hisp.dhis.fhir.search;
 
 import jakarta.servlet.http.HttpServletRequest;
+import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -47,9 +52,22 @@ import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.setting.*;
 import org.hl7.fhir.r4.model.Enumerations;
+import org.springframework.security.web.firewall.RequestRejectedException;
 import org.springframework.stereotype.Component;
 
-/** Parses and validates FHIR query parameters; each rejection is a 400 naming one parameter. */
+/**
+ * Parses and validates FHIR query parameters; each rejection is a 400 naming one parameter.
+ *
+ * <p>Search parameter values use FHIR search escaping: {@code \,}, {@code \|}, {@code \$} and
+ * {@code \\} stand for the character after the backslash, and any other backslash is literal. A
+ * value is split at its unescaped commas, into the OR list of {@code _id}, {@code gender} or {@code
+ * code} (any other parameter rejects an unescaped comma), and a token at its unescaped {@code |};
+ * each part is unescaped after splitting. {@code _format}, {@code _count} and {@code _page} are
+ * read literally. A value holding a NUL character is rejected. A query the container or the
+ * firewall cannot decode is rejected naming its first undecodable, unsupported or repeated
+ * parameter. Diagnostics cite names with ISO control characters percent-encoded, for example {@code
+ * fam%0Aily}.
+ */
 @Component
 @RequiredArgsConstructor
 public class FhirSearchParameters {
@@ -75,13 +93,16 @@ public class FhirSearchParameters {
   private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
 
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
-  private static final String OR_SEPARATOR = ",";
+  private static final char OR_SEPARATOR = ',';
   private static final char TOKEN_SEPARATOR = '|';
+  private static final char ESCAPE = '\\';
+  private static final String ESCAPED = ",|$\\";
   private static final String PATIENT_REFERENCE_PREFIX = FhirResourceType.PATIENT.fhirType() + "/";
   private static final Pattern POSITIVE_INTEGER = Pattern.compile("^[1-9][0-9]*$");
   private static final Pattern BIRTHDATE_VALUE =
       Pattern.compile("^(eq|ge|le|gt|lt)?([0-9]{4}-[0-9]{2}-[0-9]{2})$");
   private static final Pattern ISO_DATE = Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+  private static final HexFormat UPPER_HEX = HexFormat.of().withUpperCase();
   private final SystemSettingsProvider settingsProvider;
 
   /** A FHIR operation and the query parameters it accepts, in validation order. */
@@ -163,7 +184,10 @@ public class FhirSearchParameters {
     }
   }
 
-  /** A FHIR token split at its only {@code |}; {@code system} is {@code null} without one. */
+  /**
+   * A FHIR token split at its only unescaped {@code |}, both parts unescaped; {@code system} is
+   * {@code null} without one.
+   */
   public record Token(@CheckForNull String system, String value) {
     public Token {
       Objects.requireNonNull(value, "value");
@@ -273,20 +297,28 @@ public class FhirSearchParameters {
     parse(operation, request, null);
   }
 
+  /**
+   * Reads the query as one value per allowed name. When the container or the firewall cannot
+   * provide the parameters (undecodable percent-encoding or UTF-8, or a rejected name), the raw
+   * query string is decoded pair by pair and the first pair with an undecodable name, an
+   * unsupported name, an undecodable value or a repeated name is rejected; without such a pair the
+   * original exception is rethrown.
+   */
   private static Map<String, String> readQuery(Operation operation, HttpServletRequest request) {
     Map<String, String> query = new LinkedHashMap<>();
-    Map<String, String[]> parameterMap = request.getParameterMap();
+    Map<String, String[]> parameterMap;
+    try {
+      parameterMap = request.getParameterMap();
+    } catch (IllegalStateException | RequestRejectedException e) {
+      throw rejectedQuery(operation, request.getQueryString(), e);
+    }
     if (parameterMap == null) {
       return query;
     }
     for (Map.Entry<String, String[]> parameter : parameterMap.entrySet()) {
       String name = String.valueOf(parameter.getKey());
       if (!operation.allowed().contains(name)) {
-        throw FhirApiException.invalidParameter(
-            name,
-            operation.isSearch()
-                ? "is not a supported search parameter"
-                : "is not a supported parameter");
+        throw unsupported(operation, name);
       }
       String[] values = parameter.getValue();
       if (values != null && values.length > 1) {
@@ -295,6 +327,99 @@ public class FhirSearchParameters {
       query.put(name, values == null || values.length == 0 || values[0] == null ? "" : values[0]);
     }
     return query;
+  }
+
+  private static RuntimeException rejectedQuery(
+      Operation operation, @CheckForNull String queryString, RuntimeException failure) {
+    if (queryString == null) {
+      return failure;
+    }
+    Set<String> names = new HashSet<>();
+    for (String pair : queryString.split("&")) {
+      if (pair.isEmpty()) {
+        continue;
+      }
+      int separator = pair.indexOf('=');
+      String rawName = separator < 0 ? pair : pair.substring(0, separator);
+      String name = decodeQueryComponent(rawName);
+      if (name == null) {
+        return FhirApiException.invalidParameter(
+            display(rawName), "name is not valid percent-encoded UTF-8");
+      }
+      if (!operation.allowed().contains(name)) {
+        return unsupported(operation, name);
+      }
+      if (separator >= 0 && decodeQueryComponent(pair.substring(separator + 1)) == null) {
+        return FhirApiException.invalidParameter(name, "value is not valid percent-encoded UTF-8");
+      }
+      if (!names.add(name)) {
+        return FhirApiException.invalidParameter(name, "must not be repeated");
+      }
+    }
+    return failure;
+  }
+
+  private static FhirApiException unsupported(Operation operation, String name) {
+    return FhirApiException.invalidParameter(
+        display(name),
+        operation.isSearch()
+            ? "is not a supported search parameter"
+            : "is not a supported parameter");
+  }
+
+  /**
+   * Form-decodes one query-string component strictly: {@code +} is a space, every {@code %} must
+   * start two hexadecimal digits, and the bytes must be valid UTF-8.
+   *
+   * @return the decoded text, or {@code null} when the component cannot be decoded
+   */
+  @CheckForNull
+  private static String decodeQueryComponent(String raw) {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream(raw.length());
+    for (int i = 0; i < raw.length(); ) {
+      int codePoint = raw.codePointAt(i);
+      if (codePoint == '%') {
+        if (i + 2 >= raw.length()
+            || !HexFormat.isHexDigit(raw.charAt(i + 1))
+            || !HexFormat.isHexDigit(raw.charAt(i + 2))) {
+          return null;
+        }
+        bytes.write(HexFormat.fromHexDigits(raw, i + 1, i + 3));
+        i += 3;
+      } else {
+        String text = codePoint == '+' ? " " : Character.toString(codePoint);
+        bytes.writeBytes(text.getBytes(StandardCharsets.UTF_8));
+        i += Character.charCount(codePoint);
+      }
+    }
+    try {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(bytes.toByteArray()))
+          .toString();
+    } catch (CharacterCodingException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Returns a parameter name for diagnostics, each ISO control character replaced by its
+   * percent-encoded UTF-8 bytes in upper-case hexadecimal, for example {@code fam%0Aily}.
+   */
+  private static String display(String name) {
+    StringBuilder text = new StringBuilder(name.length());
+    for (char c : name.toCharArray()) {
+      if (Character.isISOControl(c)) {
+        for (byte b : String.valueOf(c).getBytes(StandardCharsets.UTF_8)) {
+          text.append('%').append(UPPER_HEX.toHexDigits(b));
+        }
+      } else {
+        text.append(c);
+      }
+    }
+    return text.toString();
   }
 
   private void parseValue(
@@ -307,7 +432,11 @@ public class FhirSearchParameters {
     if (value.isBlank()) {
       throw FhirApiException.invalidParameter(name, "must not be empty");
     }
-    List<String> elements = elements(name, value);
+    if (value.indexOf('\u0000') >= 0) {
+      throw FhirApiException.invalidParameter(name, "must not contain NUL characters");
+    }
+    List<String> segments = elements(name, value);
+    List<String> elements = segments.stream().map(FhirSearchParameters::unescape).toList();
     switch (name) {
       case FORMAT -> {
         if (!FORMATS.contains(value)) {
@@ -316,26 +445,27 @@ public class FhirSearchParameters {
         }
       }
       case ID -> parseId(operation, elements, state);
-      case PATIENT -> state.patient = patientReference(PATIENT, value);
+      case PATIENT -> state.patient = patientReference(PATIENT, unescape(value));
       case SUBJECT -> {
         if (query.containsKey(PATIENT)) {
           throw FhirApiException.invalidParameter(
               SUBJECT, "patient and subject cannot be combined");
         }
-        state.patient = patientReference(SUBJECT, value);
+        state.patient = patientReference(SUBJECT, unescape(value));
       }
       case IDENTIFIER -> state.identifier = identifier(value, requireMapping(patientMapping));
       case FAMILY -> {
         requireConfigured(PatientParameter.FAMILY, requireMapping(patientMapping));
-        state.family = value;
+        state.family = unescape(value);
       }
       case GIVEN -> {
         requireConfigured(PatientParameter.GIVEN, requireMapping(patientMapping));
-        state.given = value;
+        state.given = unescape(value);
       }
-      case BIRTHDATE -> state.birthdate = birthdate(value, requireMapping(patientMapping));
+      case BIRTHDATE ->
+          state.birthdate = birthdate(unescape(value), requireMapping(patientMapping));
       case GENDER -> state.genders = genders(elements, requireMapping(patientMapping));
-      case CODE -> state.codes = codes(elements);
+      case CODE -> state.codes = codes(segments);
       case COUNT -> {
         state.count = positiveInteger(COUNT, value);
         if (operation == Operation.PATIENT_SEARCH) {
@@ -353,18 +483,57 @@ public class FhirSearchParameters {
     }
   }
 
+  /** Splits a value at its unescaped commas; only an OR parameter may have several segments. */
   private static List<String> elements(String name, String value) {
+    List<String> segments = splitUnescaped(value, OR_SEPARATOR);
     if (OR_PARAMETERS.contains(name)) {
-      List<String> elements = List.of(value.split(OR_SEPARATOR, -1));
-      if (elements.stream().anyMatch(String::isBlank)) {
+      if (segments.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");
       }
-      return elements;
+      return segments;
     }
-    if (value.contains(OR_SEPARATOR)) {
+    if (segments.size() > 1) {
       throw FhirApiException.invalidParameter(name, "does not support multiple values");
     }
-    return List.of(value);
+    return segments;
+  }
+
+  /**
+   * Splits {@code value} at each {@code separator} not escaped by a backslash; parts stay escaped.
+   */
+  private static List<String> splitUnescaped(String value, char separator) {
+    List<String> parts = new ArrayList<>();
+    int start = 0;
+    for (int i = 0; i < value.length(); i++) {
+      if (isEscape(value, i)) {
+        i++;
+      } else if (value.charAt(i) == separator) {
+        parts.add(value.substring(start, i));
+        start = i + 1;
+      }
+    }
+    parts.add(value.substring(start));
+    return parts;
+  }
+
+  /**
+   * Replaces each FHIR escape {@code \,}, {@code \|}, {@code \$} and {@code \\} by its character.
+   */
+  private static String unescape(String value) {
+    StringBuilder text = new StringBuilder(value.length());
+    for (int i = 0; i < value.length(); i++) {
+      if (isEscape(value, i)) {
+        i++;
+      }
+      text.append(value.charAt(i));
+    }
+    return text.toString();
+  }
+
+  private static boolean isEscape(String value, int index) {
+    return value.charAt(index) == ESCAPE
+        && index + 1 < value.length()
+        && ESCAPED.indexOf(value.charAt(index + 1)) >= 0;
   }
 
   private static void parseId(Operation operation, List<String> elements, ParseState state) {
@@ -464,14 +633,13 @@ public class FhirSearchParameters {
   }
 
   private static Token token(String name, String value) {
-    int separator = value.indexOf(TOKEN_SEPARATOR);
-    if (separator < 0) {
-      return new Token(null, value);
-    }
-    if (value.indexOf(TOKEN_SEPARATOR, separator + 1) >= 0) {
+    List<String> parts = splitUnescaped(value, TOKEN_SEPARATOR);
+    if (parts.size() > 2) {
       throw FhirApiException.invalidParameter(name, "must contain at most one |");
     }
-    return new Token(value.substring(0, separator), value.substring(separator + 1));
+    return parts.size() == 1
+        ? new Token(null, unescape(value))
+        : new Token(unescape(parts.get(0)), unescape(parts.get(1)));
   }
 
   private static int positiveInteger(String name, String value) {

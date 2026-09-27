@@ -58,9 +58,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class FhirResourceMappingServiceTest {
-  private static final Entry AMBULATORY =
-      Entry.constant(
-          ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
   @Mock private FhirResourceMappingStore store;
   @Mock private FhirResourceMappingValidator validator;
   @Mock private SchemaService schemaService;
@@ -96,19 +93,6 @@ class FhirResourceMappingServiceTest {
   }
 
   @Test
-  void registersSchemaDescriptorOnStartup() {
-    service.init();
-    ArgumentCaptor<SchemaDescriptor> descriptor = ArgumentCaptor.forClass(SchemaDescriptor.class);
-    verify(schemaService).register(descriptor.capture());
-    assertInstanceOf(FhirResourceMappingSchemaDescriptor.class, descriptor.getValue());
-    Schema schema = descriptor.getValue().getSchema();
-    assertEquals(FhirResourceMapping.class, schema.getKlass());
-    assertEquals("fhirResourceMapping", schema.getSingular());
-    assertEquals("fhirResourceMappings", schema.getPlural());
-    verifyNoInteractions(store, validator, manager);
-  }
-
-  @Test
   void invalidStoredMappingIsIgnored() {
     FhirResourceMapping valid = encounter(uid(), stageA);
     FhirResourceMapping invalid = encounter(uid(), stageB);
@@ -140,6 +124,15 @@ class FhirResourceMappingServiceTest {
 
   @Test
   void typeWithoutUsableMappingIsNotSupported() {
+    service.init();
+    ArgumentCaptor<SchemaDescriptor> descriptor = ArgumentCaptor.forClass(SchemaDescriptor.class);
+    verify(schemaService).register(descriptor.capture());
+    assertInstanceOf(FhirResourceMappingSchemaDescriptor.class, descriptor.getValue());
+    Schema schema = descriptor.getValue().getSchema();
+    assertEquals(FhirResourceMapping.class, schema.getKlass());
+    assertEquals("fhirResourceMapping", schema.getSingular());
+    assertEquals("fhirResourceMappings", schema.getPlural());
+    verifyNoInteractions(store, validator, manager);
     FhirResourceMapping invalid = observation(uid(), stageA);
     rejects(invalid);
     when(store.getByResourceTypeNoAcl(OBSERVATION))
@@ -193,8 +186,7 @@ class FhirResourceMappingServiceTest {
     try (ObjectOutputStream output = new ObjectOutputStream(binary)) {
       output.writeObject(resolvedGender);
     }
-    try (ObjectInputStream input =
-        new ObjectInputStream(new ByteArrayInputStream(binary.toByteArray()))) {
+    try (var input = new ObjectInputStream(new ByteArrayInputStream(binary.toByteArray()))) {
       FhirFieldMapping restored = (FhirFieldMapping) input.readObject();
       assertEquals(mutableCopy, restored);
       assertThrows(immutable, () -> restored.setCode("changed"));
@@ -209,24 +201,19 @@ class FhirResourceMappingServiceTest {
   }
 
   @Test
-  void resolvedMappingsAreOrderedByUid() {
+  void resolvedRecordsCarryMetadataAndResolveAllAppliesTheSameGuard() {
     List<String> desc = Stream.of(uid(), uid(), uid()).sorted(Comparator.reverseOrder()).toList();
     List<ProgramStage> stages = List.of(stageA, stageB, programStage(uid(), program));
     when(store.getByResourceTypeNoAcl(ENCOUNTER))
         .thenReturn(Stream.of(0, 1, 2).map(i -> encounter(desc.get(i), stages.get(i))).toList());
-    List<ResolvedMapping> resolved = service.resolve(ENCOUNTER);
-    assertEquals(desc.stream().sorted().toList(), uids(resolved));
-    assertThrows(UnsupportedOperationException.class, resolved::clear);
-  }
-
-  @Test
-  void resolvedRecordCarriesValueTypesAndSearchConstraints() {
+    List<ResolvedMapping> ordered = service.resolve(ENCOUNTER);
+    assertEquals(desc.stream().sorted().toList(), uids(ordered));
+    assertThrows(UnsupportedOperationException.class, ordered::clear);
     when(store.getByResourceTypeNoAcl(PATIENT)).thenReturn(List.of(patient(uid())));
     when(store.getByResourceTypeNoAcl(OBSERVATION)).thenReturn(List.of(observation(uid(), stageA)));
-    List<TrackedEntityTypeAttribute> members = person.getTrackedEntityTypeAttributes();
-    members.add(new TrackedEntityTypeAttribute(person, null));
-    members.add(
-        new TrackedEntityTypeAttribute(person, trackedEntityAttribute(null, ValueType.TEXT)));
+    List<TrackedEntityTypeAttribute> all = person.getTrackedEntityTypeAttributes();
+    all.add(new TrackedEntityTypeAttribute(person, null));
+    all.add(new TrackedEntityTypeAttribute(person, trackedEntityAttribute(null, ValueType.TEXT)));
     DataElement unidentified = dataElement(null, ValueType.TEXT);
     stageA.getProgramStageDataElements().add(new ProgramStageDataElement(stageA, unidentified));
     String text = textAttribute.getUid();
@@ -242,32 +229,27 @@ class FhirResourceMappingServiceTest {
     assertEquals(program.getUid(), observation.program());
     assertEquals(stageA.getUid(), observation.programStage());
     assertEquals(LOINC_BODY_WEIGHT_CODE, observation.entries(OBSERVATION_VALUE).get(0).getCode());
-  }
-
-  @Test
-  void resolveAllAppliesTheSameGuard() {
+    clearInvocations(manager, store);
     var realValidator = new FhirResourceMappingValidator(manager);
     service = new FhirResourceMappingService(store, realValidator, schemaService, manager);
     DataElement trueOnly = register(dataElement(uid(), ValueType.TRUE_ONLY));
     stageA.getProgramStageDataElements().add(new ProgramStageDataElement(stageA, trueOnly));
     DataElement missing = dataElement(uid(), ValueType.BOOLEAN);
-    FhirResourceMapping patient = patient(uid());
-    patient.getFieldMappings().get(0).setSystem("ldap://directory.example.org/ids");
+    FhirResourceMapping stored = patient(uid());
+    stored.getFieldMappings().get(0).setSystem("ldap://directory.example.org/ids");
     FhirResourceMapping dupA = encounter(uid(), stageA);
     FhirResourceMapping dupB = encounter(uid(), stageA);
     FhirResourceMapping invalid = immunization(uid(), stageB, missing);
-    FhirResourceMapping observation = observation(uid(), stageB);
+    FhirResourceMapping obs = observation(uid(), stageB);
     FhirResourceMapping badCode = observation(uid(), stageA);
     badCode.getFieldMappings().get(0).setCode("8302-2 ");
     FhirResourceMapping vaccineA = immunization(uid(), stageA, booleanDataElement);
     FhirResourceMapping vaccineB = immunization(uid(), stageA, trueOnly);
     when(store.getAllNoAcl())
-        .thenReturn(
-            List.of(observation, dupA, invalid, vaccineA, patient, dupB, vaccineB, badCode));
+        .thenReturn(List.of(obs, dupA, invalid, vaccineA, stored, dupB, vaccineB, badCode));
     List<ResolvedMapping> resolved = service.resolveAll();
-    List<FhirResourceMapping> usable = List.of(patient, observation, vaccineA, vaccineB);
-    assertEquals(
-        usable.stream().map(FhirResourceMapping::getUid).sorted().toList(), uids(resolved));
+    List<FhirResourceMapping> kept = List.of(stored, obs, vaccineA, vaccineB);
+    assertEquals(kept.stream().map(FhirResourceMapping::getUid).sorted().toList(), uids(resolved));
     verify(store, never()).getByResourceTypeNoAcl(any());
     verify(manager).getNoAcl(TrackedEntityType.class, Set.of(person.getUid()));
     verify(manager).getNoAcl(Program.class, Set.of(program.getUid()));
@@ -275,20 +257,14 @@ class FhirResourceMappingServiceTest {
     verify(manager, never()).getNoAcl(eq(TrackedEntityAttribute.class), anyCollection());
     verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
     verify(manager, never()).getNoAcl(any(), anyString());
-  }
-
-  @Test
-  void structurallyInvalidMappingIsDroppedBeforeItsMetadataIsLoaded() {
-    var realValidator = new FhirResourceMappingValidator(manager);
     service = spy(new FhirResourceMappingService(store, realValidator, schemaService, manager));
     FhirResourceMapping broken = encounter(uid(), programStage(uid(), program));
     broken.getFieldMappings().get(0).setTarget(null);
     FhirResourceMapping stray = observation(uid(), stageA);
     FhirResourceMapping oversized = observation(uid(), stageB);
     oversized.getFieldMappings().get(0).setDisplay("d".repeat(1025));
-    Stream.generate(() -> Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, uid()).code("c").build())
-        .limit(499)
-        .forEach(stray.getFieldMappings()::add);
+    var fill = Stream.generate(() -> Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, uid()).code("c"));
+    fill.limit(499).map(Entry::build).forEach(stray.getFieldMappings()::add);
     when(store.getAllNoAcl()).thenReturn(List.of(broken, stray, oversized));
     when(store.getByResourceTypeNoAcl(OBSERVATION)).thenReturn(List.of(oversized));
     assertEquals(List.of(), service.resolveAll());
@@ -301,7 +277,7 @@ class FhirResourceMappingServiceTest {
   }
 
   @Test
-  void bundleMappingsAreComparedWithSameKeyMappingsOfOneStoreRead() {
+  void bundleMappingsAreComparedWithStoredVersionsOfOtherBundleMappings() {
     var hook = new FhirResourceMappingObjectBundleHook(store, validator);
     FhirResourceMapping storedPatient = patient(uid());
     FhirResourceMapping storedEncounter = encounter(uid(), stageA);
@@ -313,10 +289,10 @@ class FhirResourceMappingServiceTest {
     when(validator.validate(same(patientA), anyCollection(), any())).thenReturn(List.of(report));
     when(store.getAllNoAcl())
         .thenReturn(List.of(storedPatient, storedEncounter, observation(uid(), stageA)));
-    ObjectBundle bundle = bundle(patientA, patientB, encounter, keyless);
+    ObjectBundle imports = bundle(patientA, patientB, encounter, keyless);
     List<ErrorReport> received = new ArrayList<>();
     for (FhirResourceMapping imported : List.of(patientA, patientB, encounter, keyless)) {
-      hook.validate(imported, bundle, received::add);
+      hook.validate(imported, imports, received::add);
     }
     hook.validate(storedPatient, bundle(storedPatient), received::add);
     verify(store, times(2)).getAllNoAcl();
@@ -325,6 +301,21 @@ class FhirResourceMappingServiceTest {
     assertEquals(List.of(storedPatient, patientA), othersOf(patientB));
     assertEquals(List.of(), othersOf(encounter));
     assertEquals(List.of(), othersOf(keyless));
+    FhirResourceMapping storedX = encounter(uid(), stageA);
+    FhirResourceMapping storedY = encounter(uid(), stageB);
+    FhirResourceMapping swappedX = encounter(storedX.getUid(), stageB);
+    FhirResourceMapping swappedY = encounter(storedY.getUid(), stageA);
+    FhirResourceMapping movedX = encounter(storedX.getUid(), programStage(uid(), program));
+    FhirResourceMapping created = encounter(uid(), stageA);
+    when(store.getAllNoAcl()).thenReturn(List.of(storedX, storedY));
+    for (ObjectBundle bundle : List.of(bundle(swappedX, swappedY), bundle(movedX, created))) {
+      bundle.getObjects(FhirResourceMapping.class).forEach(m -> hook.validate(m, bundle, r -> {}));
+    }
+    verify(store, times(4)).getAllNoAcl();
+    assertEquals(List.of(storedY), othersOf(swappedX));
+    assertEquals(List.of(storedX), othersOf(swappedY));
+    assertEquals(List.of(), othersOf(movedX));
+    assertEquals(List.of(storedX), othersOf(created));
   }
 
   private <T extends IdentifiableObject> T register(T object) {

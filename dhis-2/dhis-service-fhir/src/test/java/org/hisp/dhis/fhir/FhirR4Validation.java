@@ -56,12 +56,10 @@ public final class FhirR4Validation {
 
   /** Fails the test, listing each message, when validation reports an ERROR or FATAL message. */
   public static void assertValid(IBaseResource resource) {
-    List<String> errors =
-        VALIDATOR.validateWithResult(resource).getMessages().stream()
-            .filter(m -> m.getSeverity() == ERROR || m.getSeverity() == FATAL)
-            .map(m -> m.getSeverity() + " " + m.getLocationString() + ": " + m.getMessage())
-            .toList();
-    assertEquals(List.of(), errors, "FHIR R4 validation errors in " + resource.fhirType());
+    var messages = VALIDATOR.validateWithResult(resource).getMessages().stream();
+    var bad = messages.filter(m -> m.getSeverity() == ERROR || m.getSeverity() == FATAL);
+    var text = bad.map(m -> m.getSeverity() + " " + m.getLocationString() + ": " + m.getMessage());
+    assertEquals(List.of(), text.toList(), "FHIR R4 validation errors in " + resource.fhirType());
   }
 
   /** Parses FHIR JSON with a new parser that rejects unknown elements and invalid values. */

@@ -40,6 +40,8 @@ import java.util.stream.Stream;
 import org.hisp.dhis.common.ValueType;
 import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /** Every row of the value-typing table, birth dates, structural timestamps and unusable input. */
 class FhirValueConverterTest {
@@ -53,19 +55,10 @@ class FhirValueConverterTest {
           PERCENTAGE, "0.25",
           UNIT_INTERVAL, "0.25");
   private static final Set<ValueType> BOOLEANS = EnumSet.of(BOOLEAN, TRUE_ONLY);
-  private static final Set<ValueType> TEMPORAL = EnumSet.of(DATE, DATETIME, AGE, TIME);
-  private static final Set<ValueType> STRINGS =
-      EnumSet.of(TEXT, LONG_TEXT, MULTI_TEXT, LETTER, PHONE_NUMBER, EMAIL, USERNAME, URL);
-
-  static {
-    STRINGS.addAll(
-        EnumSet.of(COORDINATE, ORGANISATION_UNIT, REFERENCE, FILE_RESOURCE, IMAGE, GEOJSON));
-  }
-
   private final FhirValueConverter converter = new FhirValueConverter();
 
   @Test
-  void numericTypesBecomeQuantity() {
+  void nonTemporalTypesFollowTheTypingTableAndUnusableInputIsEmpty() {
     for (ValueType type : NUMERIC.keySet()) {
       String value = NUMERIC.get(type);
       for (String unit : Arrays.asList("mmHg", null, "  ")) {
@@ -74,26 +67,49 @@ class FhirValueConverterTest {
         assertEquals("mmHg".equals(unit) ? "mmHg" : null, quantity.getUnit(), type + " " + unit);
       }
     }
-  }
-
-  @Test
-  void booleanTypesBecomeBoolean() {
+    Quantity number = assertInstanceOf(Quantity.class, convert(NUMBER, " 42 ", null));
+    assertEquals(0, new BigDecimal("42").compareTo(number.getValue()));
     for (ValueType type : BOOLEANS) {
       var value = assertInstanceOf(BooleanType.class, convert(type, "true", null), type.name());
       assertTrue(value.booleanValue(), type.name());
     }
     assertFalse(assertInstanceOf(BooleanType.class, convert(BOOLEAN, "false", null)).getValue());
+    assertTrue(assertInstanceOf(BooleanType.class, convert(BOOLEAN, " true ", null)).getValue());
+    var texts = EnumSet.of(TEXT, LONG_TEXT, MULTI_TEXT, LETTER, PHONE_NUMBER, EMAIL, USERNAME, URL);
+    texts.addAll(List.of(COORDINATE, ORGANISATION_UNIT, REFERENCE, FILE_RESOURCE, IMAGE, GEOJSON));
+    Set<ValueType> others = EnumSet.complementOf(EnumSet.of(DATE, DATETIME, AGE, TIME));
+    List.of(NUMERIC.keySet(), BOOLEANS).forEach(others::removeAll);
+    assertEquals(texts, others);
+    for (ValueType type : others) {
+      for (String[] row : new String[][] {{"some value", "mmHg"}, {" some value ", null}}) {
+        var value = assertInstanceOf(StringType.class, convert(type, row[0], row[1]), type.name());
+        assertEquals(row[0], value.getValue(), type.name());
+      }
+    }
+    for (ValueType type : ValueType.values()) {
+      Arrays.asList(null, "", "   ").forEach(blank -> assertNotConverted(type, blank));
+    }
+    assertTrue(converter.toFhir(null, "42", null).isEmpty());
+    String rejected =
+        """
+        NUMBER=abc; INTEGER=abc; DATE=2020-13-45; DATE=0000-01-01; DATE=2024-03-01 10:15;
+        AGE=2020-13-45; DATE=2024-03-01T25:00:00; AGE=2024-03-01T25:00:00; DATE=2024-03-01Tgarbage;
+        AGE=2024-03-01Tgarbage; DATETIME=2024-03-01T25:00:00; DATETIME=0000-03-01T10:15:30Z;
+        DATETIME=not a date; TIME=25:99; BOOLEAN=yes; BOOLEAN=TRUE; TRUE_ONLY=1\
+        """;
+    var rows = Stream.of(rejected.split(";\\s*")).map(row -> row.split("=", 2));
+    rows.forEach(row -> assertNotConverted(ValueType.valueOf(row[0]), row[1]));
   }
 
   @Test
   void dateTypesBecomeDateTime() {
+    assertDayPrecisionDateTime("2024-03-01", convert(DATE, " 2024-03-01 ", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, "2024-03-01", null));
     assertDayPrecisionDateTime("2019-05-17", convert(AGE, "2019-05-17", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, "2024-03-01T10:15:30.000", null));
     assertDayPrecisionDateTime("2024-03-01", convert(AGE, "2024-03-01T23:30:00-05:00", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATETIME, "2024-03-01", null));
-    Instant local =
-        LocalDateTime.parse("2024-03-01T10:15:30").atZone(ZoneId.systemDefault()).toInstant();
+    var local = LocalDateTime.of(2024, 3, 1, 10, 15, 30).atZone(ZoneId.systemDefault()).toInstant();
     Map.of(
             "2024-03-01T10:15:30Z", Instant.parse("2024-03-01T10:15:30Z"),
             "2024-03-01T10:15:30.123Z", Instant.parse("2024-03-01T10:15:30.123Z"),
@@ -106,47 +122,6 @@ class FhirValueConverterTest {
               assertEquals(value.contains(".") ? MILLI : SECOND, dateTime.getPrecision(), value);
               assertEquals(TimeZone.getDefault().getID(), dateTime.getTimeZone().getID(), value);
             });
-  }
-
-  @Test
-  void timeBecomesTime() {
-    Map.of(
-            "08:30", "08:30:00",
-            "08:30:15", "08:30:15",
-            "08:30:15.250", "08:30:15",
-            "08:30:15.123456789", "08:30:15",
-            "08:30:15.", "08:30:15",
-            " 08:30 ", "08:30:00",
-            "8:30", "08:30:00")
-        .forEach(
-            (value, time) ->
-                assertEquals(
-                    time, assertInstanceOf(TimeType.class, convert(TIME, value, null)).getValue()));
-  }
-
-  @Test
-  void otherTypesBecomeString() {
-    Set<ValueType> others = EnumSet.allOf(ValueType.class);
-    List.of(NUMERIC.keySet(), BOOLEANS, TEMPORAL).forEach(others::removeAll);
-    assertEquals(STRINGS, others);
-    for (ValueType type : others) {
-      for (String[] row : new String[][] {{"some value", "mmHg"}, {" some value ", null}}) {
-        var value = assertInstanceOf(StringType.class, convert(type, row[0], row[1]), type.name());
-        assertEquals(row[0], value.getValue(), type.name());
-      }
-    }
-  }
-
-  @Test
-  void typedValuesIgnoreSurroundingWhitespace() {
-    Quantity number = assertInstanceOf(Quantity.class, convert(NUMBER, " 42 ", null));
-    assertEquals(0, new BigDecimal("42").compareTo(number.getValue()));
-    assertTrue(assertInstanceOf(BooleanType.class, convert(BOOLEAN, " true ", null)).getValue());
-    assertDayPrecisionDateTime("2024-03-01", convert(DATE, " 2024-03-01 ", null));
-  }
-
-  @Test
-  void toDateAcceptsOnlyDateAndAge() {
     assertDate("1985-04-12", converter.toDate(DATE, "1985-04-12"));
     assertDate("2019-05-17", converter.toDate(AGE, "2019-05-17"));
     assertDate("1985-04-12", converter.toDate(DATE, "1985-04-12T00:00:00.000"));
@@ -161,10 +136,6 @@ class FhirValueConverterTest {
       assertTrue(converter.toDate(AGE, invalid).isEmpty(), invalid);
     }
     assertTrue(converter.toDate(null, "1985-04-12").isEmpty());
-  }
-
-  @Test
-  void structuralTimestamps() {
     Instant timestamp = Instant.parse("2024-03-01T10:15:30Z");
     Instant fractional = Instant.parse("2024-03-01T10:15:30.123Z");
     InstantType instant = converter.instant(timestamp);
@@ -180,22 +151,14 @@ class FhirValueConverterTest {
     }
   }
 
-  @Test
-  void unusableInputIsEmpty() {
-    for (ValueType type : ValueType.values()) {
-      Arrays.asList(null, "", "   ").forEach(blank -> assertNotConverted(type, blank));
-    }
-    assertTrue(converter.toFhir(null, "42", null).isEmpty());
-    String rejected =
-        """
-        NUMBER=abc; INTEGER=abc; DATE=2020-13-45; DATE=0000-01-01; DATE=2024-03-01 10:15;
-        AGE=2020-13-45; DATE=2024-03-01T25:00:00; AGE=2024-03-01T25:00:00; DATE=2024-03-01Tgarbage;
-        AGE=2024-03-01Tgarbage; DATETIME=2024-03-01T25:00:00; DATETIME=0000-03-01T10:15:30Z;
-        DATETIME=not a date; TIME=25:99; BOOLEAN=yes; BOOLEAN=TRUE; TRUE_ONLY=1\
-        """;
-    Stream.of(rejected.split(";\\s*"))
-        .map(row -> row.split("=", 2))
-        .forEach(row -> assertNotConverted(ValueType.valueOf(row[0]), row[1]));
+  @ParameterizedTest
+  @CsvSource({
+    "08:30, 08:30:00", "08:30:15, 08:30:15", "08:30:15.250, 08:30:15",
+    "08:30:15.123456789, 08:30:15", "08:30:15., 08:30:15", "' 08:30 ', 08:30:00",
+    "8:30, 08:30:00"
+  })
+  void timeBecomesTime(String value, String time) {
+    assertEquals(time, assertInstanceOf(TimeType.class, convert(TIME, value, null)).getValue());
   }
 
   private Type convert(ValueType type, String value, String unit) {

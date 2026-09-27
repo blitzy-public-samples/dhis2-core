@@ -94,6 +94,16 @@ class FhirApiDisabledSecurityConfigTest {
     assertFalse(FHIR_API_ENABLED.isConfidential());
     assertEquals(Optional.of(FHIR_API_ENABLED), ConfigurationKey.getByKey("fhir.api.enabled"));
     assertFalse(DhisConfigurationProvider.isOn(FHIR_API_ENABLED.getDefaultValue()));
+    Map<String, Method> beans =
+        Stream.of(FhirApiDisabledSecurityConfig.class.getDeclaredMethods())
+            .filter(method -> method.isAnnotationPresent(Bean.class))
+            .collect(Collectors.toMap(Method::getName, method -> method));
+    assertEquals(Set.of("fhirApiDisabledFilterChain", "fhirApiRequestGuard"), beans.keySet());
+    assertTrue(FhirApiDisabledSecurityConfig.class.isAnnotationPresent(Configuration.class));
+    Method chainFactory = beans.get("fhirApiDisabledFilterChain");
+    assertEquals(Ordered.HIGHEST_PRECEDENCE, chainFactory.getAnnotation(Order.class).value());
+    assertEquals(SecurityFilterChain.class, chainFactory.getReturnType());
+    assertEquals(MappedInterceptor.class, beans.get("fhirApiRequestGuard").getReturnType());
   }
 
   @ParameterizedTest
@@ -104,10 +114,9 @@ class FhirApiDisabledSecurityConfigTest {
     assertEach(ENCODED_FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), false);
     when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(enabled);
     for (String context : List.of("", "/dhis")) {
-      assertEach(FHIR_PATHS, path -> chain.matches(request("GET", context, path)), !enabled);
-      assertEach(
-          ENCODED_FHIR_PATHS, path -> chain.matches(request("GET", context, path)), !enabled);
-      assertEach(NON_FHIR_PATHS, path -> chain.matches(request("GET", context, path)), false);
+      assertEach(FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
+      assertEach(ENCODED_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
+      assertEach(NON_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), false);
     }
     assertEquals(!enabled, chain.matches(new MockHttpServletRequest("GET", "/api/fhir/%zz")));
     assertFalse(chain.matches(request("GET", "", "/api/%66hirResourceMappings")));
@@ -115,16 +124,7 @@ class FhirApiDisabledSecurityConfigTest {
   }
 
   @Test
-  void flagIsCheckedBeforeThePathAndReadPerRequest() {
-    assertTrue(chain.matches(request("GET", "", "/api/fhir/Patient/x")));
-    when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(true);
-    HttpServletRequest request = mock(HttpServletRequest.class);
-    assertFalse(chain.matches(request));
-    verifyNoInteractions(request);
-  }
-
-  @Test
-  void disabledChainWritesPlatformHeadersThenNotFoundWithoutContinuing() throws Exception {
+  void chainAndGuardAnswerNotFoundWhileOffAndGuardUsesEntryPointWhileOn() throws Exception {
     assertEquals(2, chain.getFilters().size());
     assertInstanceOf(HeaderWriterFilter.class, chain.getFilters().get(0));
     for (String method : List.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")) {
@@ -150,48 +150,36 @@ class FhirApiDisabledSecurityConfigTest {
     response = filter(request("GET", "", "/api/fhir"));
     assertEquals("SAMEORIGIN", response.getHeader("X-Frame-Options"));
     assertNull(response.getHeader("Content-Security-Policy"));
-  }
-
-  @Test
-  void beanIsDeclaredAtHighestPrecedence() {
-    Map<String, Method> beans =
-        Stream.of(FhirApiDisabledSecurityConfig.class.getDeclaredMethods())
-            .filter(method -> method.isAnnotationPresent(Bean.class))
-            .collect(Collectors.toMap(Method::getName, method -> method));
-    assertEquals(Set.of("fhirApiDisabledFilterChain", "fhirApiRequestGuard"), beans.keySet());
-    assertTrue(FhirApiDisabledSecurityConfig.class.isAnnotationPresent(Configuration.class));
-    Method chainFactory = beans.get("fhirApiDisabledFilterChain");
-    assertEquals(Ordered.HIGHEST_PRECEDENCE, chainFactory.getAnnotation(Order.class).value());
-    assertEquals(SecurityFilterChain.class, chainFactory.getReturnType());
-    assertEquals(MappedInterceptor.class, beans.get("fhirApiRequestGuard").getReturnType());
-  }
-
-  @Test
-  void guardAnswersNotFoundWhileOffAndEntryPointWhileOnWithoutUser() throws Exception {
+    assertTrue(chain.matches(request("GET", "", "/api/fhir/Patient/x")));
+    when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(true);
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    assertFalse(chain.matches(request));
+    verifyNoInteractions(request);
+    when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(false);
     for (String path : List.of("/api/fhir", "/api/fhir/Patient/x/$everything", "/api/fhirX")) {
-      MockHttpServletRequest request = request("GET", "", path);
-      ServletRequestPathUtils.parseAndCache(request);
-      assertEquals(!path.equals("/api/fhirX"), guard.matches(request), path);
+      MockHttpServletRequest get = request("GET", "", path);
+      ServletRequestPathUtils.parseAndCache(get);
+      assertEquals(!path.equals("/api/fhirX"), guard.matches(get), path);
     }
     for (boolean user : new boolean[] {false, true}) {
       if (user) {
         CurrentUserUtil.injectUserInSecurityContext(mock(UserDetails.class));
       }
       for (String method : List.of("GET", "HEAD", "OPTIONS", "POST")) {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        assertFalse(guard.preHandle(request(method, "", "/api/fhir/x"), response, this));
-        assertNotFound(notFound, response);
+        MockHttpServletResponse denied = new MockHttpServletResponse();
+        assertFalse(guard.preHandle(request(method, "", "/api/fhir/x"), denied, this));
+        assertNotFound(notFound, denied);
       }
     }
     when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(true);
-    MockHttpServletRequest request = request("GET", "", "/api/fhir/Patient/x");
-    MockHttpServletResponse response = new MockHttpServletResponse();
-    assertTrue(guard.preHandle(request, response, this));
+    MockHttpServletRequest read = request("GET", "", "/api/fhir/Patient/x");
+    response = new MockHttpServletResponse();
+    assertTrue(guard.preHandle(read, response, this));
     verifyNoInteractions(entryPoint);
     CurrentUserUtil.clearSecurityContext();
-    assertFalse(guard.preHandle(request, response, this));
+    assertFalse(guard.preHandle(read, response, this));
     verify(entryPoint)
-        .commence(same(request), same(response), any(InsufficientAuthenticationException.class));
+        .commence(same(read), same(response), any(InsufficientAuthenticationException.class));
     assertFalse(response.isCommitted());
     assertNull(response.getContentType());
     assertEquals(0, response.getContentAsByteArray().length);

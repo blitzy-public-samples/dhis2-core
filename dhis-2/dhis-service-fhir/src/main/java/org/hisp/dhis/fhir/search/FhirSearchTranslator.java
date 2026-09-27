@@ -314,11 +314,12 @@ public class FhirSearchTranslator {
     return system.equals(entrySystem);
   }
 
+  /** A Tracker attribute filter, written {@code {teaUid}:{OPERATOR}:{escaped value}}. */
   private record AttributeFilter(String teaUid, QueryOperator operator, String value) {
     String toFilterString() {
       return teaUid
           + FILTER_SEGMENT_SEPARATOR
-          + operator.name().toLowerCase(Locale.ROOT)
+          + operator.name()
           + FILTER_SEGMENT_SEPARATOR
           + escape(value);
     }

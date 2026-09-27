@@ -35,6 +35,7 @@ import static org.hisp.dhis.fhir.FhirTestFixtures.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.ENCOUNTER;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.hl7.fhir.r4.model.Encounter.EncounterStatus.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import ca.uhn.fhir.model.api.TemporalPrecisionEnum;
@@ -60,24 +61,20 @@ class FhirEncounterMapperTest {
   private static final String EVT = "pTzf9KYMk72";
   private static final String DE_TYPE = "DATAEL00005";
   private static final String DE_REASON = "DATAEL00002";
-  private static final String VISIT_TYPE_SYSTEM = "urn:dhis2:fhir-test:visit-type";
-  private static final String VISIT_TYPE = "ANC1";
   private static final String REASON = "Fever";
+  private static final String VISIT_TYPE_SYSTEM = "urn:dhis2:fhir-test:visit-type";
   private static final String TYPE_SYSTEM = "urn:dhis2:fhir-test:encounter-type";
+  private static final String VISIT_TYPE = "ANC1";
   private static final String TYPE_CODE = "ROUTINE";
   private static final String TYPE_DISPLAY = "Routine visit";
   private final FhirEncounterMapper mapper = new FhirEncounterMapper(new FhirValueConverter());
 
   @Test
   void statusTranslationForEveryEventStatus() {
-    Map<EventStatus, EncounterStatus> expected = new HashMap<>();
+    Map<EventStatus, EncounterStatus> expected =
+        new HashMap<>(Map.of(ACTIVE, INPROGRESS, VISITED, INPROGRESS, COMPLETED, FINISHED));
+    expected.putAll(Map.of(SCHEDULE, PLANNED, OVERDUE, PLANNED, SKIPPED, CANCELLED));
     expected.put(null, EncounterStatus.UNKNOWN);
-    expected.put(ACTIVE, EncounterStatus.INPROGRESS);
-    expected.put(VISITED, EncounterStatus.INPROGRESS);
-    expected.put(COMPLETED, EncounterStatus.FINISHED);
-    expected.put(SCHEDULE, EncounterStatus.PLANNED);
-    expected.put(OVERDUE, EncounterStatus.PLANNED);
-    expected.put(SKIPPED, EncounterStatus.CANCELLED);
     Map<EventStatus, EncounterStatus> actual = new HashMap<>();
     for (EventStatus s : Arrays.copyOf(EventStatus.values(), EventStatus.values().length + 1)) {
       actual.put(s, map(stageEvent(s, OCCURRED, SCHEDULED), fullMapping()).getStatus());
@@ -88,30 +85,24 @@ class FhirEncounterMapperTest {
   @Test
   void classTypeAndReasonFromMapping() {
     Encounter encounter = map(visitEvent(null), fullMapping());
-    var encounterClass = encounter.getClass_();
-    assertEquals(ENCOUNTER_CLASS_SYSTEM, encounterClass.getSystem());
-    assertEquals(ENCOUNTER_CLASS_CODE, encounterClass.getCode());
-    assertEquals(ENCOUNTER_CLASS_DISPLAY, encounterClass.getDisplay());
+    Coding c = encounter.getClass_();
+    var expected = List.of(ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
+    assertEquals(expected, Arrays.asList(c.getSystem(), c.getCode(), c.getDisplay()));
     encounter.getType().forEach(type -> assertEquals(1, type.getCoding().size()));
-    assertEquals(
-        List.of(
-            Arrays.asList(VISIT_TYPE_SYSTEM, VISIT_TYPE, null),
-            Arrays.asList(TYPE_SYSTEM, TYPE_CODE, TYPE_DISPLAY)),
-        encounter.getType().stream()
-            .map(CodeableConcept::getCodingFirstRep)
-            .map(coding -> Arrays.asList(coding.getSystem(), coding.getCode(), coding.getDisplay()))
-            .toList());
+    var types = encounter.getType().stream().map(CodeableConcept::getCodingFirstRep);
+    var coded = types.map(t -> Arrays.asList(t.getSystem(), t.getCode(), t.getDisplay())).toList();
+    var visit = Arrays.asList(VISIT_TYPE_SYSTEM, VISIT_TYPE, null);
+    assertEquals(List.of(visit, List.of(TYPE_SYSTEM, TYPE_CODE, TYPE_DISPLAY)), coded);
     assertEquals(1, encounter.getReasonCode().size());
     assertEquals(REASON, encounter.getReasonCode().get(0).getText());
     assertEquals(ENR + "-" + EVT, encounter.getIdElement().getIdPart());
     assertEquals("Patient/" + TE, encounter.getSubject().getReference());
     assertEquals(UPDATED, encounter.getMeta().getLastUpdated().toInstant());
-    Encounter withoutValues =
-        map(stageEvent(COMPLETED, OCCURRED, null, dataValue(DE_REASON, " ")), fullMapping());
-    assertEquals(1, withoutValues.getType().size());
-    assertEquals(TYPE_CODE, withoutValues.getTypeFirstRep().getCodingFirstRep().getCode());
-    assertFalse(withoutValues.hasReasonCode());
-    assertTrue(withoutValues.hasClass_());
+    var bare = map(stageEvent(COMPLETED, OCCURRED, null, dataValue(DE_REASON, " ")), fullMapping());
+    assertEquals(1, bare.getType().size());
+    assertEquals(TYPE_CODE, bare.getTypeFirstRep().getCodingFirstRep().getCode());
+    assertFalse(bare.hasReasonCode());
+    assertTrue(bare.hasClass_());
     List.of(" ANC 1\u00A0", "\u2003ANC 1 ", "ANC  1", "ANC\t1", "ANC\u20031", "ANC 1")
         .forEach(in -> assertEquals(List.of("ANC 1", TYPE_CODE), typeCodes(in), "'" + in + "'"));
     assertEquals(List.of("\u00C4NC 1", TYPE_CODE), typeCodes("\u00C4NC 1"));
@@ -201,15 +192,10 @@ class FhirEncounterMapperTest {
   }
 
   private static ResolvedMapping fullMapping() {
-    Entry encounterClass =
-        Entry.constant(
-            ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, ENCOUNTER_CLASS_DISPLAY);
-    var fields =
-        entries(
-            encounterClass,
-            Entry.field(ENCOUNTER_TYPE, DATA_ELEMENT, DE_TYPE).system(VISIT_TYPE_SYSTEM),
-            Entry.constant(ENCOUNTER_TYPE, TYPE_SYSTEM, TYPE_CODE, TYPE_DISPLAY),
-            Entry.field(ENCOUNTER_REASON, DATA_ELEMENT, DE_REASON));
+    var visitType = Entry.field(ENCOUNTER_TYPE, DATA_ELEMENT, DE_TYPE).system(VISIT_TYPE_SYSTEM);
+    var type = Entry.constant(ENCOUNTER_TYPE, TYPE_SYSTEM, TYPE_CODE, TYPE_DISPLAY);
+    var reason = Entry.field(ENCOUNTER_REASON, DATA_ELEMENT, DE_REASON);
+    var fields = entries(AMBULATORY, visitType, type, reason);
     Map<String, ValueType> valueTypes = Map.of(DE_TYPE, ValueType.TEXT, DE_REASON, ValueType.TEXT);
     return resolved(ENCOUNTER, TE_TYPE, PROGRAM, STAGE, fields, valueTypes);
   }

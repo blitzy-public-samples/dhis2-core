@@ -32,7 +32,6 @@ package org.hisp.dhis.fhir;
 import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.time.Instant;
 import java.util.*;
 import java.util.stream.Stream;
 import org.hisp.dhis.common.CodeGenerator;
@@ -74,7 +73,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     Coding type = encounter.getTypeFirstRep().getCodingFirstRep();
     assertCoding("urn:dhis2:fhir-test:encounter-type", "option1", type);
     assertEquals("Patient/" + SUMMER, encounter.getSubject().getReference());
-    Instant occurredAtA = occurredAt("2019-01-25T12:10:38.100");
+    var occurredAtA = DateUtils.parseDate("2019-01-25T12:10:38.100").toInstant();
     assertEquals(occurredAtA, encounter.getPeriod().getStart().toInstant());
     Immunization immunization = read(Immunization.class, IMMUNIZATION_A);
     assertEquals(Immunization.ImmunizationStatus.COMPLETED, immunization.getStatus());
@@ -94,7 +93,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     assertEquals("kg", observation.getValueQuantity().getUnit());
     assertEquals("Patient/" + FRANK, observation.getSubject().getReference());
     assertEquals("Encounter/" + ENCOUNTER_B, observation.getEncounter().getReference());
-    Instant occurredAtB = occurredAt("2020-01-28T00:00:00.000");
+    var occurredAtB = DateUtils.parseDate("2020-01-28T00:00:00.000").toInstant();
     assertEquals(occurredAtB, observation.getEffectiveDateTimeType().getValue().toInstant());
   }
 
@@ -158,19 +157,17 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   @Test
   void searchRejectsInvalidParameters() {
     for (String path : EVENT_RESOURCES) {
-      String byPatient = path + "?patient=" + SUMMER;
       assertInvalid(path, "patient");
       assertInvalid(path + "?patient=bad", "patient");
       assertInvalid(path + "?_id=bad", "_id");
-      assertInvalid(byPatient + "&_count=0", "_count");
-      assertInvalid(byPatient + "&_count=x", "_count");
-      assertInvalid(byPatient + "&_page=0", "_page");
-      assertInvalid(byPatient + "&_format=xml", "_format");
-      assertInvalid(byPatient + "&foo=1", "foo");
+      for (String query : List.of("_count=0", "_count=x", "_page=0", "_format=xml", "foo=1"))
+        assertInvalid(path + "?patient=" + SUMMER + "&" + query, query.split("=")[0]);
     }
     assertInvalid(ENCOUNTER + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
     assertInvalid(OBSERVATION + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
     assertInvalid(IMMUNIZATION + "?subject=" + SUMMER, "subject");
+    assertInvalid(ENCOUNTER + "?patient=" + FRANK + "&x\r=1", "x%0D");
+    assertInvalid(OBSERVATION + "?patient=" + FRANK + "&code=\u0000", "code");
   }
 
   @Test
@@ -192,12 +189,9 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   @Test
   void readMalformedIdReturnsNotFound() {
     List.of(
-            ENCOUNTER + "/" + ENROLLMENT_A,
-            ENCOUNTER + "/" + IMMUNIZATION_A,
-            ENCOUNTER + "/1xP7UnKhomJ-" + EVENT_A,
-            OBSERVATION + "/" + ENCOUNTER_A,
-            OBSERVATION + "/" + ENCOUNTER_A + "-",
-            IMMUNIZATION + "/abc-def-ghi")
+            ENCOUNTER + "/" + ENROLLMENT_A, ENCOUNTER + "/" + IMMUNIZATION_A,
+            ENCOUNTER + "/1xP7UnKhomJ-" + EVENT_A, OBSERVATION + "/" + ENCOUNTER_A,
+            OBSERVATION + "/" + ENCOUNTER_A + "-", IMMUNIZATION + "/abc-def-ghi")
         .forEach(url -> assertNotFound(GET(url)));
   }
 
@@ -222,25 +216,18 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   void searchForbiddenOnlyWhenEveryProgramIsForbidden() {
     String encounters = ENCOUNTER + "?patient=" + SUMMER;
     String unknownPatientEncounters = ENCOUNTER + "?patient=" + CodeGenerator.generateUid();
+    String observations = OBSERVATION + "?patient=" + FRANK;
+    String unknownCode = "&code=urn:x|nope";
     assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
     assertSearch(OBSERVATION, "patient=" + FRANK, OBSERVATION_B_INTEGER, OBSERVATION_B_NUMBER);
+    asRestrictedUser(List.of(), () -> assertSearch(OBSERVATION, "patient=" + FRANK + unknownCode));
+    List<String> codes =
+        List.of(observations, observations + "&code=integer-value", observations + unknownCode);
     for (String denial : PROGRAM_DENIALS) {
       asRestrictedUser(
           denied(denial, PROGRAM, SECOND_PROGRAM),
           () -> assertSameForbidden(List.of(encounters, unknownPatientEncounters), SUMMER));
-      asRestrictedUser(
-          denied(denial, PROGRAM), () -> assertForbidden(OBSERVATION + "?patient=" + FRANK));
-    }
-  }
-
-  @Test
-  void searchForbiddenAlikeForConfiguredAndUnknownObservationCodes() {
-    String known = "patient=" + FRANK + "&code=integer-value";
-    String unknown = "patient=" + FRANK + "&code=urn:x|nope";
-    asRestrictedUser(List.of(), () -> assertSearch(OBSERVATION, unknown));
-    List<String> urls = List.of(OBSERVATION + "?" + known, OBSERVATION + "?" + unknown);
-    for (String denial : PROGRAM_DENIALS) {
-      asRestrictedUser(denied(denial, PROGRAM), () -> assertSameForbidden(urls, "integer-value"));
+      asRestrictedUser(denied(denial, PROGRAM), () -> assertSameForbidden(codes, "integer-value"));
     }
   }
 
@@ -253,15 +240,13 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
           denied(denial, SECOND_PROGRAM),
           () -> {
             String body = assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
-            assertFalse(body.contains("nxP8UnKhomJ"), body);
-            assertFalse(body.contains(SECOND_PROGRAM), body);
+            assertFalse(body.contains("nxP8UnKhomJ") || body.contains(SECOND_PROGRAM), body);
           });
       asRestrictedUser(
           denied(denial, PROGRAM),
           () -> {
             String body = assertSearch(ENCOUNTER, "patient=" + FRANK);
-            assertFalse(body.contains(EVENT_B), body);
-            assertFalse(body.contains(ENROLLMENT_B), body);
+            assertFalse(body.contains(EVENT_B) || body.contains(ENROLLMENT_B), body);
           });
     }
   }
@@ -290,7 +275,6 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
         });
   }
 
-  /** Asserts a no-store search of exactly {@code ids}, in order and totalled; returns the body. */
   private String assertSearch(String path, String query, String... ids) {
     String url = path + "?" + query;
     HttpResponse response = GET(url);
@@ -310,10 +294,5 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   private static void assertCoding(String system, String code, Coding coding) {
     assertEquals(system, coding.getSystem());
     assertEquals(code, coding.getCode());
-  }
-
-  /** Returns the fixture timestamp as the instant it was imported as, to the millisecond. */
-  private static Instant occurredAt(String fixtureTimestamp) {
-    return DateUtils.parseDate(fixtureTimestamp).toInstant();
   }
 }

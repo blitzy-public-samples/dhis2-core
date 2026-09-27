@@ -49,7 +49,6 @@ import org.junit.jupiter.params.provider.*;
 /** Tests the FHIR R4 {@code Patient} read, search-type and {@code $everything} operations. */
 class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   private static final String MAPPING_URL = "/fhirResourceMappings/FhirMapPat1";
-  private static final String OTHER_TYPE_TRACKED_ENTITY = "XUitxQbWYNq";
   private static final String IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:integer-attr";
   private static final String FAMILY_ATTRIBUTE = "toUpdate000";
   private static final String OTHER_ORG_UNIT = "DiszpKrYNg8";
@@ -101,6 +100,7 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
         Arguments.of("family=rain", Set.of(FRANK), 1, false, false),
         Arguments.of("given=frank", Set.of(FRANK), 1, false, false),
         Arguments.of("family=rain&_format=json", Set.of(FRANK), 1, false, false),
+        Arguments.of("family=a\\,b", Set.of(), 0, false, false),
         Arguments.of(paged + "1", both, 1, true, false),
         Arguments.of(paged + "2", both, 1, false, true),
         Arguments.of(paged + "3", both, 0, false, true));
@@ -159,9 +159,11 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
         foo=1 family:exact=rain family=rain&family=sun _count=abc _count=0 _page=0 _page=x _id=bad
         identifier=urn:unknown|70 birthdate=2000-01-01 gender=male _format=xml
         """;
-    for (String query : queries.strip().split("\\s+")) {
+    for (String query : queries.strip().split("\\s+"))
       assertInvalid(PATIENT_PATH + "?" + query, query.substring(0, query.indexOf('=')));
-    }
+    for (String query : List.of("family=\u0000", "family=rainy day\u0000x", "given=Fr\u0000"))
+      assertInvalid(PATIENT_PATH + "?" + query, query.substring(0, query.indexOf('=')));
+    assertInvalid(PATIENT_PATH + "?fam\nily=rain", "fam%0Aily");
     String previousLimit =
         GET("/systemSettings/{key}", MAX_LIMIT_SETTING, Accept("text/plain")).content("text/plain");
     try {
@@ -188,11 +190,6 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     } finally {
       setTypeAttributeSearchable(FAMILY_ATTRIBUTE, true);
     }
-  }
-
-  @Test
-  void searchOutsideCaptureScopeWithoutConfiguredAttributeParametersNamesId() {
-    User user = userWithScope(OTHER_ORG_UNIT, ROOT_ORG_UNIT);
     String entries =
         GET(MAPPING_URL + "?fields=fieldMappings").content().get("fieldMappings").toJson();
     String replace = "[{'op':'replace','path':'/fieldMappings','value':%s}]";
@@ -221,10 +218,9 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   @Test
   void readUnknownPatientReturnsNotFound() {
     assertFrankPatient(read(Patient.class, FRANK));
-    for (String id : List.of(generateUid(), OTHER_TYPE_TRACKED_ENTITY, "bad", FRANK + "x")) {
+    for (String id :
+        List.of(generateUid(), "XUitxQbWYNq", "bad", FRANK + "x", "TvctPPhpD8z-D9PbzJY8bJM"))
       assertNotFound(GET(PATIENT_PATH + "/" + id));
-    }
-    assertNotFound(GET(PATIENT_PATH + "/TvctPPhpD8z-D9PbzJY8bJM"));
   }
 
   @Test
@@ -240,11 +236,10 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     String unknown = generateUid();
     List<String> reads = List.of(PATIENT_PATH + "/" + SUMMER, PATIENT_PATH + "/" + unknown);
     Set<String> bodies = new HashSet<>();
-    for (String typeAccess : List.of(NO_ACCESS, METADATA_ONLY)) {
+    for (String typeAccess : List.of(NO_ACCESS, METADATA_ONLY))
       asRestrictedUser(
           List.of(new Restriction("trackedEntityType", PERSON_TYPE, typeAccess)),
           () -> bodies.add(assertSameForbidden(reads, SUMMER, unknown)));
-    }
     assertEquals(1, bodies.size(), bodies::toString);
   }
 
@@ -263,17 +258,14 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   @Test
   void patientEverythingOmitsUnreadableProgram() {
     asImportAndBaselineUser(() -> assertEverything(SUMMER, SUMMER_EVERYTHING));
-    for (String programAccess : List.of(NO_ACCESS, METADATA_ONLY)) {
+    for (String programAccess : List.of(NO_ACCESS, METADATA_ONLY))
       asRestrictedUser(
           List.of(new Restriction("program", PROGRAM, programAccess)),
           () -> {
             String body = assertEverything(SUMMER, List.of("Patient/" + SUMMER));
-            for (String hidden :
-                List.of("pTzf9KYMk72", "nxP7UnKhomJ", "DATAEL00001", "DATAEL00006")) {
-              assertFalse(body.contains(hidden), () -> hidden + " in " + body);
-            }
+            List<String> ids = List.of("pTzf9KYMk72", "nxP7UnKhomJ", "DATAEL00001", "DATAEL00006");
+            assertTrue(ids.stream().noneMatch(body::contains), body);
           });
-    }
   }
 
   @Test
@@ -303,7 +295,6 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     assertEquals("70", patient.getIdentifierFirstRep().getValue());
   }
 
-  /** Asserts a no-store {@link #searchset} of Patients without a total. */
   private Bundle assertPatientSearchset(String url) {
     HttpResponse response = GET(url);
     Bundle bundle = searchset(url, fhirBody(response, HttpStatus.OK));
@@ -312,7 +303,6 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     return bundle;
   }
 
-  /** Asserts the no-store {@code $everything} {@link #searchset} as {@code Type/id}s, in order. */
   private String assertEverything(String patientId, List<String> expected) {
     String url = PATIENT_PATH + "/" + patientId + "/$everything";
     HttpResponse response = GET(url);
@@ -338,7 +328,6 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     manager.clear();
   }
 
-  /** Sets {@code json} for {@code test}, then writes back the prior JSON, which must be present. */
   private void withAttributeSetting(String attribute, String property, String json, Runnable test) {
     String url = "/trackedEntityAttributes/" + attribute;
     String add = "[{'op':'add','path':'/" + property + "','value':%s}]";

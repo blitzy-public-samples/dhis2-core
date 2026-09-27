@@ -36,63 +36,30 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
 import org.hisp.dhis.external.conf.*;
-import org.hisp.dhis.test.config.H2DhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.AuthenticationApiTestBase;
-import org.hisp.dhis.webapi.filter.ApiVersionFilter;
-import org.hl7.fhir.r4.model.CapabilityStatement;
-import org.hl7.fhir.r4.model.Enumerations;
+import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletResponse;
-import org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers;
-import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.request.*;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-/**
- * Tests with {@code fhir.api.enabled} on, through the security and API version filters, that FHIR
- * requests without a user get the response of {@code /api/me}: {@code 401} JSON for {@code
- * XMLHttpRequest}, also on paths security ignores or permits, and for unknown Basic credentials
- * elsewhere, else {@code 302} to {@code /login/}; and that authenticated ones reach the FHIR API.
- */
-@ContextConfiguration(classes = FhirApiEnabledSecurityTest.FhirApiEnabledConfig.class)
+/** Tests anonymous and authenticated FHIR requests behind security with the FHIR API enabled. */
+@ContextConfiguration(classes = FhirResourceMappingControllerTest.FhirApiEnabledConfig.class)
 class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
-  /** Supplies the H2 test configuration with {@code fhir.api.enabled} set to {@code true}. */
-  public static class FhirApiEnabledConfig {
-    @Bean
-    public DhisConfigurationProvider dhisConfigurationProvider() {
-      H2DhisConfigurationProvider provider = new H2DhisConfigurationProvider();
-      provider.getProperties().put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
-      return provider;
-    }
-  }
-
-  private static final String METADATA_PATH = "/api/fhir/metadata";
-  private static final String VERSIONED_METADATA_PATH = "/api/44/fhir/metadata";
   private static final List<String> FHIR_PATHS =
       List.of(
-          METADATA_PATH,
-          "/api/fhir/Patient/dUE514NMOlo",
-          VERSIONED_METADATA_PATH,
-          "/api/fhir/Patient/loginConfig",
-          "/api/44/fhir/Patient/loginConfig",
-          "/api/fhir/Patient/account");
+          "/api/fhir/metadata", "/api/fhir/Patient/dUE514NMOlo",
+          "/api/44/fhir/metadata", "/api/fhir/Patient/loginConfig",
+          "/api/44/fhir/Patient/loginConfig", "/api/fhir/Patient/account");
 
   @Autowired private DhisConfigurationProvider config;
-  @Autowired private FilterChainProxy springSecurityFilterChain;
-  @Autowired private ApiVersionFilter apiVersionFilter;
 
   @BeforeEach
   void assertFhirApiIsEnabledAndAddApiVersionFilterAfterSecurity() {
     assertTrue(config.isEnabled(ConfigurationKey.FHIR_API_ENABLED));
-    mvc =
-        MockMvcBuilders.webAppContextSetup(webApplicationContext)
-            .apply(SecurityMockMvcConfigurers.springSecurity(springSecurityFilterChain))
-            .addFilter(apiVersionFilter)
-            .build();
+    mvc = apiVersionFilterAfterSecurity(webApplicationContext);
   }
 
   @Test
@@ -100,10 +67,8 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
     String unknownUser = HttpHeaders.encodeBasicAuth("unknownuser", DEFAULT_ADMIN_PASSWORD, UTF_8);
     Map<String, String> failedBasic = Map.of(HttpHeaders.AUTHORIZATION, "Basic " + unknownUser);
     Map<String, String> xmlHttpRequest = Map.of(X_REQUESTED_WITH, XML_HTTP_REQUEST);
-    List<String> authenticatedPaths =
-        FHIR_PATHS.stream().filter(path -> !path.endsWith("/loginConfig")).toList();
-    for (Map<String, String> headers :
-        List.<Map<String, String>>of(xmlHttpRequest, Map.of(), failedBasic)) {
+    var authenticatedPaths = FHIR_PATHS.stream().filter(p -> !p.endsWith("/loginConfig")).toList();
+    for (var headers : List.of(xmlHttpRequest, Map.<String, String>of(), failedBasic)) {
       boolean json = !headers.isEmpty();
       MockHttpServletResponse expected = perform("/api/me", headers);
       for (String path : headers.equals(failedBasic) ? authenticatedPaths : FHIR_PATHS) {
@@ -125,9 +90,10 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
   @Test
   void authenticatedRequestReachesFhirApi() throws Exception {
     createUserWithAuth(BASIC_AUTH_USER_NAME, "ALL");
-    for (String path : List.of(METADATA_PATH, VERSIONED_METADATA_PATH)) {
-      CapabilityStatement statement =
-          parseOk(new HttpResponse(toResponse(performBasic(path))), CapabilityStatement.class);
+    Map<String, String> basic = Map.of(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER);
+    for (String path : List.of("/api/fhir/metadata", "/api/44/fhir/metadata")) {
+      HttpResponse response = new HttpResponse(toResponse(perform(path, basic)));
+      CapabilityStatement statement = parseOk(response, CapabilityStatement.class);
       assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion(), path);
     }
   }
@@ -138,9 +104,5 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
     MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
     headers.forEach(request::header);
     return mvc.perform(request).andReturn().getResponse();
-  }
-
-  private MockHttpServletResponse performBasic(String path) throws Exception {
-    return perform(path, Map.of(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER));
   }
 }

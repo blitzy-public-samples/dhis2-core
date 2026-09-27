@@ -49,7 +49,7 @@
             <fieldset id="fhir-form-body" class="plain" aria-labelledby="fhir-editing">
               <div class="field">
                 <label for="fhir-name">Name (required)</label>
-                <input type="text" id="fhir-name" required>
+                <input type="text" id="fhir-name" required aria-invalid="false">
               </div>
               <div class="field">
                 <label for="fhir-resource-type">Resource type</label>
@@ -57,15 +57,15 @@
               </div>
               <div class="field">
                 <label for="fhir-tracked-entity-type">Tracked entity type (required)</label>
-                <select id="fhir-tracked-entity-type" required disabled><option value="">Loading tracked entity types…</option></select>
+                <select id="fhir-tracked-entity-type" required disabled aria-invalid="false"><option value="">Loading tracked entity types…</option></select>
               </div>
               <div class="field">
                 <label for="fhir-program">Program<span id="fhir-program-required"></span></label>
-                <select id="fhir-program"><option value="">(none)</option></select>
+                <select id="fhir-program" aria-invalid="false"><option value="">(none)</option></select>
               </div>
               <div class="field" id="fhir-program-stage-field" hidden>
                 <label for="fhir-program-stage">Program stage (required)</label>
-                <select id="fhir-program-stage"><option value="">Select a program first</option></select>
+                <select id="fhir-program-stage" aria-invalid="false"><option value="">Select a program first</option></select>
               </div>
               <h3>Field mappings</h3>
               <div id="fhir-field-mappings"></div>
@@ -142,14 +142,17 @@
         select.replaceChildren(options);
         unflag(select);
       }
+      function labelOf(control) {
+        const row = control.closest('.mapping-row');
+        return (row ? row.firstChild.textContent + ', ' : '') + text(control.labels[0] && control.labels[0].textContent).replace(' (required)', '');
+      }
       function setValue(select, value, warnings) {
         const wanted = text(value), known = Array.from(select.options).some((option) => option.value === wanted);
         const kept = !known && wanted && warnings && !select.closest('[hidden]');
         if (kept) select.appendChild(el('option', {value: wanted}, 'Unavailable: ' + wanted));
         select.value = known || kept ? wanted : '';
         if (!kept) return;
-        const row = select.closest('.mapping-row');
-        warnings.push((row ? row.firstChild.textContent + ', ' : '') + text(select.labels[0] && select.labels[0].textContent).replace(' (required)', '') + ': "' + wanted + '"');
+        warnings.push(labelOf(select) + ': "' + wanted + '"');
       }
       function csrfToken() {
         const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='));
@@ -250,6 +253,7 @@
       function applyResourceType() {
         const eventDerived = resourceSelect.value !== 'PATIENT';
         programSelect.required = stageSelect.required = eventDerived;
+        if (!eventDerived) [programSelect, stageSelect].forEach(unflag);
         byId('fhir-program-required').textContent = eventDerived ? ' (required)' : '';
         stageField.hidden = !eventDerived;
       }
@@ -289,6 +293,7 @@
           const required = inputs.includes(key) && target.requiredInputs.includes(key);
           control.wrapper.hidden = !inputs.includes(key);
           control.input.required = required;
+          if (!required) unflag(control.input);
           control.label.textContent = labelText + (required ? ' (required)' : '');
         });
         row.valueMap.hidden = !inputs.includes('valueMap');
@@ -307,7 +312,7 @@
       }
       function addPair(row, key, value, warnings) {
         const id = row.id + '-vm' + ++state.pairCount;
-        const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value'}), code: el('select', {id: id + '-code'}),
+        const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value', 'aria-invalid': 'false'}), code: el('select', {id: id + '-code'}),
           remove: el('button', {type: 'button'}, 'Remove value')};
         pair.key.value = text(key);
         fillSelect(pair.code, null, GENDERS.map((gender) => [gender, gender]));
@@ -342,7 +347,7 @@
         row.sourceField = field(id + '-source', 'Source', row.source).wrapper;
         row.fieldset.append(row.legend, field(id + '-target', 'Target', row.target).wrapper, field(id + '-source-type', 'Source type', row.sourceType).wrapper, row.sourceField);
         Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
-          const input = el('input', {type: 'text', id: id + '-' + key});
+          const input = el('input', {type: 'text', id: id + '-' + key, 'aria-invalid': 'false'});
           row.inputs[key] = {input, ...field(id + '-' + key, labelText, input)};
           row.fieldset.appendChild(row.inputs[key].wrapper);
         });
@@ -383,7 +388,8 @@
         return entry;
       }
       const flag = (control) => { control.setAttribute('aria-invalid', 'true'); control.setAttribute('aria-describedby', 'fhir-form-errors'); };
-      const unflag = (control) => ['aria-invalid', 'aria-describedby'].forEach((name) => control.removeAttribute(name));
+      const unflag = (control) => { control.setAttribute('aria-invalid', 'false'); control.removeAttribute('aria-describedby'); };
+      const unflagAll = () => form.querySelectorAll('[aria-invalid="true"]').forEach(unflag);
       function duplicateKeys() {
         const problems = [];
         rowsBox.querySelectorAll('.pair input[aria-invalid]').forEach(unflag);
@@ -425,6 +431,7 @@
         event.preventDefault();
         if (state.saving) return;
         formErrors.replaceChildren();
+        unflagAll();
         const name = nameInput.value.trim();
         const problems = formProblems();
         if (problems.length > 0) {
@@ -524,7 +531,7 @@
       }
       function clearForm() {
         state.editing = null;
-        form.querySelectorAll('[aria-invalid]').forEach(unflag);
+        unflagAll();
         nameInput.value = '';
         resourceSelect.value = 'PATIENT';
         applyResourceType();
@@ -550,6 +557,12 @@
       byId('fhir-add-row').addEventListener('click', guard(() => addRow({})));
       cancelButton.addEventListener('click', guard(() => { resetForm(); nameInput.focus(); }));
       form.addEventListener('input', guard(({target}) => unflag(target)));
+      form.addEventListener('invalid', guard(() => {
+        const blocked = Array.from(form.querySelectorAll('input:invalid, select:invalid'));
+        unflagAll();
+        blocked.forEach(flag);
+        showFormErrors(blocked.map((control) => labelOf(control) + ': ' + control.validationMessage));
+      }), true);
       form.addEventListener('submit', guard(save));
       applyResourceType();
       guard(async () => {

@@ -35,6 +35,9 @@ import static org.hisp.dhis.fhir.service.FhirTrackerReader.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import jakarta.persistence.PersistenceException;
+import java.lang.reflect.UndeclaredThrowableException;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -48,7 +51,6 @@ import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.dxf2.webmessage.*;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.FhirApiException;
-import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
 import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.*;
@@ -57,12 +59,17 @@ import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.function.Executable;
-import org.mockito.Mock;
+import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.transaction.*;
+import org.springframework.transaction.support.*;
 
-/** Tests the Tracker export calls and exception translation of {@link FhirTrackerReader}. */
+/**
+ * Tests the Tracker export calls, exception translation, deadline and operation transaction of
+ * {@link FhirTrackerReader}.
+ */
 @ExtendWith(MockitoExtension.class)
 class FhirTrackerReaderTest {
   private static final String FAMILY_TEA = "fhirFamily1";
@@ -79,15 +86,18 @@ class FhirTrackerReaderTest {
   @Mock private FhirTrackedEntityExportAdapter trackedEntityAdapter;
   @Mock private FhirEnrollmentExportAdapter enrollmentAdapter;
   @Mock private TrackerExportTimeout timeout;
+  @Mock private PlatformTransactionManager transactionManager;
   private final MockHttpServletRequest request = new MockHttpServletRequest();
   private final List<Deadline> seen = new ArrayList<>();
   private long nanos = TimeUnit.SECONDS.toNanos(1_000);
-  private FhirTrackerReader reader;
+  private FhirTrackerReader reader, transactional;
   private FhirSearchOrigin origin;
 
   @BeforeEach
   void setUp() {
     reader = new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout);
+    transactional =
+        new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout, transactionManager);
     Map<String, String> attributeToParameter = new LinkedHashMap<>();
     attributeToParameter.put(FAMILY_TEA, "family");
     attributeToParameter.put(GIVEN_TEA, "given");
@@ -118,19 +128,15 @@ class FhirTrackerReaderTest {
     assertEquals(new EnrollmentResult(List.of(enrollment), false), result);
     verify(enrollmentAdapter).find(same(enrollmentParams), same(request));
     verifyNoMoreInteractions(trackedEntityAdapter, enrollmentAdapter, timeout);
-    FhirApiException notFound =
-        trackedEntityError(new NotFoundException("TrackedEntity not found"), origin);
+    var notFound = teError(new NotFoundException("TrackedEntity not found"), origin);
     assertEquals(HttpStatus.NOT_FOUND, notFound.getStatus());
     assertEquals(IssueType.NOTFOUND, notFound.getIssueType());
-    for (Exception exception :
-        List.of(
-            new WebMessageException(WebMessageUtils.conflict("x")),
-            new DeadlineExceededException(Duration.ofSeconds(5)),
-            new IllegalArgumentException("x"))) {
+    var rejected = new WebMessageException(WebMessageUtils.conflict("x"));
+    DeadlineExceededException expired = new DeadlineExceededException(Duration.ofSeconds(5));
+    for (Exception exception : List.of(rejected, expired, new IllegalArgumentException("x"))) {
       doThrow(exception).when(trackedEntityAdapter).find(teParams, request);
       assertRethrown(exception, () -> reader.findTrackedEntities(teParams, request, origin));
     }
-    DeadlineExceededException expired = new DeadlineExceededException(Duration.ofSeconds(5));
     doThrow(expired).when(enrollmentAdapter).find(enrollmentParams, request);
     assertRethrown(expired, () -> reader.findEnrollments(enrollmentParams, request, ENCOUNTER));
   }
@@ -138,81 +144,63 @@ class FhirTrackerReaderTest {
   @Test
   void forbiddenIsTranslatedWithFixedDiagnostics() throws Exception {
     String denial = "User has no data read access to tracked entity type: " + TRACKED_ENTITY_TYPE;
-    assertForbidden(trackedEntityError(new ForbiddenException(denial), origin));
+    assertForbidden(teError(new ForbiddenException(denial), origin));
     var noAccess = new ForbiddenException("User has no access to program: " + PROGRAM);
     assertTrue(enrollmentResult(noAccess, new EnrollmentRequestParams()).forbidden());
+    String noType = "Tracked entity type is specified but does not exist: " + TRACKED_ENTITY_TYPE;
+    TrackedEntityRequestParams byType = new TrackedEntityRequestParams();
+    byType.setTrackedEntityType(UID.of(TRACKED_ENTITY_TYPE));
+    assertForbidden(teError(new BadRequestException(noType), byType, origin));
+    var missing = new BadRequestException(MISSING);
+    assertForbidden(teError(missing, search(null), origin));
+    assertTrue(enrollmentResult(missing, inProgram()).forbidden());
+    assertNotSupported(teError(missing, origin), "Patient");
+    assertNotSupported(enrollmentError(missing, new EnrollmentRequestParams()), "Observation");
   }
 
   @Test
   void illegalQueryIsTranslatedToInvalidNamingOriginParameters() throws Exception {
     String nonSearchable = "Non-searchable attribute(s) can not be used during global search:  ";
     var one = new IllegalQueryException(nonSearchable + List.of(FAMILY_TEA));
-    assertInvalid(trackedEntityError(one, origin), "family", ATTRIBUTE_NOT_SEARCHABLE);
+    assertInvalid(teError(one, origin), "family", ATTRIBUTE_NOT_SEARCHABLE);
     var two = new IllegalQueryException(nonSearchable + List.of(GIVEN_TEA, FAMILY_TEA));
-    assertInvalid(trackedEntityError(two, origin), "family, given", ATTRIBUTE_NOT_SEARCHABLE);
-    String minimum = "At least 2 attribute search parameters are required";
+    assertInvalid(teError(two, origin), "family, given", ATTRIBUTE_NOT_SEARCHABLE);
+    String min = "At least 2 attribute search parameters are required";
     var tooFew = new IllegalQueryException(TOO_FEW);
-    assertInvalid(trackedEntityError(tooFew, origin), "family, given", minimum);
+    assertInvalid(teError(tooFew, origin), "family, given", min);
     List<String> configured = origin.configuredAttributeParameters();
     var none = new FhirSearchOrigin(origin.attributeToParameter(), List.of(), configured);
-    assertInvalid(trackedEntityError(tooFew, none), "identifier, family, given", minimum);
-    var unconfigured = trackedEntityError(tooFew, FhirSearchOrigin.empty());
-    assertInvalid(unconfigured, "_id", minimum + NO_ATTRIBUTE_PARAMETERS);
+    assertInvalid(teError(tooFew, none), "identifier, family, given", min);
+    assertInvalid(teError(tooFew, FhirSearchOrigin.empty()), "_id", min + NO_ATTRIBUTE_PARAMETERS);
   }
 
   @Test
   void badRequestCitingOriginAttributeNamesItsParameter() throws Exception {
-    assertInvalid(
-        trackedEntityError(blocked(GIVEN_TEA), origin), "given", ATTRIBUTE_VALUE_REJECTED);
+    assertInvalid(teError(blocked(GIVEN_TEA), origin), "given", ATTRIBUTE_VALUE_REJECTED);
     String tooShort =
         "At least 3 character(s) should be present in the filter to start a search, but the filter"
-            + " for the tracked entity attribute "
-            + FAMILY_TEA
-            + " doesn't contain enough.";
+            + (" for the tracked entity attribute " + FAMILY_TEA + " doesn't contain enough.");
     var shortValue = new BadRequestException(tooShort);
-    assertInvalid(trackedEntityError(shortValue, origin), "family", ATTRIBUTE_VALUE_REJECTED);
-  }
-
-  @Test
-  void filterEchoedByTheExportPathIsNotACitation() throws Exception {
+    assertInvalid(teError(shortValue, origin), "family", ATTRIBUTE_VALUE_REJECTED);
     TrackedEntityRequestParams search = search(SURNAME);
-    assertNotSupported(trackedEntityError(echoOf(search), search, origin), "Patient");
-    var family = trackedEntityError(blocked(FAMILY_TEA), search, origin);
-    assertInvalid(family, "family", ATTRIBUTE_VALUE_REJECTED);
+    assertNotSupported(teError(echoOf(search), search, origin), "Patient");
+    assertInvalid(teError(blocked(FAMILY_TEA), search, origin), "family", ATTRIBUTE_VALUE_REJECTED);
     var gender = new IllegalQueryException("Non-searchable attribute(s): [" + GENDER_TEA + "]");
-    assertInvalid(trackedEntityError(gender, search, origin), "gender", ATTRIBUTE_NOT_SEARCHABLE);
+    assertInvalid(teError(gender, search, origin), "gender", ATTRIBUTE_NOT_SEARCHABLE);
     TrackedEntityRequestParams selector = search(PROGRAM + " " + SELECTOR_NOT_FOUND);
-    assertNotSupported(trackedEntityError(echoOf(selector), selector, origin), "Patient");
+    assertNotSupported(teError(echoOf(selector), selector, origin), "Patient");
   }
 
   @Test
-  void residualBadRequestIsNotSupported() throws Exception {
+  void residualBadRequestIsNotSupported() throws Throwable {
     String notTracker = "Program specified is not a tracker program: " + PROGRAM;
     FhirSearchOrigin none = FhirSearchOrigin.empty();
-    assertNotSupported(trackedEntityError(new BadRequestException(notTracker), none), "Patient");
-    assertNotSupported(trackedEntityError(blocked(UNMAPPED_TEA), origin), "Patient");
-    assertNotSupported(trackedEntityError(blocked(FAMILY_TEA + "2"), origin), "Patient");
+    assertNotSupported(teError(new BadRequestException(notTracker), none), "Patient");
+    assertNotSupported(teError(blocked(UNMAPPED_TEA), origin), "Patient");
+    assertNotSupported(teError(blocked(FAMILY_TEA + "2"), origin), "Patient");
     var invalid = new IllegalQueryException("Query is not valid");
-    assertNotSupported(trackedEntityError(invalid, origin), "Patient");
+    assertNotSupported(teError(invalid, origin), "Patient");
     assertNotSupported(enrollmentError(invalid, new EnrollmentRequestParams()), "Observation");
-  }
-
-  @Test
-  void badRequestHidingTheSelectedProgramOrTypeIsForbidden() throws Exception {
-    String typeMissing =
-        "Tracked entity type is specified but does not exist: " + TRACKED_ENTITY_TYPE;
-    TrackedEntityRequestParams byType = new TrackedEntityRequestParams();
-    byType.setTrackedEntityType(UID.of(TRACKED_ENTITY_TYPE));
-    assertForbidden(trackedEntityError(new BadRequestException(typeMissing), byType, origin));
-    var missing = new BadRequestException(MISSING);
-    assertForbidden(trackedEntityError(missing, search(null), origin));
-    assertTrue(enrollmentResult(missing, inProgram()).forbidden());
-    assertNotSupported(trackedEntityError(missing, origin), "Patient");
-    assertNotSupported(enrollmentError(missing, new EnrollmentRequestParams()), "Observation");
-  }
-
-  @Test
-  void exportMessagesAndSearchValuesAreNeverLogged() throws Throwable {
     TrackedEntityRequestParams search = search(SURNAME);
     String hidden = MISSING + " " + SURNAME;
     for (Exception failure :
@@ -220,24 +208,20 @@ class FhirTrackerReaderTest {
             new ForbiddenException(SURNAME),
             new NotFoundException(SURNAME),
             new BadRequestException(hidden),
-            new BadRequestException(
-                "Operators [SW] are blocked for attribute '" + FAMILY_TEA + "'. " + SURNAME),
+            new BadRequestException(blocked(FAMILY_TEA).getMessage() + " " + SURNAME),
             new IllegalQueryException(
                 "Non-searchable attribute(s): [" + FAMILY_TEA + "] " + SURNAME),
             new IllegalQueryException("At least 2 attributes should be mentioned. " + SURNAME))) {
-      loggedOnceWithoutSurname(() -> trackedEntityError(failure, search, origin));
+      loggedOnceWithoutSurname(() -> teError(failure, search, origin));
     }
-    String unusable =
-        loggedOnceWithoutSurname(() -> trackedEntityError(echoOf(search), search, origin));
+    String unusable = loggedOnceWithoutSurname(() -> teError(echoOf(search), search, origin));
     assertTrue(unusable.startsWith("WARN") && unusable.contains("Patient"), unusable);
     assertTrue(unusable.contains(PROGRAM), unusable);
-    for (Exception denial :
-        List.of(new ForbiddenException(SURNAME), new BadRequestException(hidden))) {
+    for (var denial : List.of(new ForbiddenException(SURNAME), new BadRequestException(hidden))) {
       loggedOnceWithoutSurname(() -> assertTrue(enrollmentResult(denial, inProgram()).forbidden()));
     }
-    for (Exception rejection :
-        List.of(new BadRequestException(SURNAME), new IllegalQueryException(SURNAME))) {
-      String logged = loggedOnceWithoutSurname(() -> enrollmentError(rejection, inProgram()));
+    for (var e : List.of(new BadRequestException(SURNAME), new IllegalQueryException(SURNAME))) {
+      String logged = loggedOnceWithoutSurname(() -> enrollmentError(e, inProgram()));
       assertTrue(logged.startsWith("WARN") && logged.contains("Observation"), logged);
       assertTrue(logged.contains(PROGRAM), logged);
     }
@@ -285,13 +269,116 @@ class FhirTrackerReaderTest {
     assertEquals(1, seen.size());
     assertSame(existing, seen.get(0));
     assertSame(existing, DeadlineHolder.get());
-    Supplier<Object> failing =
-        () -> {
-          throw new IllegalStateException("operation failed");
-        };
+    Supplier<Object> failing = throwing(new IllegalStateException("operation failed"));
     assertThrows(IllegalStateException.class, () -> reader.withinDeadline(failing));
     assertSame(existing, DeadlineHolder.get(), "a failed operation leaves the deadline in place");
     verify(timeout, never()).newDeadline();
+  }
+
+  @Test
+  void queryTimeoutUnderADeadlineBecomesDeadlineExceeded() {
+    when(timeout.newDeadline()).thenAnswer(invocation -> deadlineIn(Duration.ofSeconds(10)));
+    for (Deadline held : Arrays.asList(null, deadlineIn(Duration.ofSeconds(30)))) {
+      DeadlineHolder.set(held);
+      for (RuntimeException timedOut : queryTimeouts()) {
+        Executable timesOut = () -> reader.withinDeadline(throwing(timedOut));
+        var exceeded = assertThrows(DeadlineExceededException.class, timesOut);
+        String budget = held == null ? "10s" : "30s";
+        assertEquals("Request exceeded its time budget of " + budget, exceeded.getMessage());
+        assertSame(timedOut, exceeded.getCause());
+        assertSame(held, DeadlineHolder.get(), "only an owned deadline is cleared");
+      }
+    }
+    verify(timeout, times(queryTimeouts().size())).newDeadline();
+  }
+
+  @Test
+  void queryTimeoutWithoutADeadlineAndOtherFailuresAreRethrownUnchanged() {
+    when(timeout.newDeadline()).thenReturn(null);
+    for (RuntimeException timedOut : queryTimeouts()) {
+      assertRethrown(timedOut, () -> reader.withinDeadline(throwing(timedOut)));
+      assertNull(DeadlineHolder.get());
+    }
+    doAnswer(invocation -> deadlineIn(Duration.ofSeconds(10))).when(timeout).newDeadline();
+    RuntimeException first = new IllegalStateException("first");
+    RuntimeException second = new IllegalStateException("second", first);
+    first.initCause(second);
+    var expired = new DeadlineExceededException(Duration.ofSeconds(5), queryTimeouts().get(0));
+    var failed = new IllegalStateException("operation failed");
+    for (RuntimeException failure : List.of(FhirApiException.notFound(), failed, expired, first)) {
+      assertRethrown(failure, () -> reader.withinDeadline(throwing(failure)));
+      assertNull(DeadlineHolder.get());
+    }
+  }
+
+  @Test
+  void operationRunsInOneReadOnlyTransactionBegunUnderItsDeadlineUnlessOneIsActive() {
+    when(timeout.newDeadline()).thenAnswer(invocation -> deadlineIn(Duration.ofSeconds(10)));
+    TransactionStatus status = new SimpleTransactionStatus();
+    List<TransactionDefinition> definitions = new ArrayList<>();
+    when(transactionManager.getTransaction(any()))
+        .thenAnswer(i -> definitions.add(i.getArgument(0)) ? recorded(status) : null);
+    assertEquals("result", transactional.withinDeadline(() -> recorded("result")));
+    InOrder order = inOrder(timeout, transactionManager);
+    order.verify(timeout).newDeadline();
+    order.verify(transactionManager).getTransaction(any());
+    order.verify(transactionManager).commit(status);
+    assertTrue(definitions.get(0).isReadOnly());
+    assertEquals(
+        TransactionDefinition.PROPAGATION_REQUIRED, definitions.get(0).getPropagationBehavior());
+    assertNotNull(seen.get(0), "the deadline is held when the transaction begins");
+    assertEquals(List.of(seen.get(0), seen.get(0)), seen);
+    RuntimeException timedOut = queryTimeouts().get(1);
+    Executable timesOut = () -> transactional.withinDeadline(throwing(timedOut));
+    assertSame(timedOut, assertThrows(DeadlineExceededException.class, timesOut).getCause());
+    RuntimeException failed = new IllegalStateException("operation failed");
+    assertRethrown(failed, () -> transactional.withinDeadline(throwing(failed)));
+    verify(transactionManager, times(3)).getTransaction(any());
+    verify(transactionManager, times(2)).rollback(status);
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    try {
+      assertEquals("active", transactional.withinDeadline(() -> "active"));
+      assertSame(timedOut, assertThrows(DeadlineExceededException.class, timesOut).getCause());
+    } finally {
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+    verifyNoMoreInteractions(transactionManager);
+    assertNull(DeadlineHolder.get());
+  }
+
+  @Test
+  void checkedAndUndeclaredExceptionsReachTheCallerUnchangedAndRollBack() throws Exception {
+    TransactionStatus status = new SimpleTransactionStatus();
+    when(transactionManager.getTransaction(any())).thenReturn(status);
+    TrackedEntityRequestParams params = new TrackedEntityRequestParams();
+    WebMessageException rejected = new WebMessageException(WebMessageUtils.conflict("x"));
+    doThrow(rejected).when(trackedEntityAdapter).find(params, request);
+    for (FhirTrackerReader each : List.of(transactional, reader)) {
+      assertRethrown(
+          rejected,
+          () -> each.withinDeadline(() -> each.findTrackedEntities(params, request, origin)));
+    }
+    UndeclaredThrowableException undeclared =
+        new UndeclaredThrowableException(new WebMessageException(WebMessageUtils.conflict("y")));
+    assertRethrown(undeclared, () -> transactional.withinDeadline(throwing(undeclared)));
+    verify(transactionManager, times(2)).rollback(status);
+    verify(transactionManager, never()).commit(any());
+  }
+
+  private static Supplier<Object> throwing(RuntimeException exception) {
+    return () -> {
+      throw exception;
+    };
+  }
+
+  private static List<RuntimeException> queryTimeouts() {
+    String canceled = "ERROR: canceling statement due to user request";
+    var sql = new SQLException(canceled, "57014");
+    var hibernate = new org.hibernate.QueryTimeoutException(canceled, sql, "select 1");
+    var jpa = new jakarta.persistence.QueryTimeoutException(canceled, hibernate);
+    var spring = new org.springframework.dao.QueryTimeoutException(canceled);
+    var wrapped = new IllegalStateException("wrapped", new PersistenceException("wrapped", jpa));
+    return List.of(jpa, hibernate, spring, wrapped);
   }
 
   private Deadline deadlineIn(Duration budget) {
@@ -303,30 +390,27 @@ class FhirTrackerReaderTest {
     return result;
   }
 
-  private FhirApiException trackedEntityError(Exception exception, FhirSearchOrigin searchOrigin)
-      throws Exception {
-    return trackedEntityError(exception, new TrackedEntityRequestParams(), searchOrigin);
+  private FhirApiException teError(Exception exception, FhirSearchOrigin o) throws Exception {
+    return teError(exception, new TrackedEntityRequestParams(), o);
   }
 
-  private FhirApiException trackedEntityError(
-      Exception exception, TrackedEntityRequestParams params, FhirSearchOrigin searchOrigin)
+  private FhirApiException teError(Exception e, TrackedEntityRequestParams p, FhirSearchOrigin o)
       throws Exception {
-    doThrow(exception).when(trackedEntityAdapter).find(params, request);
+    doThrow(e).when(trackedEntityAdapter).find(p, request);
+    return assertThrows(FhirApiException.class, () -> reader.findTrackedEntities(p, request, o));
+  }
+
+  private FhirApiException enrollmentError(Exception e, EnrollmentRequestParams p)
+      throws Exception {
+    doThrow(e).when(enrollmentAdapter).find(p, request);
     return assertThrows(
-        FhirApiException.class, () -> reader.findTrackedEntities(params, request, searchOrigin));
+        FhirApiException.class, () -> reader.findEnrollments(p, request, OBSERVATION));
   }
 
-  private FhirApiException enrollmentError(Exception exception, EnrollmentRequestParams params)
+  private EnrollmentResult enrollmentResult(Exception e, EnrollmentRequestParams p)
       throws Exception {
-    doThrow(exception).when(enrollmentAdapter).find(params, request);
-    return assertThrows(
-        FhirApiException.class, () -> reader.findEnrollments(params, request, OBSERVATION));
-  }
-
-  private EnrollmentResult enrollmentResult(Exception exception, EnrollmentRequestParams params)
-      throws Exception {
-    doThrow(exception).when(enrollmentAdapter).find(params, request);
-    return reader.findEnrollments(params, request, ENCOUNTER);
+    doThrow(e).when(enrollmentAdapter).find(p, request);
+    return reader.findEnrollments(p, request, ENCOUNTER);
   }
 
   private static TrackedEntityRequestParams search(String familyValue) {
@@ -410,10 +494,5 @@ class FhirTrackerReaderTest {
     assertEquals(IssueType.NOTSUPPORTED, exception.getIssueType());
     String diagnostics = "The configured mapping for " + fhirType + " cannot be used";
     assertEquals(diagnostics, exception.getDiagnostics());
-  }
-
-  @SafeVarargs
-  private static <T> FilteredPage<T> page(T... items) {
-    return new FilteredPage<>(Page.withoutPager("items", List.of(items)), Fields.all());
   }
 }

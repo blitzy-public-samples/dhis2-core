@@ -97,9 +97,8 @@ class FhirPatientMapperTest {
     assertEquals(List.of(FAMILY + "|" + GIVEN), names(patient));
     assertEquals(FEMALE, patient.getGender());
     assertEquals(BIRTH_DATE, patient.getBirthDateElement().getValueAsString());
-    assertEquals(
-        List.of("PHONE|" + PHONE, "EMAIL|" + EMAIL_ADDR),
-        patient.getTelecom().stream().map(c -> c.getSystem() + "|" + c.getValue()).toList());
+    var telecom = patient.getTelecom().stream().map(c -> c.getSystem() + "|" + c.getValue());
+    assertEquals(List.of("PHONE|" + PHONE, "EMAIL|" + EMAIL_ADDR), telecom.toList());
     assertEquals(List.of(ADDRESS), patient.getAddress().stream().map(Address::getText).toList());
     Patient byAge =
         map(patientMapping(attr(PATIENT_BIRTH_DATE, TEA_AGE)), teaValue(TEA_AGE, "2019-05-17"));
@@ -118,9 +117,8 @@ class FhirPatientMapperTest {
 
   @Test
   void genderValueMapAndUnknownValues() {
-    ResolvedMapping mapping =
-        genderMapping(
-            Map.of("M", "male", "F", "female", "O", "other", "U", "unknown", "Q", "nonbinary"));
+    var values = Map.of("M", "male", "F", "female", "O", "other", "U", "unknown", "Q", "nonbinary");
+    ResolvedMapping mapping = genderMapping(values);
     Map.of("M", MALE, "F", FEMALE, "O", OTHER, "U", UNKNOWN, "f", FEMALE, "m", MALE)
         .forEach((source, expected) -> assertEquals(expected, gender(mapping, source), source));
     List.of("X", "Q").forEach(source -> assertNull(gender(mapping, source), source));
@@ -194,9 +192,8 @@ class FhirPatientMapperTest {
   }
 
   private Patient mapEmptyMappingPatient() {
-    return map(
-        resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, List.of(), Map.of()),
-        EMPTY_MAPPING_VALUES.toArray(Attribute[]::new));
+    var empty = resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, List.of(), Map.of());
+    return map(empty, EMPTY_MAPPING_VALUES.toArray(Attribute[]::new));
   }
 
   private static ResolvedMapping genderMapping(Map<String, String> valueMap) {
@@ -223,15 +220,12 @@ class FhirPatientMapperTest {
   }
 
   private static Set<String> populatedElements(Base element) {
-    return element.children().stream()
-        .filter(Property::hasValues)
-        .map(Property::getName)
-        .collect(toSet());
+    var populated = element.children().stream().filter(Property::hasValues);
+    return populated.map(Property::getName).collect(toSet());
   }
 
   private static List<String> names(Patient patient) {
-    return patient.getName().stream()
-        .map(name -> name.getFamily() + "|" + name.getGivenAsSingleString())
-        .toList();
+    var names = patient.getName().stream();
+    return names.map(n -> n.getFamily() + "|" + n.getGivenAsSingleString()).toList();
   }
 }

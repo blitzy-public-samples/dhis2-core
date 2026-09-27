@@ -34,16 +34,20 @@ import static org.hisp.dhis.dxf2.webmessage.WebMessageUtils.error;
 
 import jakarta.servlet.http.*;
 import java.io.*;
+import java.util.HashSet;
 import java.util.List;
 import java.util.regex.*;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.*;
+import org.hisp.dhis.dxf2.metadata.MetadataExportParams;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.gist.*;
+import org.hisp.dhis.query.Filters;
 import org.hisp.dhis.query.GetObjectListParams;
+import org.hisp.dhis.query.Query;
 import org.hisp.dhis.webapi.controller.AbstractCrudController;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.*;
@@ -81,6 +85,22 @@ public class FhirResourceMappingController
       out.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
       page.transferTo(out.getOutputStream());
     }
+  }
+
+  /** Exports the mapping in the metadata import format, honouring the /api/metadata options. */
+  @GetMapping("/{uid}/metadata")
+  public ResponseEntity<MetadataExportParams> getFhirResourceMappingMetadata(
+      @PathVariable("uid") UID uid,
+      @RequestParam(required = false, defaultValue = "false") boolean download)
+      throws NotFoundException {
+    getEntity(uid);
+    MetadataExportParams params =
+        exportService.getParamsFromMap(contextService.getParameterValuesMap());
+    params.setClasses(new HashSet<>());
+    params.addQuery(Query.of(FhirResourceMapping.class).add(Filters.eq("id", uid.getValue())));
+    params.setDownload(download);
+    exportService.validate(params);
+    return ResponseEntity.ok(params);
   }
 
   @Override

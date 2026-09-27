@@ -40,10 +40,8 @@ import java.util.*;
 import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses;
 import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
-import org.hisp.dhis.http.HttpMethod;
-import org.hisp.dhis.http.HttpStatus;
+import org.hisp.dhis.http.*;
 import org.hisp.dhis.jsontree.*;
-import org.hisp.dhis.test.config.H2DhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.H2ControllerIntegrationTestBase;
 import org.hisp.dhis.webapi.controller.tracker.TestSetup;
 import org.hisp.dhis.webapi.openapi.OpenApiObject;
@@ -55,30 +53,18 @@ import org.hl7.fhir.r4.model.Enumerations.FHIRVersion;
 import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.transaction.annotation.Transactional;
 
 /** Tests the FHIR CapabilityStatement, OpenAPI contract and 400, 404 and 501 outcomes on H2. */
 @Transactional
-@ContextConfiguration(classes = FhirCapabilityStatementControllerTest.FhirApiEnabledConfig.class)
+@ContextConfiguration(classes = FhirResourceMappingControllerTest.FhirApiEnabledConfig.class)
 class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestBase {
-  /** Supplies the H2 test configuration with {@code fhir.api.enabled} set to {@code true}. */
-  public static class FhirApiEnabledConfig {
-    @Bean
-    public DhisConfigurationProvider dhisConfigurationProvider() {
-      H2DhisConfigurationProvider provider = new H2DhisConfigurationProvider();
-      provider.getProperties().put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
-      return provider;
-    }
-  }
-
   private static final String FHIR_BASE = "/api/fhir";
   private static final String METADATA_PATH = FHIR_BASE + "/metadata";
   private static final String FHIR_JSON = "application/fhir+json";
   private static final String OBSERVATION_READ = "/Observation/TvctPPhpD8z-D9PbzJY8bJM-GieVkTxp4HH";
 
-  /** Reads, malformed-id reads, searches and {@code $everything}, one row per bridged type. */
   private static final String BRIDGED_TYPE_REQUESTS =
       """
       /Patient/dUE514NMOlo /Patient/bad /Patient/bad?foo=1 /Patient /Patient?family=rain&unknown=1 /Patient/dUE514NMOlo/$everything
@@ -114,75 +100,25 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     manager.clear();
     assertEquals(expected.subList(0, 3), describeResources(readCapabilityStatement("")));
     assertOutcome(GET, FHIR_BASE + OBSERVATION_READ, NOT_IMPLEMENTED, "Observation");
-  }
-
-  @Test
-  void metadataAcceptsFormatAndRejectsOtherParameters() {
-    for (String format : List.of("json", "application/json", "application/fhir+json")) {
-      assertEquals(
-          FHIRVersion._4_0_1, readCapabilityStatement("?_format=" + format).getFhirVersion());
-    }
-    assertOutcome(GET, METADATA_PATH + "?_format=xml", BAD_REQUEST, "Invalid parameter '_format'");
-    assertOutcome(GET, METADATA_PATH + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
-    assertOutcome(
-        GET, METADATA_PATH + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
-  }
-
-  @Test
-  void implementationUrlFollowsTheRequestBaseWithOrWithoutServerBaseUrl() {
     Properties properties = config.getProperties();
     String key = ConfigurationKey.SERVER_BASE_URL.getKey();
     Object previous = properties.remove(key);
     try {
       Header host = new Header("Host", "fhir.example.org:8080");
-      String expected = "http://fhir.example.org:8080" + FHIR_BASE;
+      String hostUrl = "http://fhir.example.org:8080" + FHIR_BASE;
       var unset = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
-      assertEquals(expected, unset.getImplementation().getUrl());
+      assertEquals(hostUrl, unset.getImplementation().getUrl());
       properties.put(key, "https://dhis.example.org/dhis");
       var configured = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
-      assertEquals(expected, configured.getImplementation().getUrl());
+      assertEquals(hostUrl, configured.getImplementation().getUrl());
     } finally {
       properties.compute(key, (name, value) -> previous);
     }
-  }
-
-  @Test
-  void unmappedResourceTypesReturnNotSupported() {
-    deleteAllMappings();
-    for (String request : BRIDGED_TYPE_REQUESTS.strip().split("\\s+")) {
-      assertOutcome(GET, FHIR_BASE + request, NOT_IMPLEMENTED, request.split("[/?]")[1]);
-    }
-  }
-
-  @Test
-  void unbridgedTypeAndWriteMethodsReturnNotSupported() {
-    for (String path : List.of("/Condition", "/Condition/x", "/Condition?patient=dUE514NMOlo")) {
-      assertOutcome(
-          GET, FHIR_BASE + path, NOT_IMPLEMENTED, "Resource type Condition is not supported");
-    }
-    for (HttpMethod method : List.of(POST, PUT, PATCH, DELETE)) {
-      for (String path : List.of("", "/Patient", "/Patient/dUE514NMOlo", "/metadata")) {
-        assertOutcome(
-            method, FHIR_BASE + path, NOT_IMPLEMENTED, "Write interactions are not supported");
-      }
-    }
-  }
-
-  @Test
-  void unknownPathReturnsNotFound() {
-    for (String path :
-        List.of("", "/NotAResource", "/NotAResource/abc", "/Patient/dUE514NMOlo/extra/segment")) {
-      assertOutcome(GET, FHIR_BASE + path, NOT_FOUND, "The requested resource was not found");
-    }
-  }
-
-  @Test
-  void openApiDocumentsFhirJsonResponsesAndParameters() {
-    String url =
+    String openApi =
         "/openapi/openapi.json?failOnNameClash=true&failOnInconsistency=true"
             + " Patient Encounter Immunization Observation CapabilityStatement"
                 .replaceAll(" (\\w+)", "&scope=controller:Fhir$1Controller");
-    OpenApiObject doc = GET(url).content().as(OpenApiObject.class);
+    OpenApiObject doc = GET(openApi).content().as(OpenApiObject.class);
     String operations =
         """
         /api/fhir/Encounter/ bundle.html _count _format _id _page patient subject
@@ -215,6 +151,45 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     assertEquals(List.of(), schemas.stream().filter(name -> name.startsWith("Fhir")).toList());
   }
 
+  @Test
+  void metadataAcceptsFormatAndRejectsOtherParameters() {
+    for (String format : List.of("json", "application/json", "application/fhir+json"))
+      assertEquals(
+          FHIRVersion._4_0_1, readCapabilityStatement("?_format=" + format).getFhirVersion());
+    assertOutcome(GET, METADATA_PATH + "?_format=xml", BAD_REQUEST, "Invalid parameter '_format'");
+    assertOutcome(GET, METADATA_PATH + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
+    assertOutcome(
+        GET, METADATA_PATH + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
+    assertOutcome(GET, METADATA_PATH + "?a\tb=1", BAD_REQUEST, "Invalid parameter 'a%09b'");
+    assertOutcome(
+        GET, METADATA_PATH + "?_format=json\u0000", BAD_REQUEST, "Invalid parameter '_format'");
+  }
+
+  @Test
+  void unmappedResourceTypesReturnNotSupported() {
+    deleteAllMappings();
+    for (String request : BRIDGED_TYPE_REQUESTS.strip().split("\\s+"))
+      assertOutcome(GET, FHIR_BASE + request, NOT_IMPLEMENTED, request.split("[/?]")[1]);
+  }
+
+  @Test
+  void unbridgedTypeAndWriteMethodsReturnNotSupported() {
+    for (String path : List.of("/Condition", "/Condition/x", "/Condition?patient=dUE514NMOlo"))
+      assertOutcome(
+          GET, FHIR_BASE + path, NOT_IMPLEMENTED, "Resource type Condition is not supported");
+    for (HttpMethod method : List.of(POST, PUT, PATCH, DELETE))
+      for (String path : List.of("", "/Patient", "/Patient/dUE514NMOlo", "/metadata"))
+        assertOutcome(
+            method, FHIR_BASE + path, NOT_IMPLEMENTED, "Write interactions are not supported");
+  }
+
+  @Test
+  void unknownPathReturnsNotFound() {
+    for (String path :
+        List.of("", "/NotAResource", "/NotAResource/abc", "/Patient/dUE514NMOlo/extra/segment"))
+      assertOutcome(GET, FHIR_BASE + path, NOT_FOUND, "The requested resource was not found");
+  }
+
   private void deleteAllMappings() {
     manager.getAllNoAcl(FhirResourceMapping.class).forEach(manager::delete);
     manager.flush();
@@ -225,11 +200,9 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     return parseOk(GET(METADATA_PATH + query), CapabilityStatement.class);
   }
 
-  /** Describes each resource as {@code "Type interactions params | operations"}. */
   private static List<String> describeResources(CapabilityStatement statement) {
     List<String> resources = new ArrayList<>();
-    for (CapabilityStatementRestResourceComponent resource :
-        statement.getRestFirstRep().getResource()) {
+    for (var resource : statement.getRestFirstRep().getResource()) {
       StringJoiner line = new StringJoiner(" ").add(resource.getType());
       resource.getInteraction().forEach(i -> line.add(i.getCode().toCode()));
       resource.getSearchParam().forEach(p -> line.add(p.getName() + ":" + p.getType().toCode()));
@@ -240,7 +213,6 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     return resources;
   }
 
-  /** Sends a request, with a body unless GET or DELETE, and asserts its OperationOutcome. */
   private void assertOutcome(HttpMethod method, String path, HttpStatus status, String text) {
     IssueType code =
         Map.of(BAD_REQUEST, IssueType.INVALID, NOT_FOUND, IssueType.NOTFOUND)

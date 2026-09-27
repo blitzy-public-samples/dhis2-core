@@ -31,9 +31,11 @@ package org.hisp.dhis.fhir.mapper;
 
 import static java.util.stream.Collectors.*;
 import static org.hisp.dhis.common.ValueType.*;
+import static org.hisp.dhis.event.EventStatus.*;
 import static org.hisp.dhis.fhir.FhirTestFixtures.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.DATA_ELEMENT;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.OBSERVATION_VALUE;
+import static org.hl7.fhir.r4.model.Observation.ObservationStatus.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import ca.uhn.fhir.model.api.TemporalPrecisionEnum;
@@ -80,28 +82,22 @@ class FhirObservationMapperTest {
 
   @Test
   void oneObservationPerMappedDataValue() {
-    ResolvedMapping mapping =
-        observationMapping(
-            entries(
-                height(),
-                loinc(DE_WEIGHT, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY)
-                    .unit(BODY_WEIGHT_UNIT),
-                coded(DE_MISSING, "missing")),
-            Map.of(DE_HEIGHT, NUMBER, DE_WEIGHT, NUMBER, DE_MISSING, NUMBER));
+    var wt = loinc(DE_WEIGHT, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY, BODY_WEIGHT_UNIT);
+    var fields = entries(height(), wt, coded(DE_MISSING, "missing"));
+    var types = Map.of(DE_HEIGHT, NUMBER, DE_WEIGHT, NUMBER, DE_MISSING, NUMBER);
+    ResolvedMapping mapping = observationMapping(fields, types);
     DataValue heightValue = dataValue(DE_HEIGHT, "172.5");
     DataValue weightValue = dataValue(DE_WEIGHT, "68");
     DataValue unmapped = dataValue("DeUnmapped1", "unmapped value");
     Event event = stageEvent(EVT, EventStatus.COMPLETED, heightValue, weightValue, unmapped);
-    var observations = mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
-    List<String> ids = observations.stream().map(Observation::getIdPart).toList();
+    var obs = mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
+    List<String> ids = obs.stream().map(Observation::getIdPart).toList();
     assertEquals(List.of(id(ENR, EVT, DE_HEIGHT), id(ENR, EVT, DE_WEIGHT)), ids);
-    Observation height = observations.get(0);
-    assertCoding(height, LOINC_SYSTEM, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY);
-    assertQuantity(height.getValue(), "172.5", BODY_HEIGHT_UNIT);
-    Observation weight = observations.get(1);
-    assertCoding(weight, LOINC_SYSTEM, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY);
-    assertQuantity(weight.getValue(), "68", BODY_WEIGHT_UNIT);
-    for (Observation observation : observations) {
+    assertCoding(obs.get(0), LOINC_SYSTEM, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY);
+    assertQuantity(obs.get(0).getValue(), "172.5", BODY_HEIGHT_UNIT);
+    assertCoding(obs.get(1), LOINC_SYSTEM, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY);
+    assertQuantity(obs.get(1).getValue(), "68", BODY_WEIGHT_UNIT);
+    for (Observation observation : obs) {
       String id = observation.getIdPart();
       assertEquals(ObservationStatus.FINAL, observation.getStatus(), id);
       assertEquals("Patient/" + TE, observation.getSubject().getReference(), id);
@@ -133,10 +129,9 @@ class FhirObservationMapperTest {
       dataValue(DE_TIME, "08:30:15.250"), dataValue(DE_BAD_NUMBER, "abc")
     };
     Event event = stageEvent(EVT, EventStatus.COMPLETED, values);
-    Map<String, Observation> byDataElement =
-        mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false).stream()
-            .collect(toMap(o -> o.getIdPart().substring(24), o -> o));
-    Function<String, Type> value = dataElement -> byDataElement.get(dataElement).getValue();
+    var observations = mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
+    var byDe = observations.stream().collect(toMap(o -> o.getIdPart().substring(24), o -> o));
+    Function<String, Type> value = dataElement -> byDe.get(dataElement).getValue();
     assertQuantity(value.apply(DE_NUMBER), "120.5", "mmHg");
     assertQuantity(value.apply(DE_INTEGER), "42", null);
     assertTrue(assertInstanceOf(BooleanType.class, value.apply(DE_BOOLEAN)).booleanValue());
@@ -148,7 +143,7 @@ class FhirObservationMapperTest {
     assertEquals(TemporalPrecisionEnum.MILLI, dateTime.getPrecision());
     assertEquals("08:30:15", assertInstanceOf(TimeType.class, value.apply(DE_TIME)).getValue());
     assertEquals(note, assertInstanceOf(StringType.class, value.apply(DE_TEXT)).getValue());
-    Observation badNumber = byDataElement.get(DE_BAD_NUMBER);
+    Observation badNumber = byDe.get(DE_BAD_NUMBER);
     assertFalse(badNumber.hasValue());
     assertCoding(badNumber, TEST_SYSTEM, "bad-number", "Test bad-number");
     assertEquals(ObservationStatus.FINAL, badNumber.getStatus());
@@ -157,13 +152,8 @@ class FhirObservationMapperTest {
   @Test
   void statusTranslation() {
     Map<EventStatus, ObservationStatus> expected =
-        Map.of(
-            EventStatus.COMPLETED, ObservationStatus.FINAL,
-            EventStatus.ACTIVE, ObservationStatus.PRELIMINARY,
-            EventStatus.VISITED, ObservationStatus.PRELIMINARY,
-            EventStatus.SCHEDULE, ObservationStatus.REGISTERED,
-            EventStatus.OVERDUE, ObservationStatus.REGISTERED,
-            EventStatus.SKIPPED, ObservationStatus.CANCELLED);
+        new HashMap<>(Map.of(COMPLETED, FINAL, ACTIVE, PRELIMINARY, VISITED, PRELIMINARY));
+    expected.putAll(Map.of(SCHEDULE, REGISTERED, OVERDUE, REGISTERED, SKIPPED, CANCELLED));
     Map<EventStatus, ObservationStatus> actual = new EnumMap<>(EventStatus.class);
     for (EventStatus status : EventStatus.values()) {
       actual.put(status, single(status, OCCURRED, UPDATED).getStatus());
@@ -252,13 +242,12 @@ class FhirObservationMapperTest {
     return resolved(FhirResourceType.OBSERVATION, TE_TYPE, PROGRAM, STAGE, entries, valueTypes);
   }
 
-  private static Entry loinc(String dataElement, String code, String display) {
-    return coded(dataElement, code).system(LOINC_SYSTEM).display(display);
+  private static Entry loinc(String dataElement, String code, String display, String unit) {
+    return coded(dataElement, code).system(LOINC_SYSTEM).display(display).unit(unit);
   }
 
   private static Entry height() {
-    return loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY)
-        .unit(BODY_HEIGHT_UNIT);
+    return loinc(DE_HEIGHT, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY, BODY_HEIGHT_UNIT);
   }
 
   private static Entry coded(String dataElement, String code) {

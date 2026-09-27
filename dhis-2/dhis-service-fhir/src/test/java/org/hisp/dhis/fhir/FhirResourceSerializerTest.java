@@ -58,12 +58,10 @@ class FhirResourceSerializerTest {
     assertError(forbidden(), 403, FORBIDDEN, forbidden::equals);
     assertError(invalidParameter("name", "empty"), 400, INVALID, d -> d.contains("name"));
     assertError(notSupported("read-only"), 501, NOTSUPPORTED, "read-only"::equals);
-    List<String> factories =
-        Arrays.stream(FhirApiException.class.getDeclaredMethods())
-            .filter(m -> Modifier.isPublic(m.getModifiers()) && Modifier.isStatic(m.getModifiers()))
-            .map(Method::getName)
-            .sorted()
-            .toList();
+    int factory = Modifier.PUBLIC | Modifier.STATIC;
+    var methods = Arrays.stream(FhirApiException.class.getDeclaredMethods());
+    var names = methods.filter(m -> (m.getModifiers() & factory) == factory).map(Method::getName);
+    List<String> factories = names.sorted().toList();
     assertEquals(List.of("forbidden", "invalidParameter", "notFound", "notSupported"), factories);
     assertEquals(0, FhirApiException.class.getConstructors().length);
     ResponseEntity<String> ok = serializer.ok(patient("patient-ok", "Okafor", "Chidi"));
@@ -89,9 +87,8 @@ class FhirResourceSerializerTest {
       tasks.add(
           () -> {
             start.await(30, TimeUnit.SECONDS);
-            return IntStream.range(0, ITERATIONS)
-                .filter(n -> baseline.equals(serializer.ok(resource).getBody()))
-                .count();
+            var runs = IntStream.range(0, ITERATIONS);
+            return runs.filter(n -> baseline.equals(serializer.ok(resource).getBody())).count();
           });
     }
     ExecutorService executor = Executors.newFixedThreadPool(THREADS);

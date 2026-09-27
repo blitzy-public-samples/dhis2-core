@@ -29,8 +29,12 @@
  */
 package org.hisp.dhis.fhir.service;
 
+import static org.springframework.transaction.support.TransactionOperations.withoutTransaction;
+
 import jakarta.servlet.http.HttpServletRequest;
+import java.lang.reflect.UndeclaredThrowableException;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.regex.*;
 import javax.annotation.*;
@@ -38,7 +42,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.IllegalQueryException;
 import org.hisp.dhis.common.UID;
-import org.hisp.dhis.deadline.DeadlineHolder;
+import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.FhirApiException;
@@ -48,9 +52,18 @@ import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.*;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
-/** Reads Tracker data for the FHIR API and translates export-path errors into FHIR errors. */
+/**
+ * Reads Tracker data for the FHIR API, translating export-path errors into FHIR errors. Each
+ * operation runs under one deadline and, with a transaction manager, one read-only transaction.
+ */
 @Slf4j
 @Service
 public class FhirTrackerReader {
@@ -63,20 +76,52 @@ public class FhirTrackerReader {
       " and none is configured, so " + FhirSearchParameters.ID + " is required";
   static final String SELECTOR_NOT_FOUND = "is specified but does not exist";
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
+  private static final List<Class<? extends RuntimeException>> QUERY_TIMEOUTS =
+      List.of(
+          jakarta.persistence.QueryTimeoutException.class,
+          org.hibernate.QueryTimeoutException.class,
+          org.springframework.dao.QueryTimeoutException.class);
   private final FhirTrackedEntityExportAdapter trackedEntityAdapter;
   private final FhirEnrollmentExportAdapter enrollmentAdapter;
   private final TrackerExportTimeout timeout;
+  private final TransactionOperations operationTransaction;
 
+  /** Creates a reader whose operations run without a transaction of their own. */
   public FhirTrackerReader(
       FhirTrackedEntityExportAdapter trackedEntityAdapter,
       FhirEnrollmentExportAdapter enrollmentAdapter,
       TrackerExportTimeout timeout) {
+    this(trackedEntityAdapter, enrollmentAdapter, timeout, withoutTransaction());
+  }
+
+  /** Creates a reader whose operations each run in a read-only transaction when none is active. */
+  @Autowired
+  public FhirTrackerReader(
+      FhirTrackedEntityExportAdapter trackedEntityAdapter,
+      FhirEnrollmentExportAdapter enrollmentAdapter,
+      TrackerExportTimeout timeout,
+      PlatformTransactionManager transactionManager) {
+    this(trackedEntityAdapter, enrollmentAdapter, timeout, readOnlyTransaction(transactionManager));
+  }
+
+  private FhirTrackerReader(
+      FhirTrackedEntityExportAdapter trackedEntityAdapter,
+      FhirEnrollmentExportAdapter enrollmentAdapter,
+      TrackerExportTimeout timeout,
+      TransactionOperations operationTransaction) {
     this.trackedEntityAdapter = trackedEntityAdapter;
     this.enrollmentAdapter = enrollmentAdapter;
     this.timeout = timeout;
+    this.operationTransaction = operationTransaction;
   }
 
-  /** Runs {@code operation} under the held or a configured new deadline, if any; clears its own. */
+  /**
+   * Runs {@code operation} under the held or a configured new deadline, if any, and clears only its
+   * own. The operation then runs in the active transaction or else in the reader's operation
+   * transaction, which rolls back when it throws. Under a deadline, a query timeout, alone or as a
+   * cause, becomes a {@link DeadlineExceededException} naming the budget; anything else is rethrown
+   * unchanged.
+   */
   public <T> T withinDeadline(@Nonnull Supplier<T> operation) {
     Objects.requireNonNull(operation, "operation");
     boolean owner = DeadlineHolder.get() == null;
@@ -84,7 +129,9 @@ public class FhirTrackerReader {
       DeadlineHolder.set(timeout.newDeadline());
     }
     try {
-      return operation.get();
+      return inOperationTransaction(operation);
+    } catch (RuntimeException e) {
+      throw asDeadlineExceeded(e);
     } finally {
       if (owner) {
         DeadlineHolder.clear();
@@ -152,6 +199,70 @@ public class FhirTrackerReader {
     } catch (IllegalQueryException e) {
       throw unusableMapping(type, e, params.getProgram());
     }
+  }
+
+  /** Runs {@code operation} in the active or else the operation transaction, rethrowing as is. */
+  private <T> T inOperationTransaction(Supplier<T> operation) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      return operation.get();
+    }
+    AtomicReference<Exception> failure = new AtomicReference<>();
+    try {
+      return operationTransaction.execute(
+          status -> {
+            try {
+              return operation.get();
+            } catch (Exception e) {
+              failure.set(e);
+              throw e;
+            }
+          });
+    } catch (UndeclaredThrowableException e) {
+      Throwable undeclared = e.getUndeclaredThrowable();
+      if (undeclared != null && undeclared == failure.get()) {
+        throw rethrow(undeclared);
+      }
+      throw e;
+    }
+  }
+
+  @SneakyThrows
+  private static RuntimeException rethrow(Throwable throwable) {
+    throw throwable;
+  }
+
+  /** {@code exception}, or the held deadline's timeout when it is caused by a query timeout. */
+  private static RuntimeException asDeadlineExceeded(RuntimeException exception) {
+    Deadline deadline = DeadlineHolder.get();
+    if (deadline == null
+        || exception instanceof DeadlineExceededException
+        || !isOrIsCausedByQueryTimeout(exception)) {
+      return exception;
+    }
+    log.debug("A FHIR operation query timed out under its deadline ({})", exceptionName(exception));
+    return new DeadlineExceededException(deadline.budget(), exception);
+  }
+
+  /** Whether {@code exception} or a cause in its chain is a query timeout; stops at a cycle. */
+  private static boolean isOrIsCausedByQueryTimeout(Throwable exception) {
+    Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+    for (Throwable t = exception; t != null && visited.add(t); t = t.getCause()) {
+      for (Class<? extends RuntimeException> type : QUERY_TIMEOUTS) {
+        if (type.isInstance(t)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static TransactionOperations readOnlyTransaction(
+      PlatformTransactionManager transactionManager) {
+    TransactionTemplate template =
+        new TransactionTemplate(Objects.requireNonNull(transactionManager, "transactionManager"));
+    template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+    template.setReadOnly(true);
+    return template;
   }
 
   /** Whether {@code message} reports a selector as missing, as it does for unreadable metadata. */
