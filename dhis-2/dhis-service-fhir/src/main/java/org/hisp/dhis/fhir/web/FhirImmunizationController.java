@@ -31,6 +31,7 @@ package org.hisp.dhis.fhir.web;
 
 import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenApi.FHIR_JSON;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
@@ -54,8 +55,10 @@ public class FhirImmunizationController {
     this.serializer = serializer;
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirImmunizationResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
+  @OpenApi.Description(
+      "A FHIR R4 `Immunization` resource, see https://hl7.org/fhir/R4/immunization.html.")
   @GetMapping("/{id}")
   public ResponseEntity<String> readImmunization(
       @OpenApi.Description("`{enrollmentUid}-{eventUid}-{dataElementUid}`") @PathVariable String id,
@@ -63,9 +66,11 @@ public class FhirImmunizationController {
     return serializer.ok(eventResourceService.read(FhirResourceType.IMMUNIZATION, id, request));
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirImmunizationSearchParameters.class)
-  @OpenApi.Description("Requires `patient` or `_id`.")
+  @OpenApi.Description(
+      "A FHIR R4 `searchset` Bundle of `Immunization` resources, see"
+          + " https://hl7.org/fhir/R4/bundle.html. Requires `patient` or `_id`.")
   @GetMapping
   public ResponseEntity<String> searchImmunizations(HttpServletRequest request) {
     return serializer.ok(eventResourceService.search(FhirResourceType.IMMUNIZATION, request));

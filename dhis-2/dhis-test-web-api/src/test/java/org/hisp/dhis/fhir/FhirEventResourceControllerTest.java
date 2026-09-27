@@ -29,6 +29,7 @@
  */
 package org.hisp.dhis.fhir;
 
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Instant;
@@ -90,7 +91,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     assertEquals(1, observation.getCode().getCoding().size());
     assertCoding(OBSERVATION_SYSTEM, "number-value", observation.getCode().getCodingFirstRep());
     assertEquals(15.0, observation.getValueQuantity().getValue().doubleValue());
-    assertEquals("cm", observation.getValueQuantity().getUnit());
+    assertEquals("kg", observation.getValueQuantity().getUnit());
     assertEquals("Patient/" + FRANK, observation.getSubject().getReference());
     assertEquals("Encounter/" + ENCOUNTER_B, observation.getEncounter().getReference());
     Instant occurredAtB = occurredAt("2020-01-28T00:00:00.000");

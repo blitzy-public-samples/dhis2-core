@@ -41,7 +41,6 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.fhir.FhirR4Validation;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
@@ -78,7 +77,6 @@ class FhirCapabilityStatementServiceTest {
   };
   @Mock private FhirResourceMappingService mappingService;
   @Mock private SystemSettingsProvider settingsProvider;
-  @Mock private DhisConfigurationProvider config;
   private FhirCapabilityStatementService service;
 
   @BeforeEach
@@ -86,7 +84,7 @@ class FhirCapabilityStatementServiceTest {
     lenient().when(settingsProvider.getCurrentSettings()).thenReturn(SystemSettings.of(Map.of()));
     service =
         new FhirCapabilityStatementService(
-            mappingService, new FhirSearchParameters(settingsProvider), config);
+            mappingService, new FhirSearchParameters(settingsProvider));
   }
 
   @Test
@@ -146,13 +144,6 @@ class FhirCapabilityStatementServiceTest {
     assertEquals(BASE + "/api/fhir", statement.getImplementation().getUrl());
     assertEquals(1, statement.getRest().size());
     assertEquals(RestfulCapabilityMode.SERVER, rest(statement).getMode());
-  }
-
-  @Test
-  void configuredServerBaseUrlReplacesRequestHost() {
-    when(config.getServerBaseUrl()).thenReturn("https://dhis.example.org/dhis/");
-    String url = statementFor(List.of()).getImplementation().getUrl();
-    assertEquals("https://dhis.example.org/dhis/api/fhir", url);
   }
 
   @Test

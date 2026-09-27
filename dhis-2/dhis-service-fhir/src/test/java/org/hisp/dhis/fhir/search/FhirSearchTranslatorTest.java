@@ -263,39 +263,29 @@ class FhirSearchTranslatorTest {
     assertEquals(Set.of(UID.of(TEA_FAMILY)), filters(unmapped.trackedEntityParams()).keySet());
     ResolvedMapping blank = genderMapping(Map.of("", "male"));
     assertThrows(IllegalArgumentException.class, () -> translatePatient(blank, "gender=male"));
+    ResolvedMapping separator = genderMapping(Map.of("A;B", "male"));
+    var single = patientFilters(separator, "gender=male,female").get(UID.of(TEA_GENDER));
+    assertEquals(List.of(new QueryFilter(EQ, "a;b")), single);
     ResolvedMapping shared = genderMapping(Map.of("A;B", "male", "C", "male", "F", "female"));
     assertFilter(patientFilters(shared, "gender=female"), TEA_GENDER, EQ, "f");
-    ResolvedMapping separator = genderMapping(Map.of("A;B", "male", "F", "female"));
-    List<QueryFilter> single = patientFilters(separator, "gender=male").get(UID.of(TEA_GENDER));
-    assertEquals(List.of(new QueryFilter(EQ, "a;b")), single);
-    Executable sharedMale = () -> translatePatient(shared, "gender=male");
-    Executable separatorBoth = () -> translatePatient(separator, "gender=male,female");
-    for (Executable unusable : List.of(sharedMale, separatorBoth)) {
-      FhirApiException e = assertThrows(FhirApiException.class, unusable);
-      assertEquals(HttpStatus.NOT_IMPLEMENTED, e.getStatus(), e.getDiagnostics());
-      assertEquals(IssueType.NOTSUPPORTED, e.getIssueType(), e.getDiagnostics());
-      assertEquals("The configured mapping for Patient cannot be used", e.getDiagnostics());
+    for (String genders : List.of("gender=male", "gender=male,female")) {
+      assertThrows(IllegalArgumentException.class, () -> translatePatient(shared, genders));
     }
   }
 
   @Test
-  void genderFilterMatchesTheValuesTheMapperMapsUnderEveryDefaultLocale() {
+  void genderFilterMatchesTheValuesTheMapperMapsUnderTurkishAndEnglishLowerCasing() {
     ResolvedMapping mapping = genderMapping(Map.of("ΟΔΟΣ", "unknown", "I", "male"));
-    Locale locale = Locale.getDefault();
-    try {
-      for (String tag : List.of("tr", "en")) {
-        Locale.setDefault(Locale.forLanguageTag(tag));
-        for (var code : Map.of("unknown", "ΟΔΟΣ", "male", "I").entrySet()) {
-          var params = translatePatient(mapping, "gender=" + code.getKey()).trackedEntityParams();
-          String operand = params.getFilter().split(":", 3)[2].toLowerCase();
-          for (String value : List.of("ΟΔΟΣ", "οδοσ", "οδος", "I", "i", "İ", "ı")) {
-            boolean mapped = genderKeyMatches(code.getValue(), value);
-            assertEquals(mapped, genderFold(value).equals(operand), tag + " " + value);
-          }
+    for (String tag : List.of("tr", "en")) {
+      Locale tracker = Locale.forLanguageTag(tag);
+      for (var code : Map.of("unknown", "ΟΔΟΣ", "male", "I").entrySet()) {
+        var params = translatePatient(mapping, "gender=" + code.getKey()).trackedEntityParams();
+        String operand = params.getFilter().split(":", 3)[2].toLowerCase(tracker);
+        for (String value : List.of("ΟΔΟΣ", "οδοσ", "οδος", "I", "i", "İ", "ı")) {
+          boolean mapped = genderKeyMatches(code.getValue(), value);
+          assertEquals(mapped, genderFold(value).equals(operand), tag + " " + value);
         }
       }
-    } finally {
-      Locale.setDefault(locale);
     }
   }
 
@@ -359,12 +349,12 @@ class FhirSearchTranslatorTest {
     assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "_count=101"));
     when(settings.getTrackedEntityMaxLimit()).thenReturn(10);
     assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "family=rain"), "family");
-    when(settings.getTrackedEntityMaxLimit()).thenReturn(0);
-    assertEquals(2147483646, translatePatient(FULL_MAPPING, "_count=2147483646").count());
-    for (int limit : new int[] {0, Integer.MAX_VALUE}) {
+    for (int limit : new int[] {0, -1, Integer.MAX_VALUE}) {
       when(settings.getTrackedEntityMaxLimit()).thenReturn(limit);
-      var max = assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "_count=2147483647"));
-      assertTrue(max.endsWith("must not exceed 2147483646"), max);
+      assertEquals(5000, translatePatient(FULL_MAPPING, "_count=5000").count());
+      var max = translatePatient(FULL_MAPPING, "_count=2147483647&_page=2");
+      var size = max.trackedEntityParams().getPageSize();
+      assertEquals(List.of(2147483646, 2147483646, 2), List.of(max.count(), size, max.page()));
     }
   }
 
@@ -431,25 +421,19 @@ class FhirSearchTranslatorTest {
   }
 
   @Test
-  void orListsAreBoundedInValuesAndLength() {
-    List<String> ids = Stream.iterate(0, i -> i + 1).limit(101).map("Te%09d"::formatted).toList();
+  void orListsAcceptAnyNumberOfValues() throws BadRequestException {
+    List<String> ids = Stream.iterate(0, i -> i + 1).limit(500).map("Te%09d"::formatted).toList();
     List<String> obs = ids.stream().map(id -> id + "-" + EVT + "-" + DE_1).toList();
-    var patients = translatePatient(FULL_MAPPING, "_id=" + String.join(",", ids.subList(0, 100)));
-    assertEquals(UID.of(ids.subList(0, 100)), patients.trackedEntityParams().getTrackedEntities());
-    var events = translateEvents(OBSERVATION, "_id=" + String.join(",", obs.subList(0, 100)));
-    assertEquals(Set.copyOf(obs.subList(0, 100)), events.logicalIds());
-    String byPatient = "patient=" + TE_1 + "&code=";
-    assertCodes(byPatient + String.join(",", ids.subList(0, 99)) + "," + HEIGHT, true, false);
-    assertCodes(byPatient + "x".repeat(4096), false, false);
-    String tooMany = String.join(",", ids);
-    String males = String.join(",", Collections.nCopies(101, "male"));
-    assertAllInvalid(q -> translatePatient(FULL_MAPPING, q), "_id=" + tooMany + " gender=" + males);
-    Consumer<String> observation = q -> translateEvents(OBSERVATION, q + "&patient=" + TE_1);
-    assertAllInvalid(observation, "_id=" + String.join(",", obs) + " code=" + tooMany);
-    for (String code : List.of(tooMany, "x".repeat(4097))) {
-      var message = assertInvalid("code", () -> observation.accept("code=" + code), "Te0", "xx");
-      assertTrue(message.endsWith("must not exceed 100 values or 4096 characters"), message);
-    }
+    String idList = String.join(",", ids);
+    var patients = translatePatient(FULL_MAPPING, "_id=" + idList);
+    assertEquals(UID.of(ids), patients.trackedEntityParams().getTrackedEntities());
+    var events = translateEvents(OBSERVATION, "_id=" + String.join(",", obs));
+    assertEquals(Set.copyOf(obs), events.logicalIds());
+    String males = "gender=" + String.join(",", Collections.nCopies(500, "male"));
+    assertEquals(patientFilters(FULL_MAPPING, "gender=male"), patientFilters(FULL_MAPPING, males));
+    assertCodes("patient=" + TE_1 + "&code=" + idList + "," + HEIGHT, true, false);
+    assertCodes("patient=" + TE_1 + "&code=" + "x".repeat(8192), false, false);
+    assertInvalid("_id", () -> translatePatient(FULL_MAPPING, "_id=" + idList + ",bad"));
   }
 
   @Test

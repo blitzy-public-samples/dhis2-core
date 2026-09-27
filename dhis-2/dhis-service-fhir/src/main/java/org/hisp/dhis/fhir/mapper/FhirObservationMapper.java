@@ -49,7 +49,7 @@ import org.springframework.stereotype.Component;
  * FhirTargetField#OBSERVATION_VALUE} entry, in entry order, whose data element has a non-blank
  * value on the event, each with {@code id} {@code {enrollmentUid}-{eventUid}-{dataElementUid}},
  * {@code meta.lastUpdated} from {@code updatedAt}, {@code status} from the event status ({@code
- * null} as {@code ACTIVE}), {@code code} as the entry's coding, {@code subject} {@code
+ * null} as {@code unknown}), {@code code} as the entry's coding, {@code subject} {@code
  * Patient/{trackedEntityUid}}, {@code encounter} {@code Encounter/{enrollmentUid}-{eventUid}} when
  * an {@code ENCOUNTER} mapping exists, {@code effectiveDateTime} from {@code occurredAt}, and
  * {@code value[x]} converted by {@link FhirValueConverter#toFhir} from the first of repeated data
@@ -140,12 +140,14 @@ public class FhirObservationMapper {
 
   @Nonnull
   private static ObservationStatus observationStatus(@CheckForNull EventStatus status) {
-    return switch (status == null ? EventStatus.ACTIVE : status) {
-      case COMPLETED -> ObservationStatus.FINAL;
-      case ACTIVE, VISITED -> ObservationStatus.PRELIMINARY;
-      case SCHEDULE, OVERDUE -> ObservationStatus.REGISTERED;
-      case SKIPPED -> ObservationStatus.CANCELLED;
-    };
+    return status == null
+        ? ObservationStatus.UNKNOWN
+        : switch (status) {
+          case COMPLETED -> ObservationStatus.FINAL;
+          case ACTIVE, VISITED -> ObservationStatus.PRELIMINARY;
+          case SCHEDULE, OVERDUE -> ObservationStatus.REGISTERED;
+          case SKIPPED -> ObservationStatus.CANCELLED;
+        };
   }
 
   private static boolean isBlank(@CheckForNull String value) {

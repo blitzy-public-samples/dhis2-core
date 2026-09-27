@@ -70,16 +70,17 @@ class FhirEncounterMapperTest {
 
   @Test
   void statusTranslationForEveryEventStatus() {
-    Map<EventStatus, EncounterStatus> expected = new EnumMap<>(EventStatus.class);
+    Map<EventStatus, EncounterStatus> expected = new HashMap<>();
+    expected.put(null, EncounterStatus.UNKNOWN);
     expected.put(ACTIVE, EncounterStatus.INPROGRESS);
     expected.put(VISITED, EncounterStatus.INPROGRESS);
     expected.put(COMPLETED, EncounterStatus.FINISHED);
     expected.put(SCHEDULE, EncounterStatus.PLANNED);
     expected.put(OVERDUE, EncounterStatus.PLANNED);
     expected.put(SKIPPED, EncounterStatus.CANCELLED);
-    Map<EventStatus, EncounterStatus> actual = new EnumMap<>(EventStatus.class);
-    for (EventStatus status : EventStatus.values()) {
-      actual.put(status, map(stageEvent(status, OCCURRED, SCHEDULED), fullMapping()).getStatus());
+    Map<EventStatus, EncounterStatus> actual = new HashMap<>();
+    for (EventStatus s : Arrays.copyOf(EventStatus.values(), EventStatus.values().length + 1)) {
+      actual.put(s, map(stageEvent(s, OCCURRED, SCHEDULED), fullMapping()).getStatus());
     }
     assertEquals(expected, actual);
   }
@@ -111,21 +112,21 @@ class FhirEncounterMapperTest {
     assertEquals(TYPE_CODE, withoutValues.getTypeFirstRep().getCodingFirstRep().getCode());
     assertFalse(withoutValues.hasReasonCode());
     assertTrue(withoutValues.hasClass_());
-    List.of(" ANC1", "ANC1 ", "ANC  1", "ANC\t1", "\u2003ANC1", "ANC1\u00A0", "ANC\u20031")
-        .forEach(code -> assertEquals(List.of(TYPE_CODE), typeCodes(code), "'" + code + "'"));
-    List.of("ANC 1", "\u00C4NC 1")
-        .forEach(code -> assertEquals(List.of(code, TYPE_CODE), typeCodes(code), "'" + code + "'"));
+    List.of(" ANC 1\u00A0", "\u2003ANC 1 ", "ANC  1", "ANC\t1", "ANC\u20031", "ANC 1")
+        .forEach(in -> assertEquals(List.of("ANC 1", TYPE_CODE), typeCodes(in), "'" + in + "'"));
+    assertEquals(List.of("\u00C4NC 1", TYPE_CODE), typeCodes("\u00C4NC 1"));
+    assertEquals(List.of(TYPE_CODE), typeCodes("\u00A0\u2003"));
   }
 
   @Test
   void periodUsesScheduledAtForScheduledEvents() {
     assertNotEquals(OCCURRED, SCHEDULED);
-    for (EventStatus s : EventStatus.values()) {
+    for (EventStatus s : Arrays.copyOf(EventStatus.values(), EventStatus.values().length + 1)) {
       boolean planned = s == SCHEDULE || s == OVERDUE;
       var dated = planned ? stageEvent(s, null, SCHEDULED) : stageEvent(s, OCCURRED, SCHEDULED);
-      assertEquals(planned ? SCHEDULED : OCCURRED, periodStart(dated), s::name);
+      assertEquals(planned ? SCHEDULED : OCCURRED, periodStart(dated), String.valueOf(s));
       var undated = planned ? stageEvent(s, OCCURRED, null) : stageEvent(s, null, SCHEDULED);
-      assertFalse(map(undated, fullMapping()).hasPeriod(), s::name);
+      assertFalse(map(undated, fullMapping()).hasPeriod(), String.valueOf(s));
     }
     assertEquals(SCHEDULED, periodStart(stageEvent(SCHEDULE, OCCURRED, SCHEDULED)), "both dates");
     Instant fractional = Instant.parse("2024-03-10T09:00:00.250Z");
@@ -178,7 +179,7 @@ class FhirEncounterMapperTest {
 
   private List<String> typeCodes(String typeValue) {
     DataValue type = dataValue(DE_TYPE, typeValue);
-    Encounter typed = map(stageEvent(COMPLETED, OCCURRED, null, type), fullMapping());
+    Encounter typed = map(stageEvent(null, OCCURRED, null, type), fullMapping());
     assertValid(typed);
     return typed.getType().stream().map(t -> t.getCodingFirstRep().getCode()).toList();
   }

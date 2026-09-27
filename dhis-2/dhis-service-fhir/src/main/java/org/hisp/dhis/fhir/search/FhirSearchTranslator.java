@@ -65,7 +65,9 @@ public class FhirSearchTranslator {
 
   /**
    * Translates a Patient search, filtering on the {@link FhirResourceMappingValidator#genderFold}
-   * of each mapped gender value; a rejected or unusable filter throws {@link FhirApiException}.
+   * of each mapped gender value; a rejected filter throws {@link FhirApiException}, and a requested
+   * blank gender key, or several requested gender values one holding {@code ;}, throws {@link
+   * IllegalArgumentException}.
    */
   @Nonnull
   public TranslatedSearch toTrackedEntityParams(
@@ -263,8 +265,8 @@ public class FhirSearchTranslator {
       return new AttributeFilter(teaUid, QueryOperator.EQ, values.iterator().next());
     }
     if (values.stream().anyMatch(value -> value.contains(QueryFilter.OPTION_SEP))) {
-      throw FhirApiException.notSupported(
-          "The configured mapping for " + FhirResourceType.PATIENT.fhirType() + " cannot be used");
+      throw new IllegalArgumentException(
+          PatientParameter.GENDER.target() + " maps several attribute values, one holding ;");
     }
     return new AttributeFilter(
         teaUid, QueryOperator.IN, String.join(QueryFilter.OPTION_SEP, values));

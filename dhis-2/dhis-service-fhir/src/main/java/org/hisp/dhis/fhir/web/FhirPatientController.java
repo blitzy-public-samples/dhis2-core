@@ -31,6 +31,7 @@ package org.hisp.dhis.fhir.web;
 
 import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenApi.FHIR_JSON;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
@@ -53,8 +54,9 @@ public class FhirPatientController {
     this.serializer = serializer;
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirPatientResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
+  @OpenApi.Description("A FHIR R4 `Patient` resource, see https://hl7.org/fhir/R4/patient.html.")
   @GetMapping("/{id}")
   public ResponseEntity<String> readPatient(
       @OpenApi.Description("The tracked entity UID") @PathVariable String id,
@@ -62,16 +64,22 @@ public class FhirPatientController {
     return serializer.ok(patientService.read(id, request));
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirPatientSearchParameters.class)
+  @OpenApi.Description(
+      "A FHIR R4 `searchset` Bundle of `Patient` resources, see"
+          + " https://hl7.org/fhir/R4/bundle.html.")
   @GetMapping
   public ResponseEntity<String> searchPatients(HttpServletRequest request) {
     return serializer.ok(patientService.search(request));
   }
 
   /** Returns a searchset Bundle of Patient {@code id} followed by its event-derived resources. */
-  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
+  @OpenApi.Description(
+      "A FHIR R4 `searchset` Bundle of the `Patient` followed by its `Encounter`, `Immunization`"
+          + " and `Observation` resources, see https://hl7.org/fhir/R4/bundle.html.")
   @GetMapping("/{id}/$everything")
   public ResponseEntity<String> patientEverything(
       @OpenApi.Description("The tracked entity UID") @PathVariable String id,

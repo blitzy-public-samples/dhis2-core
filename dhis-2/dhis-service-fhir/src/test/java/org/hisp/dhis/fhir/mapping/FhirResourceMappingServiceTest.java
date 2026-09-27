@@ -38,6 +38,7 @@ import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import java.io.*;
 import java.util.*;
 import java.util.stream.*;
 import org.hisp.dhis.common.*;
@@ -45,6 +46,7 @@ import org.hisp.dhis.dataelement.DataElement;
 import org.hisp.dhis.dxf2.metadata.objectbundle.*;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
+import org.hisp.dhis.hibernate.jsonb.type.JsonBinaryType;
 import org.hisp.dhis.preheat.Preheat;
 import org.hisp.dhis.program.*;
 import org.hisp.dhis.schema.*;
@@ -119,6 +121,8 @@ class FhirResourceMappingServiceTest {
     verify(service).logIgnored(List.of("forged\\u000D\\u000AWARN line"), List.of(ErrorCode.E4000));
     assertNull(escapeControlCharacters(null));
     assertEquals("\\u0085\\u2029", escapeControlCharacters("\u0085\u2029"));
+    assertEquals("\\u000A", escapeControlCharacters("\n"));
+    assertEquals("\\\\u000A", escapeControlCharacters("\\u000A"));
   }
 
   @Test
@@ -145,7 +149,7 @@ class FhirResourceMappingServiceTest {
   }
 
   @Test
-  void resolvedRecordsAreDetached() {
+  void resolvedRecordsAreDetached() throws IOException, ClassNotFoundException {
     FhirResourceMapping stored = patient(uid());
     Map<String, String> genders = Map.of("M", "male", "F", "female");
     Entry gender = Entry.field(PATIENT_GENDER, ATTRIBUTE, genderAttribute.getUid());
@@ -176,6 +180,24 @@ class FhirResourceMappingServiceTest {
     }
     new FhirFieldMapping(resolvedGender).getValueMap().put("M", "other");
     assertEquals(genders, resolved.entries(PATIENT_GENDER).get(0).getValueMap());
+    FhirFieldMapping mutableCopy = new FhirFieldMapping(resolvedGender);
+    assertEquals(mutableCopy, resolvedGender);
+    assertEquals(resolvedGender, mutableCopy);
+    assertEquals(mutableCopy.hashCode(), resolvedGender.hashCode());
+    String json = JsonBinaryType.MAPPER.writeValueAsString(resolvedGender);
+    assertEquals(JsonBinaryType.MAPPER.writeValueAsString(mutableCopy), json);
+    assertEquals(mutableCopy, JsonBinaryType.MAPPER.readValue(json, FhirFieldMapping.class));
+    ByteArrayOutputStream binary = new ByteArrayOutputStream();
+    try (ObjectOutputStream output = new ObjectOutputStream(binary)) {
+      output.writeObject(resolvedGender);
+    }
+    try (ObjectInputStream input =
+        new ObjectInputStream(new ByteArrayInputStream(binary.toByteArray()))) {
+      FhirFieldMapping restored = (FhirFieldMapping) input.readObject();
+      assertEquals(mutableCopy, restored);
+      assertThrows(immutable, () -> restored.setCode("changed"));
+      assertThrows(immutable, () -> restored.getValueMap().put("M", "other"));
+    }
     assertThrows(immutable, () -> resolved.entries().add(new FhirFieldMapping()));
     assertThrows(immutable, () -> resolved.valueTypes().put(uid(), ValueType.TEXT));
     assertThrows(immutable, () -> blocked.put(uid(), Set.of()));

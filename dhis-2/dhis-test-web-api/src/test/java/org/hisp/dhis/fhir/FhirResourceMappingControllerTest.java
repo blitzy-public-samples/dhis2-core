@@ -131,6 +131,8 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
           "'X-Requested-With': 'XMLHttpRequest'",
           "'XSRF-TOKEN='",
           "headers['X-XSRF-TOKEN'] = token",
+          "signal: method === 'GET' ? AbortSignal.timeout(READ_TIMEOUT_MS) : undefined",
+          "el('option', {value: wanted}, 'Unavailable: ' + wanted)",
           "api('GET', '" + STATUS_PATH + "'",
           "'" + TYPES_PATH + "'",
           "'" + PROGRAMS_FILTER + "'",

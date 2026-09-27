@@ -46,21 +46,20 @@ import org.springframework.stereotype.Component;
 /**
  * Maps one Tracker event of an {@code ENCOUNTER} mapping's program stage to a FHIR R4 {@link
  * Encounter} with {@code id} {@code {enrollmentUid}-{eventUid}}, {@code meta.lastUpdated} from
- * {@code updatedAt}, {@code status} from the event status ({@code null} as {@code ACTIVE}), {@code
+ * {@code updatedAt}, {@code status} from the event status ({@code null} as {@code unknown}), {@code
  * subject} {@code Patient/{trackedEntityUid}}, {@code period.start} from {@code scheduledAt} for
  * {@code SCHEDULE} and {@code OVERDUE} events and from {@code occurredAt} otherwise, {@code class}
  * from the {@code CONSTANT} {@link FhirTargetField#ENCOUNTER_CLASS} entry, one {@code type} per
  * {@link FhirTargetField#ENCOUNTER_TYPE} entry as its constant coding or as its {@code system} with
- * the first non-blank data element value as {@code code} when that is a valid R4 {@code code}, and
- * one {@code reasonCode} text per {@link FhirTargetField#ENCOUNTER_REASON} data element value.
+ * the first non-blank data element value as {@code code}, trimmed and whitespace-collapsed, and one
+ * {@code reasonCode} text per {@link FhirTargetField#ENCOUNTER_REASON} data element value.
  */
 @Component
 public class FhirEncounterMapper {
   private static final String PATIENT_REFERENCE_PREFIX = "Patient/";
   private static final Set<EventStatus> SCHEDULED_STATUSES =
-      Set.of(EventStatus.SCHEDULE, EventStatus.OVERDUE);
-  private static final Pattern R4_CODE =
-      Pattern.compile("\\S+( \\S+)*", Pattern.UNICODE_CHARACTER_CLASS);
+      EnumSet.of(EventStatus.SCHEDULE, EventStatus.OVERDUE);
+  private static final Pattern SPACES = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
   private final FhirValueConverter converter;
 
   public FhirEncounterMapper(@Nonnull FhirValueConverter converter) {
@@ -82,14 +81,14 @@ public class FhirEncounterMapper {
         Objects.requireNonNull(
                 enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null")
             .getValue();
-    EventStatus status = event.getStatus() == null ? EventStatus.ACTIVE : event.getStatus();
+    EventStatus status = event.getStatus();
     Map<String, String> values = dataValues(event);
     Encounter encounter = new Encounter();
     encounter.setId(FhirLogicalId.encounter(enrollmentUid, eventUid).compose());
     if (event.getUpdatedAt() != null) {
       encounter.getMeta().setLastUpdatedElement(converter.instant(event.getUpdatedAt()));
     }
-    encounter.setStatus(encounterStatus(status));
+    encounter.setStatus(status == null ? EncounterStatus.UNKNOWN : encounterStatus(status));
     mapping
         .entry(FhirTargetField.ENCOUNTER_CLASS)
         .filter(entry -> entry.getSourceType() == FhirSourceType.CONSTANT)
@@ -118,7 +117,7 @@ public class FhirEncounterMapper {
   }
 
   @CheckForNull
-  private static Instant periodStart(Event event, EventStatus status) {
+  private static Instant periodStart(Event event, @CheckForNull EventStatus status) {
     return SCHEDULED_STATUSES.contains(status) ? event.getScheduledAt() : event.getOccurredAt();
   }
 
@@ -127,8 +126,8 @@ public class FhirEncounterMapper {
       return Optional.of(constantCoding(entry));
     }
     return dataElementValue(entry, values)
-        .filter(value -> R4_CODE.matcher(value).matches())
-        .map(value -> new Coding().setSystem(entry.getSystem()).setCode(value));
+        .map(v -> new Coding(entry.getSystem(), SPACES.matcher(v).replaceAll(" ").strip(), null))
+        .filter(Coding::hasCode);
   }
 
   private static Coding constantCoding(FhirFieldMapping entry) {

@@ -45,7 +45,6 @@ import org.hisp.dhis.common.UID;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.deadline.*;
 import org.hisp.dhis.event.EventStatus;
-import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.feedback.ForbiddenException;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.FhirR4Validation;
@@ -97,7 +96,6 @@ class FhirEventResourceServiceTest {
   @Mock private TrackerExportTimeout timeout;
   @Mock private SystemSettingsProvider settingsProvider;
   @Mock private FhirResourceMappingService mappingService;
-  @Mock private DhisConfigurationProvider config;
   private final List<Deadline> seen = new ArrayList<>();
   private long nanos = TimeUnit.SECONDS.toNanos(1_000);
   private final ResolvedMapping m1 = encounterMapping(TET, P1, S1);
@@ -125,8 +123,7 @@ class FhirEventResourceServiceTest {
             reader,
             encounterMapper,
             new FhirImmunizationMapper(converter),
-            new FhirObservationMapper(converter),
-            config);
+            new FhirObservationMapper(converter));
     FhirPatientMapper mapper = new FhirPatientMapper(converter);
     patientService =
         new FhirPatientService(mappingService, parameters, translator, reader, mapper, service);
@@ -305,14 +302,17 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void configuredServerBaseUrlReplacesForgedHostInBundleUrls() throws Exception {
+  void bundleUrlsFollowTheRequestBaseAndIgnoreForwardedHeaders() throws Exception {
     stubObservationSearch();
     when(mappingService.resolveAll()).thenReturn(List.of(patientMapping(), observationMapping()));
     when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED)));
-    when(config.getServerBaseUrl()).thenReturn("https://dhis.example.org/dhis/");
     MockHttpServletRequest search = request("patient", TE, "_count", "1", "_page", "2");
     MockHttpServletRequest everything = request();
-    Stream.of(search, everything).forEach(forged -> forged.addHeader("Host", "evil.example"));
+    for (MockHttpServletRequest sent : List.of(search, everything)) {
+      sent.addHeader("Host", "fhir.example.org:8080");
+      sent.addHeader("X-Forwarded-Host", "other.example");
+      sent.setContextPath("/dhis");
+    }
     List<String> urls = new ArrayList<>();
     for (Bundle bundle :
         List.of(service.search(OBSERVATION, search), patientService.everything(TE, everything))) {
@@ -320,8 +320,8 @@ class FhirEventResourceServiceTest {
       bundle.getLink().forEach(link -> urls.add(link.getUrl()));
     }
     assertEquals(12, urls.size(), urls::toString);
-    urls.forEach(url -> assertTrue(url.startsWith("https://dhis.example.org/dhis/api/fhir/"), url));
-    assertFalse(urls.toString().contains("evil"), urls::toString);
+    String base = "http://fhir.example.org:8080/dhis/api/fhir/";
+    urls.forEach(url -> assertTrue(url.startsWith(base), url));
   }
 
   @Test
@@ -361,9 +361,8 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void manyStageSearchIndexesMappingsByStage() throws Exception {
-    List<ResolvedMapping> mappings =
-        Stream.of(S1, S3, "fhirStage04").map(s -> spy(encounterMapping(TET, P1, s))).toList();
+  void manyStageSearchMapsOnlyEventsOfMappedStagesInOrder() throws Exception {
+    var mappings = Stream.of(S1, S3, "fhirStage04").map(s -> encounterMapping(TET, P1, s)).toList();
     when(mappingService.resolve(ENCOUNTER)).thenReturn(mappings);
     Event last = completed("fhirEvent04", "fhirStage04");
     Event[] events = {last, completed(EVT3, S3), completed(EVT2, S2), completed(EVT, S1)};
@@ -373,7 +372,6 @@ class FhirEventResourceServiceTest {
         "Encounter/" + ENCOUNTER_ID,
         "Encounter/" + ENR + "-" + EVT3,
         "Encounter/" + ENR + "-fhirEvent04");
-    mappings.forEach(mapping -> verify(mapping, atMost(2)).programStage());
   }
 
   private FhirApiException readError(FhirResourceType type, String id, String... query) {

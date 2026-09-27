@@ -83,6 +83,7 @@
     <script type="module">
       const API = location.pathname.replace(/fhirResourceMappings\/settings\/?$/, '');
       const CHUNK_SIZE = 200;
+      const READ_TIMEOUT_MS = 60000;
       const TEXTUAL = ['TEXT', 'LONG_TEXT', 'LETTER'];
       const INTEGERS = ['INTEGER', 'INTEGER_POSITIVE', 'INTEGER_NEGATIVE', 'INTEGER_ZERO_OR_POSITIVE'];
       const QUANTITY = ['NUMBER', ...INTEGERS, 'PERCENTAGE', 'UNIT_INTERVAL'];
@@ -143,9 +144,10 @@
       }
       function setValue(select, value, warnings) {
         const wanted = text(value), known = Array.from(select.options).some((option) => option.value === wanted);
-        select.value = known ? wanted : '';
-        if (known || !wanted || !warnings || select.closest('[hidden]')) return;
-        if (select.required) form.noValidate = true;
+        const kept = !known && wanted && warnings && !select.closest('[hidden]');
+        if (kept) select.appendChild(el('option', {value: wanted}, 'Unavailable: ' + wanted));
+        select.value = known || kept ? wanted : '';
+        if (!kept) return;
         const row = select.closest('.mapping-row');
         warnings.push((row ? row.firstChild.textContent + ', ' : '') + text(select.labels[0] && select.labels[0].textContent).replace(' (required)', '') + ': "' + wanted + '"');
       }
@@ -158,13 +160,14 @@
         const headers = {Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(body === undefined ? {} : {'Content-Type': 'application/json'})};
         const token = method === 'GET' ? '' : csrfToken();
         if (token) headers['X-XSRF-TOKEN'] = token;
-        const init = {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body)};
+        const init = {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body),
+          signal: method === 'GET' ? AbortSignal.timeout(READ_TIMEOUT_MS) : undefined};
         try {
           const response = await fetch(API + path, init);
           const json = (response.headers.get('Content-Type') || '').includes('json') ? parseJson(await response.text()) : null;
           return {status: response.status, ok: response.ok && !response.redirected, json};
         } catch (error) {
-          return {status: 0, ok: false, json: null};
+          return {status: 0, ok: false, json: null, timedOut: Boolean(error && error.name === 'TimeoutError')};
         }
       }
       const succeeded = (result) => result.ok && isObject(result.json) && result.json.status === 'OK';
@@ -174,6 +177,7 @@
         if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again and reload this page.'];
         if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
         if (json.message) return [text(json.message)];
+        if (result.timedOut) return ['The server did not respond within ' + READ_TIMEOUT_MS / 1000 + ' seconds. Try again.'];
         if (result.status === 0) return ['The server could not be reached. Check the connection and try again.'];
         return [(result.status >= 200 && result.status < 300 ? 'Unexpected response' : 'Request failed') + ' (HTTP ' + result.status + ')'];
       }
@@ -506,7 +510,7 @@
         fillStages();
         setValue(stageSelect, mapping.programStage && mapping.programStage.id, warnings);
         mapping.fieldMappings.forEach((entry) => addRow(isObject(entry) ? entry : {}, warnings));
-        if (warnings.length > 0) showFormErrors(warnings, 'Warning: these stored values are not among the available choices and were left unselected. Saving sends the form as shown and the server decides whether the mapping is accepted.');
+        if (warnings.length > 0) showFormErrors(warnings, 'Warning: these stored values are not among the available choices and are kept as stored, marked Unavailable. Saving sends them unchanged and the server decides whether the mapping is accepted.');
       }
       async function deleteMapping(id, name) {
         if (state.saving || !window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
@@ -521,7 +525,6 @@
       }
       function clearForm() {
         state.editing = null;
-        form.noValidate = false;
         form.querySelectorAll('[aria-invalid]').forEach(unflag);
         nameInput.value = '';
         resourceSelect.value = 'PATIENT';

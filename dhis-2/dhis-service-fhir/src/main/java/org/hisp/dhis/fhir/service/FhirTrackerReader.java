@@ -154,6 +154,7 @@ public class FhirTrackerReader {
     }
   }
 
+  /** Whether {@code message} reports a selector as missing, as it does for unreadable metadata. */
   private static boolean hidesSelector(@CheckForNull String message, UID... selectors) {
     return message != null
         && message.contains(SELECTOR_NOT_FOUND)

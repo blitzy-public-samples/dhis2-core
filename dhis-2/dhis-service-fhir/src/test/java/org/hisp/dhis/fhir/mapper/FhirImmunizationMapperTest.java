@@ -123,12 +123,13 @@ class FhirImmunizationMapperTest {
         mapFull(administered("true"), dataValue(DE_LOT, LOT), dataValue(DE_DOSE, "2"));
     assertEquals(LOT, immunization.getLotNumber());
     assertEquals(1, immunization.getProtocolApplied().size());
-    for (var e : Map.of("2147483647", 2147483647, " 7 ", 7).entrySet()) {
+    for (var e :
+        Map.of("2147483647", 2147483647, " 7 ", 7, "00000000002", 2, "001", 1).entrySet()) {
       Type value = doseNumber(mapFull(administered("true"), dataValue(DE_DOSE, e.getKey())));
       assertEquals(e.getValue(), assertInstanceOf(PositiveIntType.class, value).getValue());
     }
     for (String dose :
-        List.of("0", "00000000002", "\u0662", "second", "2147483648", "99999999999999999999")) {
+        List.of("0", "\u0662", "second", "2147483648", "00002147483648", "99999999999999999999")) {
       Type value = doseNumber(mapFull(administered("true"), dataValue(DE_DOSE, dose)));
       assertEquals(dose, assertInstanceOf(StringType.class, value, dose).getValue(), dose);
     }
@@ -165,7 +166,7 @@ class FhirImmunizationMapperTest {
   @Test
   void outputIsValidR4() {
     DataValue lot = dataValue(DE_LOT, LOT);
-    Event completedEvent = completed(administered("true"), lot, dataValue(DE_DOSE, "2"));
+    Event completedEvent = completed(administered("true"), lot, dataValue(DE_DOSE, "002"));
     Immunization completedImmunization = mapPresent(completedEvent, fullMapping(), true);
     assertEquals(COMPLETED, completedImmunization.getStatus());
     assertTrue(completedImmunization.hasEncounter() && completedImmunization.hasLotNumber());

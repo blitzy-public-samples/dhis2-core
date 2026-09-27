@@ -425,10 +425,14 @@ public class FhirResourceMappingValidator {
       }
     }
 
+    /**
+     * Reports as E4027 blank keys and, in a map of several keys, keys holding {@code ;}, and as
+     * E5003 keys with the same {@link #genderFold} as an earlier key.
+     */
     private void validateGenderKeys(Map<String, String> valueMap) {
       Set<String> folded = new HashSet<>();
       for (String key : valueMap.keySet()) {
-        if (isBlank(key)) {
+        if (isBlank(key) || (valueMap.size() > 1 && key.contains(QueryFilter.OPTION_SEP))) {
           add(ErrorCode.E4027, key, "valueMap");
         } else if (!folded.add(genderFold(key))) {
           add(ErrorCode.E5003, "valueMap", key, id, id);

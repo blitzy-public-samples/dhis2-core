@@ -128,11 +128,14 @@ public class FhirResourceMappingService {
     return mappings.stream().map(mapping -> escapeControlCharacters(mapping.getUid())).toList();
   }
 
+  /** Escapes controls, line separators and literal backslashes in mapping UIDs for logging. */
   @CheckForNull
   static String escapeControlCharacters(@CheckForNull String value) {
     return value == null
         ? null
-        : CONTROL.matcher(value).replaceAll(c -> "\\\\u%04X".formatted((int) c.group().charAt(0)));
+        : CONTROL
+            .matcher(value.replace("\\", "\\\\"))
+            .replaceAll(c -> "\\\\u%04X".formatted((int) c.group().charAt(0)));
   }
 
   /**

@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.*;
 import java.util.stream.Stream;
 import org.hisp.dhis.external.conf.*;
-import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.test.webapi.AuthenticationApiTestBase;
 import org.hisp.dhis.webapi.filter.ApiVersionFilter;
@@ -55,7 +55,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
  * Tests, through the security filter chain and then the API version filter with {@code
  * fhir.api.enabled} at its default, that each of {@link #FHIR_ROUTES} answers the FHIR not-found
  * {@code 404} to anonymous, Basic and session callers, while sampled non-FHIR routes keep their
- * responses and share their security headers with the {@code 404}.
+ * responses and the {@code 404} repeats every header of their {@code 401} but {@code Content-Type}.
  */
 class FhirApiDisabledTest extends AuthenticationApiTestBase {
   static final String BASIC_AUTH_USER_NAME = "usera";
@@ -84,12 +84,7 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   private static final List<String> NON_FHIR_PATHS =
       List.of("/api/fhirResourceMappings", "/api/44/fhirResourceMappings");
   private static final List<String> SECURITY_HEADERS =
-      List.of(
-          "Content-Security-Policy",
-          "X-Frame-Options",
-          "X-Content-Type-Options",
-          "X-XSS-Protection",
-          "Strict-Transport-Security");
+      List.of("Content-Security-Policy", "X-Content-Type-Options", "Strict-Transport-Security");
 
   @Autowired private DhisConfigurationProvider config;
   @Autowired private FilterChainProxy springSecurityFilterChain;
@@ -132,7 +127,10 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
       MockHttpServletResponse anonymous = mvc.perform(request).andReturn().getResponse();
       assertEquals(401, anonymous.getStatus(), "GET " + path + " as ANONYMOUS");
       assertNotFhirJson(anonymous, "GET " + path + " as ANONYMOUS");
-      for (String header : SECURITY_HEADERS) {
+      Set<String> headers = new HashSet<>(anonymous.getHeaderNames());
+      headers.remove(HttpHeaders.CONTENT_TYPE);
+      assertTrue(headers.containsAll(SECURITY_HEADERS), "GET " + path + " as ANONYMOUS");
+      for (String header : headers) {
         assertEquals(anonymous.getHeaderValues(header), fhir.getHeaderValues(header), header);
       }
     }
@@ -176,9 +174,9 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   static void assertNotFoundOutcome(MockHttpServletResponse response, boolean head) {
     HttpResponse fhir = new HttpResponse(toResponse(response));
     if (head && response.getContentAsByteArray().length == 0) {
-      FhirPostgresControllerTestBase.fhirBody(fhir, HttpStatus.NOT_FOUND);
+      FhirResponses.fhirBody(fhir, HttpStatus.NOT_FOUND);
     } else {
-      FhirPostgresControllerTestBase.assertNotFound(fhir);
+      FhirResponses.assertNotFound(fhir);
     }
   }
 

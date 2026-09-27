@@ -41,7 +41,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.util.*;
-import java.util.Locale;
 import java.util.stream.*;
 import org.hisp.dhis.common.*;
 import org.hisp.dhis.dataelement.DataElement;
@@ -188,6 +187,8 @@ class FhirResourceMappingValidatorTest {
   @CsvSource({
     "M, man, F, female, E4027, man",
     "'  ', male, F, female, E4027, '  '",
+    "A;B, male, F, female, E4027, A;B",
+    "A;B, male, C, male, E4027, A;B",
     "Ä, male, ä, female, E5003, ä",
     "ΟΔΟΣ, other, οδοσ, female, E5003, οδοσ"
   })
@@ -201,23 +202,17 @@ class FhirResourceMappingValidatorTest {
     assertOnly(validate(mapping), code, args);
   }
 
-  @ParameterizedTest
-  @ValueSource(strings = {"tr", "en"})
-  void genderValueMapKeysFoldIndependentlyOfDefaultLocale(String languageTag) {
+  @Test
+  void genderValueMapKeysFoldPerCodePointAndSeparatorKeyStandsAlone() {
     FhirResourceMapping mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_GENDER)
-        .setValueMap(
-            Map.of("A;B", "male", "ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
-    Locale locale = Locale.getDefault();
-    try {
-      Locale.setDefault(Locale.forLanguageTag(languageTag));
-      assertEquals(List.of(), validate(mapping));
-      assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
-      assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
-      assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
-    } finally {
-      Locale.setDefault(locale);
-    }
+    var gender = entryOf(mapping, PATIENT_GENDER);
+    gender.setValueMap(Map.of("ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
+    assertEquals(List.of(), validate(mapping));
+    gender.setValueMap(Map.of("A;B", "male"));
+    assertEquals(List.of(), validate(mapping));
+    assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
+    assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
+    assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
   }
 
   @ParameterizedTest

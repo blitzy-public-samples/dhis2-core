@@ -369,16 +369,21 @@ class FhirTrackerReaderTest {
     String name = FhirTrackerReader.class.getName();
     LoggerConfig capture = new LoggerConfig(name, Level.ALL, false);
     capture.addAppender(appender, Level.ALL, null);
-    LoggerContext context = LoggerContext.getContext(false);
-    appender.start();
-    context.getConfiguration().addLogger(name, capture);
-    context.updateLoggers();
-    try {
-      call.execute();
-    } finally {
-      context.getConfiguration().removeLogger(name);
-      context.updateLoggers();
-      appender.stop();
+    var configuration = LoggerContext.getContext(false).getConfiguration();
+    synchronized (configuration) {
+      LoggerConfig previous = configuration.getLoggers().get(name);
+      appender.start();
+      configuration.removeLogger(name);
+      configuration.addLogger(name, capture);
+      LoggerContext.getContext(false).updateLoggers();
+      try {
+        call.execute();
+      } finally {
+        configuration.removeLogger(name);
+        Optional.ofNullable(previous).ifPresent(config -> configuration.addLogger(name, config));
+        LoggerContext.getContext(false).updateLoggers();
+        appender.stop();
+      }
     }
     assertEquals(1, events.size());
     LogEvent event = events.get(0);

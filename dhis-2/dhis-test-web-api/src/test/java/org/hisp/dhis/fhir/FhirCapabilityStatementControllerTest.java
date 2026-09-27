@@ -29,7 +29,7 @@
  */
 package org.hisp.dhis.fhir;
 
-import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.parseOk;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.parseOk;
 import static org.hisp.dhis.http.HttpClientAdapter.Body;
 import static org.hisp.dhis.http.HttpMethod.*;
 import static org.hisp.dhis.http.HttpStatus.*;
@@ -38,11 +38,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.util.*;
 import org.hisp.dhis.external.conf.*;
-import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
+import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses;
 import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
 import org.hisp.dhis.http.HttpMethod;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
+import org.hisp.dhis.test.config.H2DhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.H2ControllerIntegrationTestBase;
 import org.hisp.dhis.webapi.controller.tracker.TestSetup;
 import org.hisp.dhis.webapi.openapi.OpenApiObject;
@@ -54,13 +55,24 @@ import org.hl7.fhir.r4.model.Enumerations.FHIRVersion;
 import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.transaction.annotation.Transactional;
 
 /** Tests the FHIR CapabilityStatement, OpenAPI contract and 400, 404 and 501 outcomes on H2. */
 @Transactional
-@ContextConfiguration(classes = FhirResourceMappingControllerTest.FhirApiEnabledConfig.class)
+@ContextConfiguration(classes = FhirCapabilityStatementControllerTest.FhirApiEnabledConfig.class)
 class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestBase {
+  /** Supplies the H2 test configuration with {@code fhir.api.enabled} set to {@code true}. */
+  public static class FhirApiEnabledConfig {
+    @Bean
+    public DhisConfigurationProvider dhisConfigurationProvider() {
+      H2DhisConfigurationProvider provider = new H2DhisConfigurationProvider();
+      provider.getProperties().put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
+      return provider;
+    }
+  }
+
   private static final String FHIR_BASE = "/api/fhir";
   private static final String METADATA_PATH = FHIR_BASE + "/metadata";
   private static final String FHIR_JSON = "application/fhir+json";
@@ -117,17 +129,20 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
   }
 
   @Test
-  void configuredServerBaseUrlReplacesForgedHost() {
-    Header forged = new Header("Host", "evil.example");
-    var fallback = parseOk(GET(METADATA_PATH, forged), CapabilityStatement.class);
-    assertEquals("http://evil.example" + FHIR_BASE, fallback.getImplementation().getUrl());
-    String trusted = "https://dhis.example.org/dhis";
-    config.getProperties().put(ConfigurationKey.SERVER_BASE_URL.getKey(), trusted);
+  void implementationUrlFollowsTheRequestBaseWithOrWithoutServerBaseUrl() {
+    Properties properties = config.getProperties();
+    String key = ConfigurationKey.SERVER_BASE_URL.getKey();
+    Object previous = properties.remove(key);
     try {
-      var statement = parseOk(GET(METADATA_PATH, forged), CapabilityStatement.class);
-      assertEquals(trusted + FHIR_BASE, statement.getImplementation().getUrl());
+      Header host = new Header("Host", "fhir.example.org:8080");
+      String expected = "http://fhir.example.org:8080" + FHIR_BASE;
+      var unset = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
+      assertEquals(expected, unset.getImplementation().getUrl());
+      properties.put(key, "https://dhis.example.org/dhis");
+      var configured = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
+      assertEquals(expected, configured.getImplementation().getUrl());
     } finally {
-      config.getProperties().remove(ConfigurationKey.SERVER_BASE_URL.getKey());
+      properties.compute(key, (name, value) -> previous);
     }
   }
 
@@ -170,58 +185,34 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     OpenApiObject doc = GET(url).content().as(OpenApiObject.class);
     String operations =
         """
-        /api/fhir/Encounter/ #FhirSearchsetBundle _count _format _id _page patient subject
-        /api/fhir/Encounter/{id} #FhirEncounterResource _format id*
-        /api/fhir/Immunization/ #FhirSearchsetBundle _count _format _id _page patient
-        /api/fhir/Immunization/{id} #FhirImmunizationResource _format id*
-        /api/fhir/Observation/ #FhirSearchsetBundle _count _format _id _page code patient subject
-        /api/fhir/Observation/{id} #FhirObservationResource _format id*
-        /api/fhir/Patient/ #FhirSearchsetBundle _count _format _id _page birthdate family gender given identifier
-        /api/fhir/Patient/{id} #FhirPatientResource _format id*
-        /api/fhir/Patient/{id}/$everything #FhirSearchsetBundle _format id*
-        /api/fhir/metadata #FhirCapabilityStatementResource _format
+        /api/fhir/Encounter/ bundle.html _count _format _id _page patient subject
+        /api/fhir/Encounter/{id} encounter.html _format id*
+        /api/fhir/Immunization/ bundle.html _count _format _id _page patient
+        /api/fhir/Immunization/{id} immunization.html _format id*
+        /api/fhir/Observation/ bundle.html _count _format _id _page code patient subject
+        /api/fhir/Observation/{id} observation.html _format id*
+        /api/fhir/Patient/ bundle.html _count _format _id _page birthdate family gender given identifier
+        /api/fhir/Patient/{id} patient.html _format id*
+        /api/fhir/Patient/{id}/$everything bundle.html _format id*
+        /api/fhir/metadata capabilitystatement.html _format
         """;
+    String hl7 = "(?s).*https://hl7\\.org/fhir/R4/(\\w+\\.html).*";
     List<String> described = new ArrayList<>();
     for (String path : doc.$paths().names().stream().sorted().toList()) {
       OperationObject get = doc.$paths().get(path).get();
       JsonMap<MediaTypeObject> content = get.responses().get("200").content();
       assertEquals(List.of(FHIR_JSON), content.names(), path);
-      StringJoiner line = new StringJoiner(" ").add(path).add(ref(content.get(FHIR_JSON).schema()));
+      SchemaObject schema = content.get(FHIR_JSON).schema();
+      assertTrue(!schema.isRef() && schema.isObjectType(), path + " " + schema);
+      StringJoiner line = new StringJoiner(" ").add(path);
+      line.add(String.valueOf(get.description()).replaceAll(hl7, "$1"));
       get.parameters(In.query).stream().map(ParameterObject::name).sorted().forEach(line::add);
       get.parameters(In.path).forEach(id -> line.add(id.name() + (id.required() ? "*" : "?")));
       described.add(line.toString());
     }
     assertEquals(operations.strip().lines().toList(), described);
-    String requiredMembers =
-        """
-        FhirPatientResource Patient resourceType
-        FhirEncounterResource Encounter class resourceType status
-        FhirImmunizationResource Immunization occurrenceDateTime patient resourceType status vaccineCode
-        FhirObservationResource Observation code resourceType status
-        FhirSearchsetBundle Bundle resourceType type
-        FhirCapabilityStatementResource CapabilityStatement date fhirVersion format kind resourceType status
-        """;
-    JsonMap<SchemaObject> schemas = doc.components().schemas();
-    for (String line : requiredMembers.strip().lines().toList()) {
-      SchemaObject schema = schemas.get(line.split(" ")[0]);
-      StringJoiner members = new StringJoiner(" ").add(line.split(" ")[0]);
-      schema.properties().get("resourceType").resolve().$enum().forEach(members::add);
-      schema.required().stream().map(String::valueOf).sorted().forEach(members::add);
-      assertEquals(line, members.toString());
-    }
-    SchemaObject entry = schemas.get("FhirSearchsetBundle").properties().get("entry").items();
-    StringJoiner oneOf = new StringJoiner(" ");
-    entry.resolve().properties().get("resource").oneOf().forEach(s -> oneOf.add(ref(s)));
-    String resources = "#FhirPatientResource #FhirEncounterResource #FhirImmunizationResource";
-    assertEquals(resources + " #FhirObservationResource", oneOf.toString());
-    JsonMixed served = JsonMixed.of(GET(METADATA_PATH).content(FHIR_JSON));
-    List<Text> members = schemas.get("FhirCapabilityStatementResource").required();
-    assertTrue(served.has(members), members::toString);
-    assertEquals("CapabilityStatement", served.getString("resourceType").string());
-  }
-
-  private static String ref(SchemaObject schema) {
-    return schema.getString("$ref").string().replace("#/components/schemas/", "#");
+    List<String> schemas = doc.components().schemas().names();
+    assertEquals(List.of(), schemas.stream().filter(name -> name.startsWith("Fhir")).toList());
   }
 
   private void deleteAllMappings() {
@@ -260,8 +251,6 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
             : perform(method, path, Body("{'resourceType':'Patient'}"));
     assertAll(
         method + " " + path,
-        () ->
-            FhirPostgresControllerTestBase.assertOutcome(
-                response, status, code, d -> d.contains(text)));
+        () -> FhirResponses.assertOutcome(response, status, code, d -> d.contains(text)));
   }
 }

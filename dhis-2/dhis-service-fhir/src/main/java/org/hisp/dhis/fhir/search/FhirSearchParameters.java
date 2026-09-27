@@ -70,13 +70,12 @@ public class FhirSearchParameters {
   public static final Set<String> FORMATS =
       Set.of("json", "application/json", "application/fhir+json");
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
-  public static final int MAX_OR_VALUES = 100;
-  public static final int MAX_OR_LENGTH = 4096;
+
+  /** The largest Patient page size; a larger valid {@code _count} pages by this size. */
   private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
+
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
   private static final String OR_SEPARATOR = ",";
-  private static final String OR_LIMIT =
-      "must not exceed " + MAX_OR_VALUES + " values or " + MAX_OR_LENGTH + " characters";
   private static final char TOKEN_SEPARATOR = '|';
   private static final String PATIENT_REFERENCE_PREFIX = FhirResourceType.PATIENT.fhirType() + "/";
   private static final Pattern POSITIVE_INTEGER = Pattern.compile("^[1-9][0-9]*$");
@@ -341,6 +340,7 @@ public class FhirSearchParameters {
         state.count = positiveInteger(COUNT, value);
         if (operation == Operation.PATIENT_SEARCH) {
           checkPatientPageSize(state.count, true);
+          state.count = Math.min(state.count, MAX_PATIENT_COUNT);
         }
       }
       case PAGE -> {
@@ -355,13 +355,7 @@ public class FhirSearchParameters {
 
   private static List<String> elements(String name, String value) {
     if (OR_PARAMETERS.contains(name)) {
-      if (value.length() > MAX_OR_LENGTH) {
-        throw FhirApiException.invalidParameter(name, OR_LIMIT);
-      }
-      List<String> elements = List.of(value.split(OR_SEPARATOR, MAX_OR_VALUES + 1));
-      if (elements.size() > MAX_OR_VALUES) {
-        throw FhirApiException.invalidParameter(name, OR_LIMIT);
-      }
+      List<String> elements = List.of(value.split(OR_SEPARATOR, -1));
       if (elements.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");
       }
@@ -491,15 +485,14 @@ public class FhirSearchParameters {
     throw FhirApiException.invalidParameter(name, "must be a positive integer");
   }
 
-  /** Rejects a Patient {@code _count} above 2147483646 or a positive KeyTrackedEntityMaxLimit. */
+  /** Rejects a Patient {@code _count} above a positive KeyTrackedEntityMaxLimit. */
   private void checkPatientPageSize(int count, boolean explicit) {
     SystemSettings settings = settingsProvider.getCurrentSettings();
     int limit = settings == null ? 0 : settings.getTrackedEntityMaxLimit();
-    int ceiling = limit > 0 ? Math.min(limit, MAX_PATIENT_COUNT) : MAX_PATIENT_COUNT;
-    if (count > ceiling) {
+    if (limit > 0 && count > limit) {
       throw FhirApiException.invalidParameter(
           COUNT,
-          explicit ? "must not exceed " + ceiling : "must be given and must not exceed " + ceiling);
+          explicit ? "must not exceed " + limit : "must be given and must not exceed " + limit);
     }
   }
 

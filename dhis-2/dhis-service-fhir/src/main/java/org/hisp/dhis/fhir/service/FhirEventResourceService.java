@@ -37,7 +37,6 @@ import java.util.function.Predicate;
 import javax.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.UID;
-import org.hisp.dhis.external.conf.DhisConfigurationProvider;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.*;
 import org.hisp.dhis.fhir.mapping.*;
@@ -73,7 +72,6 @@ public class FhirEventResourceService {
   private final FhirEncounterMapper encounterMapper;
   private final FhirImmunizationMapper immunizationMapper;
   private final FhirObservationMapper observationMapper;
-  private final DhisConfigurationProvider config;
 
   public FhirEventResourceService(
       FhirResourceMappingService mappingService,
@@ -82,8 +80,7 @@ public class FhirEventResourceService {
       FhirTrackerReader reader,
       FhirEncounterMapper encounterMapper,
       FhirImmunizationMapper immunizationMapper,
-      FhirObservationMapper observationMapper,
-      DhisConfigurationProvider config) {
+      FhirObservationMapper observationMapper) {
     this.mappingService = Objects.requireNonNull(mappingService, "mappingService");
     this.parameters = Objects.requireNonNull(parameters, "parameters");
     this.translator = Objects.requireNonNull(translator, "translator");
@@ -91,7 +88,6 @@ public class FhirEventResourceService {
     this.encounterMapper = Objects.requireNonNull(encounterMapper, "encounterMapper");
     this.immunizationMapper = Objects.requireNonNull(immunizationMapper, "immunizationMapper");
     this.observationMapper = Objects.requireNonNull(observationMapper, "observationMapper");
-    this.config = Objects.requireNonNull(config, "config");
   }
 
   /** Reads one event-derived resource by logical id under the operation's deadline, if any. */
@@ -151,14 +147,9 @@ public class FhirEventResourceService {
     return Collections.unmodifiableList(resources);
   }
 
-  /** Builds {@code /api/fhir} under a configured {@code server.base.url}, else the request base. */
-  static UriComponentsBuilder fhirBase(
-      DhisConfigurationProvider config, HttpServletRequest request) {
-    String configured = config.getServerBaseUrl();
-    if (configured == null || configured.isBlank()) {
-      return ServletUriComponentsBuilder.fromContextPath(request).path(FHIR_BASE_PATH);
-    }
-    return UriComponentsBuilder.fromUriString(configured.strip()).path(FHIR_BASE_PATH);
+  /** Builds {@code /api/fhir} on the request's scheme, server name, port and context path. */
+  static UriComponentsBuilder fhirBase(HttpServletRequest request) {
+    return ServletUriComponentsBuilder.fromContextPath(request).path(FHIR_BASE_PATH);
   }
 
   static Bundle searchset() {
@@ -170,7 +161,7 @@ public class FhirEventResourceService {
       HttpServletRequest request,
       List<? extends Resource> resources,
       Runnable checkpoint) {
-    String base = fhirBase(config, request).build().toUriString() + PATH_SEPARATOR;
+    String base = fhirBase(request).build().toUriString() + PATH_SEPARATOR;
     for (Resource resource : resources) {
       bundle
           .addEntry()
@@ -185,7 +176,7 @@ public class FhirEventResourceService {
 
   UriComponentsBuilder addSelfLink(Bundle bundle, HttpServletRequest request, String path) {
     UriComponentsBuilder base =
-        fhirBase(config, request).path(PATH_SEPARATOR + path).query(request.getQueryString());
+        fhirBase(request).path(PATH_SEPARATOR + path).query(request.getQueryString());
     bundle.addLink().setRelation(Bundle.LINK_SELF).setUrl(base.build().toUriString());
     return base;
   }

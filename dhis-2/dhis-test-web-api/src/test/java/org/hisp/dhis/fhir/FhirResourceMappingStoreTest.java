@@ -33,6 +33,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toCollection;
 import static java.util.stream.Collectors.toSet;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.hisp.dhis.fhir.FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE;
 import static org.hisp.dhis.http.HttpAssertions.assertStatus;
 import static org.junit.jupiter.api.Assertions.*;
@@ -92,6 +93,7 @@ import org.xml.sax.InputSource;
 @ContextConfiguration(classes = FhirPostgresControllerTestBase.FhirApiEnabledConfig.class)
 class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase {
   private static final String TABLE = "fhirresourcemapping";
+  private static final String SCRATCH_TABLE = "fhir_index_scratch";
   private static final String MAPPING_HBM =
       "org/hisp/dhis/fhir/mapping/hibernate/FhirResourceMapping.hbm.xml";
   private static final String IDENTIFIABLE_PROPERTIES_HBM =
@@ -204,7 +206,8 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         constraintIndexes.put(row.constraintName(), row.constraintIndexDefinition());
       }
     }
-    Map<String, String> otherIndexes = migratedIndexes();
+    Map<String, String> indexes = indexesOf(TABLE);
+    Map<String, String> otherIndexes = new TreeMap<>(indexes);
     PARTIAL_INDEXES.forEach(index -> otherIndexes.remove(index.name()));
     List<String> unmodelled =
         hbm.keySet().stream().filter(p -> !modelProperties.contains(p)).toList();
@@ -219,21 +222,22 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         () -> assertEquals(columns, migratedColumns()),
         () -> assertEquals(constraints, migratedConstraints()),
         () -> assertEquals(constraintIndexes, otherIndexes),
-        () -> assertEquals(Map.of(), partialIndexMismatches(), "partial unique indexes"));
+        () -> assertEquals(Map.of(), partialIndexMismatches(indexes), "partial unique indexes"));
   }
 
   @Test
   void partialIndexContractDetectsExtraPredicateDisjunctAndKeyExpression() {
-    Map<String, String> mismatches =
-        partialIndexMismatches(
-            """
-            drop index ux_fhirresourcemapping_patient, ux_fhirresourcemapping_stage;
-            create unique index ux_fhirresourcemapping_patient on fhirresourcemapping (resourcetype) where resourcetype = 'PATIENT' or resourcetype = 'OBSERVATION';
-            create unique index ux_fhirresourcemapping_stage on fhirresourcemapping (resourcetype, programstageid, name) where resourcetype in ('ENCOUNTER', 'OBSERVATION');
-            """);
-    Set<String> mutated = Set.of("ux_fhirresourcemapping_patient", "ux_fhirresourcemapping_stage");
-    assertEquals(mutated, mismatches.keySet(), mismatches::toString);
-    assertEquals(Map.of(), partialIndexMismatches(), "mutated indexes not rolled back");
+    IndexContract patient = PARTIAL_INDEXES.get(0);
+    IndexContract stage = PARTIAL_INDEXES.get(1);
+    String predicate = patient.predicate() + " or resourcetype = 'OBSERVATION'";
+    String keys = stage.keys() + ", name";
+    List<IndexContract> mutated =
+        List.of(
+            new IndexContract(patient.name(), patient.uniquenessKey(), patient.keys(), predicate),
+            new IndexContract(stage.name(), stage.uniquenessKey(), keys, stage.predicate()),
+            PARTIAL_INDEXES.get(2));
+    Map<String, String> mismatches = partialIndexMismatches(scratchIndexes(mutated));
+    assertEquals(Set.of(patient.name(), stage.name()), mismatches.keySet(), mismatches::toString);
   }
 
   @Test
@@ -293,7 +297,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     assertEquals("OK", imported.getString("response.status").string());
     manager.clear();
     assertEquals(List.of(uid), noAclUids(FhirResourceType.PATIENT));
-    FhirPostgresControllerTestBase.assertOutcome(
+    assertOutcome(
         GET("/fhir/Patient/{id}", PATIENT_UID),
         HttpStatus.NOT_IMPLEMENTED,
         IssueType.NOTSUPPORTED,
@@ -326,34 +330,35 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
             + " where conrelid = 'fhirresourcemapping'::regclass and contype <> 'n'");
   }
 
-  /** Returns each index definition as PostgreSQL renders it, without the schema. */
-  private Map<String, String> migratedIndexes() {
+  /** Returns each index definition of the table as PostgreSQL renders it, without the table. */
+  private Map<String, String> indexesOf(String table) {
     return queryPairs(
-        "select indexname, replace(indexdef, ' ON ' || schemaname || '.', ' ON ')"
-            + " from pg_indexes where schemaname = current_schema() and tablename = ?",
-        TABLE);
+        "select i.relname::text, regexp_replace(pg_get_indexdef(i.oid), ' ON \\S+', '')"
+            + " from pg_index join pg_class i on i.oid = indexrelid where indrelid = ?::regclass",
+        table);
   }
 
-  /**
-   * Runs the statements and creates each contract index as {@code <name>_contract} in a rolled-back
-   * transaction, then returns each partial index whose definition differs from its contract index.
-   */
-  private Map<String, String> partialIndexMismatches(String... statements) {
+  /** Returns the indexes as created on a temporary table copy in a rolled-back transaction. */
+  private Map<String, String> scratchIndexes(List<IndexContract> indexes) {
     TransactionTemplate rollback = newTransaction();
-    Map<String, String> indexes =
-        rollback.execute(
-            status -> {
-              status.setRollbackOnly();
-              Arrays.stream(statements).forEach(jdbcTemplate::execute);
-              PARTIAL_INDEXES.forEach(i -> jdbcTemplate.execute(i.create(i.name() + "_contract")));
-              return migratedIndexes();
-            });
+    return rollback.execute(
+        status -> {
+          status.setRollbackOnly();
+          jdbcTemplate.execute("create temporary table " + SCRATCH_TABLE + " (like " + TABLE + ")");
+          indexes.forEach(index -> jdbcTemplate.execute(index.create(SCRATCH_TABLE)));
+          return indexesOf(SCRATCH_TABLE);
+        });
+  }
+
+  /** Returns each partial index of {@code actual} whose definition differs from its contract. */
+  private Map<String, String> partialIndexMismatches(Map<String, String> actual) {
+    Map<String, String> expected = scratchIndexes(PARTIAL_INDEXES);
     Map<String, String> mismatches = new TreeMap<>();
     for (IndexContract index : PARTIAL_INDEXES) {
       String name = index.name();
-      String expected = indexes.get(name + "_contract").replace(name + "_contract ", name + " ");
-      if (!expected.equals(indexes.get(name))) {
-        mismatches.put(name, index.uniquenessKey() + ": " + indexes.get(name) + " <> " + expected);
+      String contract = expected.get(name);
+      if (!contract.equals(actual.get(name))) {
+        mismatches.put(name, index.uniquenessKey() + ": " + actual.get(name) + " <> " + contract);
       }
     }
     return mismatches;
@@ -538,8 +543,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     }
 
     String constraintIndexDefinition() {
-      return "CREATE UNIQUE INDEX %s ON %s USING btree (%s)"
-          .formatted(constraintName, TABLE, column);
+      return "CREATE UNIQUE INDEX %s USING btree (%s)".formatted(constraintName, column);
     }
 
     /** Returns {@code "element column length nullable unique foreignKey"}. */
@@ -562,9 +566,84 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       return new IndexContract(cells[0], cells[1], cells[2], cells[3]);
     }
 
-    String create(String indexName) {
-      return "create unique index %s on %s (%s) where %s"
-          .formatted(indexName, TABLE, keys, predicate);
+    String create(String table) {
+      return "create unique index %s on %s (%s) where %s".formatted(name, table, keys, predicate);
+    }
+  }
+
+  /** Parses FHIR JSON strictly and asserts FHIR responses; holds no test context or state. */
+  static final class FhirResponses {
+    private FhirResponses() {}
+
+    /** Parses FHIR JSON strictly: unknown elements and invalid values fail the parse. */
+    static <T extends IBaseResource> T parse(String body, Class<T> type) {
+      return FhirContext.forR4Cached()
+          .newJsonParser()
+          .setParserErrorHandler(new StrictErrorHandler())
+          .parseResource(type, body);
+    }
+
+    static <T extends IBaseResource> T parseOk(HttpResponse response, Class<T> type) {
+      return parse(fhirBody(response, HttpStatus.OK), type);
+    }
+
+    /** Asserts the status and the FHIR JSON content type of a response and returns its body. */
+    static String fhirBody(HttpResponse response, HttpStatus status) {
+      assertEquals(status, response.status(), () -> response.contentUnchecked().toString());
+      String body = response.content("application/fhir+json");
+      assertEquals(FHIR_JSON_MEDIA_TYPE, MediaType.parseMediaType(response.getContentType()));
+      return body;
+    }
+
+    /** Returns the logical ids of the entries of a Bundle in order, asserting that they differ. */
+    static List<String> entryIds(Bundle bundle) {
+      List<String> ids = bundle.getEntry().stream().map(e -> e.getResource().getIdPart()).toList();
+      assertEquals(ids.size(), Set.copyOf(ids).size(), ids::toString);
+      return ids;
+    }
+
+    /**
+     * Parses a {@code searchset} whose only {@code self} link decodes to {@code url} and whose
+     * match entries carry their {@code fullUrl}s and, for a type search, the searched type.
+     */
+    static Bundle searchset(String url, String body) {
+      Bundle bundle = parse(body, Bundle.class);
+      assertEquals(Bundle.BundleType.SEARCHSET, bundle.getType(), body);
+      List<String> self =
+          bundle.getLink().stream()
+              .filter(link -> Bundle.LINK_SELF.equals(link.getRelation()))
+              .map(
+                  link ->
+                      URLDecoder.decode(link.getUrl().replaceFirst("^.*?/api/", "/api/"), UTF_8))
+              .toList();
+      assertEquals(List.of(URLDecoder.decode(url, UTF_8)), self, body);
+      String type = url.split("\\?")[0].replaceAll(".*/", "");
+      for (Bundle.BundleEntryComponent entry : bundle.getEntry()) {
+        Resource resource = entry.getResource();
+        String fullUrl = "/api/fhir/" + resource.fhirType() + "/" + resource.getIdPart();
+        assertTrue(type.startsWith("$") || type.equals(resource.fhirType()), body);
+        assertTrue(entry.getFullUrl().endsWith(fullUrl), entry::getFullUrl);
+        assertEquals(Bundle.SearchEntryMode.MATCH, entry.getSearch().getMode(), body);
+      }
+      return bundle;
+    }
+
+    /** Asserts an {@code OperationOutcome} with one {@code error} issue and returns the body. */
+    static String assertOutcome(
+        HttpResponse response, HttpStatus status, IssueType code, Predicate<String> diagnostics) {
+      String body = fhirBody(response, status);
+      OperationOutcome outcome = parse(body, OperationOutcome.class);
+      assertEquals(1, outcome.getIssue().size(), body);
+      OperationOutcomeIssueComponent issue = outcome.getIssueFirstRep();
+      assertEquals(IssueSeverity.ERROR, issue.getSeverity(), body);
+      assertEquals(code, issue.getCode(), body);
+      assertTrue(diagnostics.test(issue.getDiagnostics()), body);
+      return body;
+    }
+
+    static String assertNotFound(HttpResponse response) {
+      String diagnostics = FhirApiException.notFound().getDiagnostics();
+      return assertOutcome(response, HttpStatus.NOT_FOUND, IssueType.NOTFOUND, diagnostics::equals);
     }
   }
 
@@ -572,8 +651,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
    * Base of the FHIR controller tests on PostgreSQL with {@code fhir.api.enabled=true}. Once per
    * class it deletes every mapping, imports the Tracker fixtures and {@value #MAPPINGS_FILE}, and
    * deletes every mapping afterwards. Each test starts with public access {@value #DATA_READ} on
-   * the person type and both programs and {@value #METADATA_ONLY} on the given-name attribute. Its
-   * static helpers parse and assert FHIR responses for the H2-tier FHIR tests as well.
+   * the person type and both programs and {@value #METADATA_ONLY} on the given-name attribute.
    */
   @TestInstance(TestInstance.Lifecycle.PER_CLASS)
   @ContextConfiguration(classes = FhirPostgresControllerTestBase.FhirApiEnabledConfig.class)
@@ -638,78 +716,12 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       setPublicSharing("trackedEntityAttribute", GIVEN_ATTRIBUTE, METADATA_ONLY);
     }
 
-    /** Parses FHIR JSON strictly: unknown elements and invalid values fail the parse. */
-    static <T extends IBaseResource> T parse(String body, Class<T> type) {
-      return FhirContext.forR4Cached()
-          .newJsonParser()
-          .setParserErrorHandler(new StrictErrorHandler())
-          .parseResource(type, body);
-    }
-
-    static <T extends IBaseResource> T parseOk(HttpResponse response, Class<T> type) {
-      return parse(fhirBody(response, HttpStatus.OK), type);
-    }
-
     /** Reads {@code /api/fhir/{type}/{idAndQuery}}: a {@code 200} with the id and lastUpdated. */
     <T extends IBaseResource> T read(Class<T> type, String idAndQuery) {
       T resource = parseOk(GET("/api/fhir/" + type.getSimpleName() + "/" + idAndQuery), type);
       assertEquals(idAndQuery.split("\\?")[0], resource.getIdElement().getIdPart(), idAndQuery);
       assertNotNull(resource.getMeta().getLastUpdated(), idAndQuery);
       return resource;
-    }
-
-    /** Asserts the status and the FHIR JSON content type of a response and returns its body. */
-    static String fhirBody(HttpResponse response, HttpStatus status) {
-      assertEquals(status, response.status(), () -> response.contentUnchecked().toString());
-      String body = response.content("application/fhir+json");
-      assertEquals(FHIR_JSON_MEDIA_TYPE, MediaType.parseMediaType(response.getContentType()));
-      return body;
-    }
-
-    /** Returns the logical ids of the entries of a Bundle in order, asserting that they differ. */
-    static List<String> entryIds(Bundle bundle) {
-      List<String> ids = bundle.getEntry().stream().map(e -> e.getResource().getIdPart()).toList();
-      assertEquals(ids.size(), Set.copyOf(ids).size(), ids::toString);
-      return ids;
-    }
-
-    /**
-     * Parses a {@code searchset} whose only {@code self} link decodes to {@code url} and whose
-     * match entries carry their {@code fullUrl}s and, for a type search, the searched type.
-     */
-    static Bundle searchset(String url, String body) {
-      Bundle bundle = parse(body, Bundle.class);
-      assertEquals(Bundle.BundleType.SEARCHSET, bundle.getType(), body);
-      List<String> self =
-          bundle.getLink().stream()
-              .filter(link -> Bundle.LINK_SELF.equals(link.getRelation()))
-              .map(
-                  link ->
-                      URLDecoder.decode(link.getUrl().replaceFirst("^.*?/api/", "/api/"), UTF_8))
-              .toList();
-      assertEquals(List.of(URLDecoder.decode(url, UTF_8)), self, body);
-      String type = url.split("\\?")[0].replaceAll(".*/", "");
-      for (Bundle.BundleEntryComponent entry : bundle.getEntry()) {
-        Resource resource = entry.getResource();
-        String fullUrl = "/api/fhir/" + resource.fhirType() + "/" + resource.getIdPart();
-        assertTrue(type.startsWith("$") || type.equals(resource.fhirType()), body);
-        assertTrue(entry.getFullUrl().endsWith(fullUrl), entry::getFullUrl);
-        assertEquals(Bundle.SearchEntryMode.MATCH, entry.getSearch().getMode(), body);
-      }
-      return bundle;
-    }
-
-    /** Asserts an {@code OperationOutcome} with one {@code error} issue and returns the body. */
-    static String assertOutcome(
-        HttpResponse response, HttpStatus status, IssueType code, Predicate<String> diagnostics) {
-      String body = fhirBody(response, status);
-      OperationOutcome outcome = parse(body, OperationOutcome.class);
-      assertEquals(1, outcome.getIssue().size(), body);
-      OperationOutcomeIssueComponent issue = outcome.getIssueFirstRep();
-      assertEquals(IssueSeverity.ERROR, issue.getSeverity(), body);
-      assertEquals(code, issue.getCode(), body);
-      assertTrue(diagnostics.test(issue.getDiagnostics()), body);
-      return body;
     }
 
     /** Asserts {@code 400 invalid} naming {@code parameter} and no other query parameter. */
@@ -724,11 +736,6 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       Predicate<String> namesOnlyParameter =
           d -> d.startsWith(prefix) && others.stream().noneMatch(n -> d.contains("'" + n + "'"));
       assertOutcome(GET(url), HttpStatus.BAD_REQUEST, IssueType.INVALID, namesOnlyParameter);
-    }
-
-    static String assertNotFound(HttpResponse response) {
-      String diagnostics = FhirApiException.notFound().getDiagnostics();
-      return assertOutcome(response, HttpStatus.NOT_FOUND, IssueType.NOTFOUND, diagnostics::equals);
     }
 
     String assertForbidden(String url) {

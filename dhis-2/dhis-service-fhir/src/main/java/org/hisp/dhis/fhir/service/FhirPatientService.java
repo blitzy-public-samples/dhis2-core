@@ -87,7 +87,10 @@ public class FhirPatientService {
                 request));
   }
 
-  /** Searches {@code Patient}s into a paged searchset under the operation's deadline, if any. */
+  /**
+   * Searches {@code Patient}s into a paged searchset under the operation's deadline, if any; a
+   * {@code gender} search keeps only the {@code Patient}s mapped to a requested gender.
+   */
   @Nonnull
   public Bundle search(@Nonnull HttpServletRequest request) {
     Objects.requireNonNull(request, "request");

@@ -30,6 +30,7 @@
 package org.hisp.dhis.fhir;
 
 import static org.hisp.dhis.common.CodeGenerator.generateUid;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.hisp.dhis.http.HttpAssertions.assertStatus;
 import static org.hisp.dhis.http.HttpClientAdapter.Accept;
 import static org.junit.jupiter.api.Assertions.*;
@@ -337,17 +338,17 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     manager.clear();
   }
 
-  /** Sets {@code json} for {@code test}, then writes the prior JSON, or [] if absent or null. */
+  /** Sets {@code json} for {@code test}, then writes back the prior JSON, which must be present. */
   private void withAttributeSetting(String attribute, String property, String json, Runnable test) {
     String url = "/trackedEntityAttributes/" + attribute;
     String add = "[{'op':'add','path':'/" + property + "','value':%s}]";
     JsonValue previous = GET(url + "?fields=" + property).content().get(property);
-    String restore = previous.isUndefined() || previous.isNull() ? "[]" : previous.toJson();
+    assertFalse(previous.isUndefined(), () -> url + " has no " + property);
     patch(url, add.formatted(json));
     try {
       test.run();
     } finally {
-      patch(url, add.formatted(restore));
+      patch(url, add.formatted(previous.toJson()));
     }
   }
 

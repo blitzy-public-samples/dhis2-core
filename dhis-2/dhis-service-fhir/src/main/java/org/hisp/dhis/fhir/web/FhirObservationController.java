@@ -31,6 +31,7 @@ package org.hisp.dhis.fhir.web;
 
 import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenApi.FHIR_JSON;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Objects;
 import org.hisp.dhis.common.OpenApi;
@@ -56,8 +57,10 @@ public class FhirObservationController {
     this.serializer = Objects.requireNonNull(serializer, "serializer");
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirObservationResource.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
+  @OpenApi.Description(
+      "A FHIR R4 `Observation` resource, see https://hl7.org/fhir/R4/observation.html.")
   @GetMapping("/{id}")
   public ResponseEntity<String> readObservation(
       @OpenApi.Description("`{enrollmentUid}-{eventUid}-{dataElementUid}`") @PathVariable String id,
@@ -65,9 +68,11 @@ public class FhirObservationController {
     return serializer.ok(eventResourceService.read(FhirResourceType.OBSERVATION, id, request));
   }
 
-  @OpenApi.Response(value = FhirOpenApi.FhirSearchsetBundle.class, mediaTypes = FHIR_JSON)
+  @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirObservationSearchParameters.class)
-  @OpenApi.Description("Requires `patient`, `subject` or `_id`.")
+  @OpenApi.Description(
+      "A FHIR R4 `searchset` Bundle of `Observation` resources, see"
+          + " https://hl7.org/fhir/R4/bundle.html. Requires `patient`, `subject` or `_id`.")
   @GetMapping
   public ResponseEntity<String> searchObservations(HttpServletRequest request) {
     return serializer.ok(eventResourceService.search(FhirResourceType.OBSERVATION, request));

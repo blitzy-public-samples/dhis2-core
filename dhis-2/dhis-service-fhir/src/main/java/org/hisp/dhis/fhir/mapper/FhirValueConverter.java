@@ -121,9 +121,12 @@ public class FhirValueConverter {
     };
   }
 
+  /** Converts ISO local time text, or text with a one-digit hour such as {@code 8:30}. */
   private static Optional<Type> timeValue(String value) {
+    String trimmed = value.trim();
     try {
-      LocalTime time = LocalTime.parse(value.trim(), DateTimeFormatter.ISO_LOCAL_TIME);
+      String iso = trimmed.indexOf(':') == 1 ? "0" + trimmed : trimmed;
+      LocalTime time = LocalTime.parse(iso, DateTimeFormatter.ISO_LOCAL_TIME);
       return Optional.of(new TimeType(time.format(TIME_FORMAT)));
     } catch (DateTimeParseException ex) {
       return Optional.empty();

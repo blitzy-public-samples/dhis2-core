@@ -130,7 +130,7 @@ class FhirObservationMapperTest {
       dataValue(DE_NUMBER, "120.5"), dataValue(DE_TEXT, note),
       dataValue(DE_INTEGER, "42"), dataValue(DE_DATE, "2024-03-01"),
       dataValue(DE_BOOLEAN, "true"), dataValue(DE_DATETIME, "2024-03-01T10:15:30.123Z"),
-      dataValue(DE_TIME, "08:30:15"), dataValue(DE_BAD_NUMBER, "abc")
+      dataValue(DE_TIME, "08:30:15.250"), dataValue(DE_BAD_NUMBER, "abc")
     };
     Event event = stageEvent(EVT, EventStatus.COMPLETED, values);
     Map<String, Observation> byDataElement =
@@ -169,7 +169,7 @@ class FhirObservationMapperTest {
       actual.put(status, single(status, OCCURRED, UPDATED).getStatus());
     }
     assertEquals(expected, actual);
-    assertEquals(ObservationStatus.PRELIMINARY, single(null, OCCURRED, UPDATED).getStatus());
+    assertEquals(ObservationStatus.UNKNOWN, single(null, OCCURRED, UPDATED).getStatus());
   }
 
   @Test
@@ -222,7 +222,7 @@ class FhirObservationMapperTest {
   private List<Observation> fullObservations() {
     Event first = fullEvent(EVT, EventStatus.COMPLETED);
     Event second = fullEvent(EVT_2, EventStatus.ACTIVE);
-    Event other = fullEvent(EVT_3, EventStatus.COMPLETED);
+    Event other = fullEvent(EVT_3, null);
     Enrollment enrollment = enrollment(ENR, TE, PROGRAM, first, second);
     ResolvedMapping mapping = fullMapping();
     List<Observation> observations = new ArrayList<>(mapper.map(enrollment, first, mapping, true));

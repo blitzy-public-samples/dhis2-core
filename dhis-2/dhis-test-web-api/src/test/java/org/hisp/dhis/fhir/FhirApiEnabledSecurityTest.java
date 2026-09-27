@@ -29,8 +29,9 @@
  */
 package org.hisp.dhis.fhir;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hisp.dhis.fhir.FhirApiDisabledTest.*;
-import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.parseOk;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.parseOk;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
@@ -52,9 +53,10 @@ import org.springframework.test.web.servlet.request.*;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
- * Tests, through the security filter chain and then the API version filter with {@code
- * fhir.api.enabled} on, that anonymous FHIR requests, also on paths security ignores or permits,
- * get the platform's existing unauthenticated response, and authenticated ones reach the FHIR API.
+ * Tests with {@code fhir.api.enabled} on, through the security and API version filters, that FHIR
+ * requests without a user get the response of {@code /api/me}: {@code 401} JSON for {@code
+ * XMLHttpRequest}, also on paths security ignores or permits, and for unknown Basic credentials
+ * elsewhere, else {@code 302} to {@code /login/}; and that authenticated ones reach the FHIR API.
  */
 @ContextConfiguration(classes = FhirApiEnabledSecurityTest.FhirApiEnabledConfig.class)
 class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
@@ -78,7 +80,6 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
           "/api/fhir/Patient/loginConfig",
           "/api/44/fhir/Patient/loginConfig",
           "/api/fhir/Patient/account");
-  private static final String NON_FHIR_PATH = "/api/me";
 
   @Autowired private DhisConfigurationProvider config;
   @Autowired private FilterChainProxy springSecurityFilterChain;
@@ -96,15 +97,26 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
 
   @Test
   void anonymousRequestGetsExistingUnauthorizedResponse() throws Exception {
-    for (boolean xmlHttpRequest : new boolean[] {true, false}) {
-      MockHttpServletResponse expected = performAnonymous(NON_FHIR_PATH, xmlHttpRequest);
-      assertEquals(xmlHttpRequest ? 401 : 302, expected.getStatus(), NON_FHIR_PATH);
-      for (String path : FHIR_PATHS) {
-        String description = "GET " + path + (xmlHttpRequest ? " as XMLHttpRequest" : "");
-        MockHttpServletResponse response = performAnonymous(path, xmlHttpRequest);
+    String unknownUser = HttpHeaders.encodeBasicAuth("unknownuser", DEFAULT_ADMIN_PASSWORD, UTF_8);
+    Map<String, String> failedBasic = Map.of(HttpHeaders.AUTHORIZATION, "Basic " + unknownUser);
+    Map<String, String> xmlHttpRequest = Map.of(X_REQUESTED_WITH, XML_HTTP_REQUEST);
+    List<String> authenticatedPaths =
+        FHIR_PATHS.stream().filter(path -> !path.endsWith("/loginConfig")).toList();
+    for (Map<String, String> headers :
+        List.<Map<String, String>>of(xmlHttpRequest, Map.of(), failedBasic)) {
+      boolean json = !headers.isEmpty();
+      MockHttpServletResponse expected = perform("/api/me", headers);
+      for (String path : headers.equals(failedBasic) ? authenticatedPaths : FHIR_PATHS) {
+        String description = "GET " + path + " with " + headers.keySet();
+        MockHttpServletResponse response = perform(path, headers);
+        assertEquals(json ? 401 : 302, response.getStatus(), description);
+        assertEquals(json ? null : "/login/", response.getRedirectedUrl(), description);
+        assertEquals(json ? "application/json" : null, response.getContentType(), description);
         assertEquals(expected.getStatus(), response.getStatus(), description);
         assertEquals(expected.getRedirectedUrl(), response.getRedirectedUrl(), description);
         assertEquals(expected.getContentType(), response.getContentType(), description);
+        assertArrayEquals(
+            expected.getContentAsByteArray(), response.getContentAsByteArray(), description);
         assertNotFhirJson(response, description);
       }
     }
@@ -120,20 +132,15 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
     }
   }
 
-  private MockHttpServletResponse performAnonymous(String path, boolean xmlHttpRequest)
+  private MockHttpServletResponse perform(String path, Map<String, String> headers)
       throws Exception {
     clearSecurityContext();
     MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
-    if (xmlHttpRequest) {
-      request.header(X_REQUESTED_WITH, XML_HTTP_REQUEST);
-    }
+    headers.forEach(request::header);
     return mvc.perform(request).andReturn().getResponse();
   }
 
   private MockHttpServletResponse performBasic(String path) throws Exception {
-    clearSecurityContext();
-    MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
-    request.header(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER);
-    return mvc.perform(request).andReturn().getResponse();
+    return perform(path, Map.of(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER));
   }
 }

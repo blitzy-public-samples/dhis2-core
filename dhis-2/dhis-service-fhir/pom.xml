@@ -28,6 +28,10 @@
           <groupId>org.slf4j</groupId>
           <artifactId>jcl-over-slf4j</artifactId>
         </exclusion>
+        <exclusion>
+          <groupId>commons-net</groupId>
+          <artifactId>commons-net</artifactId>
+        </exclusion>
       </exclusions>
     </dependency>
     <dependency>
@@ -55,6 +59,10 @@
         <exclusion>
           <groupId>org.slf4j</groupId>
           <artifactId>jcl-over-slf4j</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>commons-net</groupId>
+          <artifactId>commons-net</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -172,12 +180,6 @@
       <groupId>ca.uhn.hapi.fhir</groupId>
       <artifactId>hapi-fhir-validation</artifactId>
       <scope>test</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>net.sourceforge.plantuml</groupId>
-          <artifactId>plantuml-mit</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
     <dependency>
       <groupId>ca.uhn.hapi.fhir</groupId>

@@ -30,6 +30,7 @@
 package org.hisp.dhis.fhir;
 
 import static org.awaitility.Awaitility.await;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.hisp.dhis.fhir.FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
