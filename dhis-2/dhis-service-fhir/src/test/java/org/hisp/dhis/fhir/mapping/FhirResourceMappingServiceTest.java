@@ -142,7 +142,9 @@ class FhirResourceMappingServiceTest {
   void typeWithoutUsableMappingIsNotSupported() {
     FhirResourceMapping invalid = observation(uid(), stageA);
     rejects(invalid);
-    when(store.getByResourceTypeNoAcl(OBSERVATION)).thenReturn(List.of(), List.of(invalid));
+    when(store.getByResourceTypeNoAcl(OBSERVATION))
+        .thenReturn(List.of())
+        .thenReturn(List.of(invalid));
     assertTrue(service.resolve(OBSERVATION).isEmpty());
     assertTrue(service.resolve(OBSERVATION).isEmpty());
     verify(manager, never()).getNoAcl(any(), anyString());
@@ -221,6 +223,12 @@ class FhirResourceMappingServiceTest {
   void resolvedRecordCarriesValueTypesAndSearchConstraints() {
     when(store.getByResourceTypeNoAcl(PATIENT)).thenReturn(List.of(patient(uid())));
     when(store.getByResourceTypeNoAcl(OBSERVATION)).thenReturn(List.of(observation(uid(), stageA)));
+    List<TrackedEntityTypeAttribute> members = person.getTrackedEntityTypeAttributes();
+    members.add(new TrackedEntityTypeAttribute(person, null));
+    members.add(
+        new TrackedEntityTypeAttribute(person, trackedEntityAttribute(null, ValueType.TEXT)));
+    DataElement unidentified = dataElement(null, ValueType.TEXT);
+    stageA.getProgramStageDataElements().add(new ProgramStageDataElement(stageA, unidentified));
     String text = textAttribute.getUid();
     String integer = integerAttribute.getUid();
     ResolvedMapping patient = single(service.resolve(PATIENT));

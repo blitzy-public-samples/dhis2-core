@@ -119,7 +119,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static final String LIST_PATH =
       "fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false";
   private static final String EDIT_FIELDS =
-      "?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing";
+      "?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing,translations,attributeValues";
   private static final String TYPES_PATH =
       "trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false";
   private static final String PROGRAMS_FILTER =
@@ -423,9 +423,39 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
       JsonList<JsonObject> listed = GET(LIST_PATH).content().getList(MAPPINGS, JsonObject.class);
       assertTrue(listed.stream().anyMatch(JsonMixed.of(item)::equivalentTo), listed::toJson);
       JsonObject edited = GET(ENDPOINT + "/" + id + EDIT_FIELDS).content();
-      String detail = "{\"sharing\": " + edited.get("sharing").toJson() + ", " + body.substring(1);
+      String empty = ", \"translations\": [], \"attributeValues\": [], ";
+      String detail = "{\"sharing\": " + edited.get("sharing").toJson() + empty + body.substring(1);
       assertTrue(JsonMixed.of(detail).equivalentTo(edited), edited::toJson);
     }
+  }
+
+  @Test
+  void settingsPageEditKeepsTranslationsAndAttributeValues() {
+    String translations =
+        "\"translations\": [{\"property\": \"NAME\", \"locale\": \"fr\", \"value\": \"Patient FHIR\"}]";
+    String values =
+        "\"attributeValues\": [{\"attribute\": {\"id\": \"j45AR9cBQKc\"}, \"value\": \"note\"}]";
+    assertStatus(HttpStatus.CREATED, POST(ENDPOINT, STORED_PATIENT));
+    assertStatus(
+        HttpStatus.NO_CONTENT, PUT(STORED_PATH + "/translations", "{" + translations + "}"));
+    JsonObject translated = GET(STORED_PATH + EDIT_FIELDS).content(HttpStatus.OK);
+    assertEquals(1, translated.getArray("translations").size(), translated::toJson);
+    assertStatus(HttpStatus.OK, PUT(STORED_PATH, pageBody(translated)));
+    JsonObject kept = GET(STORED_PATH + EDIT_FIELDS).content(HttpStatus.OK);
+    assertTrue(translated.equivalentTo(kept), kept::toJson);
+    String bundle =
+        "{\"%s\": [{%s, %s, %s]}"
+            .formatted(MAPPINGS, translations, values, STORED_PATIENT.substring(1));
+    assertStatus(HttpStatus.OK, POST("/metadata?skipValidation=true", bundle));
+    JsonObject annotated = GET(STORED_PATH + EDIT_FIELDS).content(HttpStatus.OK);
+    assertEquals(1, annotated.getArray("translations").size(), annotated::toJson);
+    assertEquals(1, annotated.getArray("attributeValues").size(), annotated::toJson);
+    JsonObject report =
+        PUT(STORED_PATH, pageBody(annotated)).content(HttpStatus.CONFLICT).getObject("response");
+    JsonList<JsonErrorReport> errors = report.getList("errorReports", JsonErrorReport.class);
+    assertEquals(List.of(E6012), errors.toList(JsonErrorReport::getErrorCode), report::toJson);
+    kept = GET(STORED_PATH + EDIT_FIELDS).content(HttpStatus.OK);
+    assertTrue(annotated.equivalentTo(kept), kept::toJson);
   }
 
   /** Mappings that violate every rule within one mapping, with the messages each must yield. */
@@ -615,6 +645,14 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
 
   private static String withId(String id, String mapping) {
     return "{\"id\": \"" + id + "\", " + mapping.substring(1);
+  }
+
+  /** Returns a JSON object of every property of {@code edited} except {@code id}. */
+  private static String pageBody(JsonObject edited) {
+    return edited.names().stream()
+        .filter(name -> !name.equals("id"))
+        .map(name -> "\"%s\": %s".formatted(name, edited.get(name).toJson()))
+        .collect(joining(", ", "{", "}"));
   }
 
   private static String attribute(FhirTargetField target, String source) {

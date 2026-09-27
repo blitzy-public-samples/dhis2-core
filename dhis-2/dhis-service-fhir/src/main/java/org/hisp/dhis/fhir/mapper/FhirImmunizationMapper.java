@@ -68,13 +68,21 @@ public class FhirImmunizationMapper {
     this.converter = Objects.requireNonNull(converter, "converter");
   }
 
-  /** Maps the event; empty without an administered value or an {@code occurredAt}. */
+  /**
+   * Maps the event; empty without an administered value or an {@code occurredAt}.
+   *
+   * @throws NullPointerException if an argument is null, or if an Immunization is emitted and the
+   *     enrollment, event or tracked entity UID is null
+   */
   @Nonnull
   public Optional<Immunization> map(
       @Nonnull Enrollment enrollment,
       @Nonnull Event event,
       @Nonnull ResolvedMapping mapping,
       boolean encounterMapped) {
+    Objects.requireNonNull(enrollment, "enrollment must not be null");
+    Objects.requireNonNull(event, "event must not be null");
+    Objects.requireNonNull(mapping, "mapping must not be null");
     Optional<FhirFieldMapping> administered =
         mapping.entry(FhirTargetField.IMMUNIZATION_ADMINISTERED);
     if (administered.isEmpty()) {
@@ -87,8 +95,15 @@ public class FhirImmunizationMapper {
     if (administeredValue == null || occurredAt == null) {
       return Optional.empty();
     }
-    String enrollmentUid = enrollment.getEnrollment().getValue();
-    String eventUid = event.getEvent().getValue();
+    String enrollmentUid =
+        Objects.requireNonNull(enrollment.getEnrollment(), "enrollment UID must not be null")
+            .getValue();
+    String eventUid =
+        Objects.requireNonNull(event.getEvent(), "event UID must not be null").getValue();
+    String trackedEntityUid =
+        Objects.requireNonNull(
+                enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null")
+            .getValue();
     Immunization immunization = new Immunization();
     immunization.setId(
         FhirLogicalId.perDataElement(enrollmentUid, eventUid, administeredDataElement).compose());
@@ -108,8 +123,7 @@ public class FhirImmunizationMapper {
                     new CodeableConcept()
                         .addCoding(
                             new Coding(entry.getSystem(), entry.getCode(), entry.getDisplay()))));
-    immunization.setPatient(
-        new Reference(PATIENT_REFERENCE_PREFIX + enrollment.getTrackedEntity().getValue()));
+    immunization.setPatient(new Reference(PATIENT_REFERENCE_PREFIX + trackedEntityUid));
     if (encounterMapped) {
       immunization.setEncounter(
           new Reference(

@@ -403,8 +403,7 @@
         if (programSelect.value) body.program = {id: programSelect.value};
         if (resourceSelect.value !== 'PATIENT' && stageSelect.value) body.programStage = {id: stageSelect.value};
         body.fieldMappings = state.rows.map(entryOf);
-        if (state.editing && state.editing.code !== null && state.editing.code !== undefined) body.code = state.editing.code;
-        if (state.editing && state.editing.sharing !== null && state.editing.sharing !== undefined) body.sharing = state.editing.sharing;
+        if (state.editing) ['code', 'sharing', 'translations', 'attributeValues'].forEach((key) => { if (state.editing[key] !== null && state.editing[key] !== undefined) body[key] = state.editing[key]; });
         return body;
       }
       function formProblems() {
@@ -491,13 +490,13 @@
       async function editMapping(id) {
         if (state.saving) return;
         const token = ++state.editLoad, warnings = [];
-        const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing');
+        const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing,translations,attributeValues');
         if (token !== state.editLoad) return;
         if (!result.ok || !isObject(result.json)) return showError(result);
         const mapping = result.json;
         if (!Array.isArray(mapping.fieldMappings)) return showMessage('Error: Malformed response: "fieldMappings" is not a list.');
         clearForm();
-        state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing};
+        state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing, translations: mapping.translations, attributeValues: mapping.attributeValues};
         nameInput.value = text(mapping.name);
         setValue(resourceSelect, mapping.resourceType, warnings);
         applyResourceType();

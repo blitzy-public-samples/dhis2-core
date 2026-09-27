@@ -201,8 +201,9 @@ public class FhirEventResourceService {
 
   private Resource readWithinDeadline(
       FhirResourceType type, @CheckForNull String id, HttpServletRequest request) {
-    List<ResolvedMapping> mappings = requireMappings(type);
-    Set<String> encounterStages = encounterStages(type);
+    OperationMappings resolved = requireMappings(type);
+    List<ResolvedMapping> mappings = resolved.mappings();
+    Set<String> encounterStages = resolved.encounterStages();
     reader.checkpoint();
     parameters.checkFormatOnly(Operation.READ, request);
     FhirLogicalId logicalId = FhirLogicalId.parse(type, id).orElseThrow(FhirApiException::notFound);
@@ -243,8 +244,9 @@ public class FhirEventResourceService {
   }
 
   private Bundle searchWithinDeadline(FhirResourceType type, HttpServletRequest request) {
-    List<ResolvedMapping> mappings = requireMappings(type);
-    Set<String> encounterStages = encounterStages(type);
+    OperationMappings resolved = requireMappings(type);
+    List<ResolvedMapping> mappings = resolved.mappings();
+    Set<String> encounterStages = resolved.encounterStages();
     reader.checkpoint();
     ParsedSearch parsed = parameters.parse(Operation.search(type), request, null);
     Set<String> requestedEvents = new HashSet<>();
@@ -388,22 +390,22 @@ public class FhirEventResourceService {
     }
   }
 
-  private List<ResolvedMapping> requireMappings(FhirResourceType type) {
-    List<ResolvedMapping> mappings = resolve(type);
+  /**
+   * Resolves mappings in one call, {@code resolve(ENCOUNTER)} for Encounter and {@code
+   * resolveAll()} otherwise, and returns those of the type with, for Immunization and Observation,
+   * the stages of the Encounter mappings. Throws not-supported when the type has none usable.
+   */
+  private OperationMappings requireMappings(FhirResourceType type) {
+    boolean encounter = type == FhirResourceType.ENCOUNTER;
+    List<ResolvedMapping> resolved =
+        Objects.requireNonNullElse(
+            encounter ? mappingService.resolve(type) : mappingService.resolveAll(), List.of());
+    List<ResolvedMapping> mappings = ofType(resolved, type);
     if (mappings.isEmpty()) {
       throw FhirApiException.notSupported(NO_USABLE_MAPPING + type.fhirType());
     }
-    return mappings;
-  }
-
-  private List<ResolvedMapping> resolve(FhirResourceType type) {
-    return Objects.requireNonNullElse(mappingService.resolve(type), List.of());
-  }
-
-  private Set<String> encounterStages(FhirResourceType type) {
-    return type == FhirResourceType.ENCOUNTER
-        ? Set.of()
-        : stagesOf(resolve(FhirResourceType.ENCOUNTER));
+    return new OperationMappings(
+        mappings, encounter ? Set.of() : stagesOf(ofType(resolved, FhirResourceType.ENCOUNTER)));
   }
 
   private static List<String> candidatePrograms(List<ResolvedMapping> mappings) {
@@ -456,4 +458,7 @@ public class FhirEventResourceService {
   }
 
   private record FlattenedResource(Resource resource, ResolvedMapping mapping) {}
+
+  /** The usable mappings of one operation's type and the stages its Encounter mappings cover. */
+  private record OperationMappings(List<ResolvedMapping> mappings, Set<String> encounterStages) {}
 }

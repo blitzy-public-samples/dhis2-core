@@ -88,6 +88,7 @@ class FhirEventResourceServiceTest {
   private static final String EVT3 = "fhirEvent03";
   private static final String DE_A = "fhirDataEl1";
   private static final String DE_B = "fhirDataEl2";
+  private static final String DE_C = "fhirDataEl3";
   private static final String GENDER_TEA = "fhirGender1";
   private static final String ENCOUNTER_ID = FhirLogicalId.encounter(ENR, EVT).compose();
   private static final String MALFORMED_ID = "not-a-valid-id";
@@ -137,7 +138,7 @@ class FhirEventResourceServiceTest {
   @Test
   void readAndSearchAggregationRules() throws Exception {
     when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m1, m2));
-    when(mappingService.resolve(IMMUNIZATION)).thenReturn(List.of());
+    when(mappingService.resolveAll()).thenReturn(List.of(m1, m2));
     FhirApiException unmapped = readError(IMMUNIZATION, MALFORMED_ID, "foo", "bar");
     assertError(HttpStatus.NOT_IMPLEMENTED, IssueType.NOTSUPPORTED, unmapped);
     FhirApiException invalid = readError(ENCOUNTER, MALFORMED_ID, "foo", "bar");
@@ -184,13 +185,19 @@ class FhirEventResourceServiceTest {
   @Test
   void deadlineStartsBeforeMappingResolution() {
     when(mappingService.resolve(ENCOUNTER)).thenAnswer(i -> recorded(spent(List.of(m1, m2))));
+    when(mappingService.resolveAll())
+        .thenAnswer(i -> recorded(spent(List.of(observationMapping(), m1))));
     assertExpired(() -> service.read(ENCOUNTER, ENCOUNTER_ID, request()));
     assertNull(DeadlineHolder.get());
     assertExpired(() -> service.search(ENCOUNTER, searchRequest()));
     assertNull(DeadlineHolder.get());
-    assertEquals(2, seen.size());
+    assertExpired(() -> service.read(OBSERVATION, ENCOUNTER_ID + "-" + DE_A, request()));
+    assertNull(DeadlineHolder.get());
+    assertExpired(() -> service.search(OBSERVATION, searchRequest()));
+    assertNull(DeadlineHolder.get());
+    assertEquals(4, seen.size());
     assertFalse(seen.contains(null), "a deadline is held while mappings resolve");
-    verify(timeout, times(2)).newDeadline();
+    verify(timeout, times(4)).newDeadline();
     verifyNoInteractions(enrollmentAdapter, teAdapter);
   }
 
@@ -335,7 +342,7 @@ class FhirEventResourceServiceTest {
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
     verify(enrollmentAdapter, times(2)).find(forProgram(P1), any());
     var p2 = resolved(OBSERVATION, TET, P2, S2, observationMapping().entries(), Map.of());
-    when(mappingService.resolve(OBSERVATION)).thenReturn(List.of(observationMapping(), p2));
+    when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), p2, m1));
     forbid(P2);
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", height)), heights);
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
@@ -350,6 +357,29 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
+  void immunizationAndObservationResolveMappingsOncePerOperation() throws Exception {
+    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, CVX_DISPLAY);
+    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_C);
+    var types = Map.of(DE_C, ValueType.BOOLEAN);
+    var immunization = resolved(IMMUNIZATION, TET, P1, S1, entries(vaccine, administered), types);
+    when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), immunization, m1));
+    DataValue[] values = {dataValue(DE_A, "172.5"), dataValue(DE_C, "true")};
+    answer(P1, enrollment(ENR, TE, P1, completed(EVT, S1, values)));
+    String observationId = ENCOUNTER_ID + "-" + DE_A;
+    String immunizationId = ENCOUNTER_ID + "-" + DE_C;
+    Observation observation =
+        assertInstanceOf(Observation.class, service.read(OBSERVATION, observationId, request()));
+    assertEquals("Encounter/" + ENCOUNTER_ID, observation.getEncounter().getReference());
+    assertEntries(service.search(OBSERVATION, searchRequest()), "Observation/" + observationId);
+    Immunization vaccination =
+        assertInstanceOf(Immunization.class, service.read(IMMUNIZATION, immunizationId, request()));
+    assertEquals("Encounter/" + ENCOUNTER_ID, vaccination.getEncounter().getReference());
+    assertEntries(service.search(IMMUNIZATION, searchRequest()), "Immunization/" + immunizationId);
+    verify(mappingService, times(4)).resolveAll();
+    verify(mappingService, never()).resolve(any());
+  }
+
+  @Test
   void idSearchMapsOnlyTheRequestedEvents() throws Exception {
     when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
     Event other = completed(EVT2, S2);
@@ -358,6 +388,8 @@ class FhirEventResourceServiceTest {
     assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
     verify(encounterMapper, times(1)).map(any(), any(), any());
     verify(encounterMapper).map(any(), argThat(e -> EVT.equals(e.getEvent().getValue())), any());
+    verify(mappingService).resolve(ENCOUNTER);
+    verify(mappingService, never()).resolveAll();
   }
 
   @Test
@@ -387,8 +419,7 @@ class FhirEventResourceServiceTest {
   }
 
   private void stubObservationSearch() throws Exception {
-    when(mappingService.resolve(OBSERVATION)).thenReturn(List.of(observationMapping()));
-    when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m1));
+    when(mappingService.resolveAll()).thenReturn(List.of(observationMapping(), m1));
     DataValue[] observed = {dataValue(DE_A, "172.5"), dataValue(DE_B, "70")};
     Enrollment first =
         enrollment(ENR, TE, P1, completed(EVT2, S1, observed), completed(EVT, S1, observed));

@@ -154,11 +154,11 @@ public class FhirResourceMappingService {
     for (Map<String, IdentifiableObject> owners : loaded.values()) {
       for (IdentifiableObject owner : owners.values()) {
         if (owner instanceof TrackedEntityType t && t.getTrackedEntityTypeAttributes() != null) {
-          putMembers(attributes, t.getTrackedEntityAttributes());
+          putMembers(attributes, t.getTrackedEntityAttributes(), TrackedEntityAttribute::getUid);
         } else if (owner instanceof Program p && p.getProgramAttributes() != null) {
-          putMembers(attributes, p.getTrackedEntityAttributes());
+          putMembers(attributes, p.getTrackedEntityAttributes(), TrackedEntityAttribute::getUid);
         } else if (owner instanceof ProgramStage s && s.getProgramStageDataElements() != null) {
-          putMembers(dataElements, s.getDataElements());
+          putMembers(dataElements, s.getDataElements(), DataElement::getUid);
         }
       }
     }
@@ -197,11 +197,12 @@ public class FhirResourceMappingService {
     loaded.put(klass, byUid);
   }
 
-  private static void putMembers(
-      Map<String, IdentifiableObject> byUid, Collection<? extends IdentifiableObject> members) {
-    for (IdentifiableObject member : members) {
-      if (member != null && member.getUid() != null) {
-        byUid.put(member.getUid(), member);
+  private static <T extends IdentifiableObject> void putMembers(
+      Map<String, IdentifiableObject> byUid, Collection<T> members, Function<T, String> uidOf) {
+    for (T member : members) {
+      String uid = member == null ? null : uidOf.apply(member);
+      if (uid != null) {
+        byUid.put(uid, member);
       }
     }
   }

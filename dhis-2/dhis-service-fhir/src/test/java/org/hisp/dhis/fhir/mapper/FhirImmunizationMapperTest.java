@@ -180,6 +180,33 @@ class FhirImmunizationMapperTest {
     FhirR4Validation.assertValid(notDone);
   }
 
+  @Test
+  void nullArgumentsAndIdentityUidsAreRejectedWithNamedMessages() {
+    Event given = completed(administered("true"));
+    Event noUid =
+        FhirTestFixtures.event(
+            null, STAGE, EventStatus.COMPLETED, OCCURRED, null, UPDATED_AT, administered("true"));
+    Enrollment enr = enrollment(ENR, TE, PROGRAM);
+    ResolvedMapping full = fullMapping();
+    Object[][] rows = {
+      {"enrollment", null, given, full},
+      {"event", enr, null, full},
+      {"mapping", enr, given, null},
+      {"enrollment UID", enrollment(null, TE, PROGRAM), given, full},
+      {"event UID", enr, noUid, full},
+      {"enrollment tracked entity UID", enrollment(ENR, null, PROGRAM), given, full}
+    };
+    for (Object[] r : rows) {
+      var thrown =
+          assertThrows(
+              NullPointerException.class,
+              () -> mapper.map((Enrollment) r[1], (Event) r[2], (ResolvedMapping) r[3], true));
+      assertEquals(r[0] + " must not be null", thrown.getMessage());
+    }
+    noUid.setOccurredAt(null);
+    assertTrue(mapper.map(enrollment(null, null, PROGRAM), noUid, full, true).isEmpty());
+  }
+
   private Optional<Immunization> map(Event event, ResolvedMapping mapping, boolean withEncounter) {
     return mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, withEncounter);
   }
