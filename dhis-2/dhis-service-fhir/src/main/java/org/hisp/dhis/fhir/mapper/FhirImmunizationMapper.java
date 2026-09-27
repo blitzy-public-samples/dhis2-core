@@ -35,32 +35,16 @@ import java.util.regex.*;
 import javax.annotation.*;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.webapi.controller.tracker.view.DataValue;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Event;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Immunization.ImmunizationStatus;
 import org.springframework.stereotype.Component;
 
-/**
- * Maps one Tracker event of an {@code IMMUNIZATION} mapping's program stage that has an {@code
- * occurredAt} and a non-blank {@link FhirTargetField#IMMUNIZATION_ADMINISTERED} value to a FHIR R4
- * {@link Immunization} with {@code id} {@code
- * {enrollmentUid}-{eventUid}-{administeredDataElementUid}}, {@code meta.lastUpdated} from {@code
- * updatedAt}, {@code status} {@code not-done} for the administered value {@code false} and {@code
- * completed} otherwise, {@code vaccineCode} from the {@link
- * FhirTargetField#IMMUNIZATION_VACCINE_CODE} entry, {@code patient} {@code
- * Patient/{trackedEntityUid}}, {@code encounter} {@code Encounter/{enrollmentUid}-{eventUid}} when
- * an {@code ENCOUNTER} mapping exists, {@code occurrenceDateTime} from {@code occurredAt}, and
- * {@code lotNumber} and {@code protocolApplied[0].doseNumber[x]} from their data elements, the dose
- * as {@code positiveInt} when its trimmed value is ASCII digits, leading zeros allowed, denoting a
- * positive {@code int}, and as {@code string} of the untrimmed value otherwise.
- */
+/** Maps an administered Tracker event with an occurrence to a FHIR R4 {@link Immunization}. */
 @Component
 public class FhirImmunizationMapper {
   private static final String PATIENT_REFERENCE_PREFIX = "Patient/";
   private static final String ENCOUNTER_REFERENCE_PREFIX = "Encounter/";
-  private static final String NOT_ADMINISTERED = "false";
   private static final Pattern POSITIVE_INTEGER = Pattern.compile("0*([1-9][0-9]{0,9})");
   private final FhirValueConverter converter;
 
@@ -68,12 +52,7 @@ public class FhirImmunizationMapper {
     this.converter = Objects.requireNonNull(converter, "converter");
   }
 
-  /**
-   * Maps the event; empty without an administered value or an {@code occurredAt}.
-   *
-   * @throws NullPointerException if an argument is null, or if an Immunization is emitted and the
-   *     enrollment, event or tracked entity UID is null
-   */
+  /** Maps the event; empty without an administered value or an {@code occurredAt}. */
   @Nonnull
   public Optional<Immunization> map(
       @Nonnull Enrollment enrollment,
@@ -88,7 +67,7 @@ public class FhirImmunizationMapper {
     if (administered.isEmpty()) {
       return Optional.empty();
     }
-    Map<String, String> values = dataValues(event.getDataValues());
+    Map<String, String> values = FhirValueConverter.dataValues(event.getDataValues());
     String administeredDataElement = administered.get().getSource();
     String administeredValue = valueOf(values, administeredDataElement);
     Instant occurredAt = event.getOccurredAt();
@@ -96,14 +75,11 @@ public class FhirImmunizationMapper {
       return Optional.empty();
     }
     String enrollmentUid =
-        Objects.requireNonNull(enrollment.getEnrollment(), "enrollment UID must not be null")
-            .getValue();
-    String eventUid =
-        Objects.requireNonNull(event.getEvent(), "event UID must not be null").getValue();
+        FhirValueConverter.uid(enrollment.getEnrollment(), "enrollment UID must not be null");
+    String eventUid = FhirValueConverter.uid(event.getEvent(), "event UID must not be null");
     String trackedEntityUid =
-        Objects.requireNonNull(
-                enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null")
-            .getValue();
+        FhirValueConverter.uid(
+            enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null");
     Immunization immunization = new Immunization();
     immunization.setId(
         FhirLogicalId.perDataElement(enrollmentUid, eventUid, administeredDataElement).compose());
@@ -112,7 +88,7 @@ public class FhirImmunizationMapper {
       immunization.getMeta().setLastUpdatedElement(converter.instant(updatedAt));
     }
     immunization.setStatus(
-        NOT_ADMINISTERED.equals(administeredValue)
+        Optional.of(false).equals(converter.toBoolean(administeredValue))
             ? ImmunizationStatus.NOTDONE
             : ImmunizationStatus.COMPLETED);
     mapping
@@ -151,23 +127,6 @@ public class FhirImmunizationMapper {
   @CheckForNull
   private static String valueOf(Map<String, String> values, @CheckForNull String dataElement) {
     return dataElement == null ? null : values.get(dataElement);
-  }
-
-  private static Map<String, String> dataValues(@CheckForNull Collection<DataValue> dataValues) {
-    Map<String, String> values = new LinkedHashMap<>();
-    if (dataValues == null) {
-      return values;
-    }
-    for (DataValue dataValue : dataValues) {
-      if (dataValue == null
-          || dataValue.getDataElement() == null
-          || dataValue.getValue() == null
-          || dataValue.getValue().isBlank()) {
-        continue;
-      }
-      values.putIfAbsent(dataValue.getDataElement(), dataValue.getValue());
-    }
-    return values;
   }
 
   private static Type doseNumberType(String value) {

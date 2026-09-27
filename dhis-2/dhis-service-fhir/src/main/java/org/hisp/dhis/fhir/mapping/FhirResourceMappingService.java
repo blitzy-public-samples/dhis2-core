@@ -128,7 +128,6 @@ public class FhirResourceMappingService {
     return mappings.stream().map(mapping -> escapeControlCharacters(mapping.getUid())).toList();
   }
 
-  /** Escapes controls, line separators and literal backslashes in mapping UIDs for logging. */
   @CheckForNull
   static String escapeControlCharacters(@CheckForNull String value) {
     return value == null
@@ -138,10 +137,6 @@ public class FhirResourceMappingService {
             .replaceAll(c -> "\\\\u%04X".formatted((int) c.group().charAt(0)));
   }
 
-  /**
-   * Returns a lookup over no-ACL batch loads of the mappings' tracked entity types, programs and
-   * stages; attributes and data elements resolve only as members of those loaded owners.
-   */
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata(
       List<FhirResourceMapping> mappings) {
     Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded =

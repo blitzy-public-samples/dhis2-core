@@ -34,8 +34,7 @@ import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.tracker.TrackerIdSchemeParams;
 import org.hisp.dhis.user.CurrentUserUtil;
-import org.hisp.dhis.webapi.controller.tracker.view.FilteredPage;
-import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.springframework.stereotype.Component;
 
 /** Delegates to the tracked entity list handler of {@link TrackedEntitiesExportController}. */

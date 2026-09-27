@@ -30,17 +30,18 @@
 package org.hisp.dhis.fhir;
 
 import java.util.Objects;
-import org.hl7.fhir.r4.model.OperationOutcome;
+import lombok.Getter;
+import org.hl7.fhir.r4.model.OperationOutcome.IssueType;
 import org.springframework.http.HttpStatus;
 
 /** FHIR R4 API error with the status, issue type and diagnostics of its {@code error} issue. */
+@Getter
 public final class FhirApiException extends RuntimeException {
   private final HttpStatus status;
-  private final OperationOutcome.IssueType issueType;
+  private final IssueType issueType;
   private final String diagnostics;
 
-  private FhirApiException(
-      HttpStatus status, OperationOutcome.IssueType issueType, String diagnostics) {
+  private FhirApiException(HttpStatus status, IssueType issueType, String diagnostics) {
     super(diagnostics);
     this.status = status;
     this.issueType = issueType;
@@ -50,16 +51,14 @@ public final class FhirApiException extends RuntimeException {
   /** Creates the {@code 404 not-found} error with fixed diagnostics naming no id or path. */
   public static FhirApiException notFound() {
     return new FhirApiException(
-        HttpStatus.NOT_FOUND,
-        OperationOutcome.IssueType.NOTFOUND,
-        "The requested resource was not found");
+        HttpStatus.NOT_FOUND, IssueType.NOTFOUND, "The requested resource was not found");
   }
 
   /** Creates the {@code 403 forbidden} error with fixed diagnostics naming no id or path. */
   public static FhirApiException forbidden() {
     return new FhirApiException(
         HttpStatus.FORBIDDEN,
-        OperationOutcome.IssueType.FORBIDDEN,
+        IssueType.FORBIDDEN,
         "Access to the requested resource is not permitted");
   }
 
@@ -68,27 +67,12 @@ public final class FhirApiException extends RuntimeException {
     Objects.requireNonNull(name, "name");
     Objects.requireNonNull(detail, "detail");
     return new FhirApiException(
-        HttpStatus.BAD_REQUEST,
-        OperationOutcome.IssueType.INVALID,
-        "Invalid parameter '" + name + "': " + detail);
+        HttpStatus.BAD_REQUEST, IssueType.INVALID, "Invalid parameter '" + name + "': " + detail);
   }
 
   /** Creates the {@code 501 not-supported} error with {@code detail} as its diagnostics. */
   public static FhirApiException notSupported(String detail) {
     Objects.requireNonNull(detail, "detail");
-    return new FhirApiException(
-        HttpStatus.NOT_IMPLEMENTED, OperationOutcome.IssueType.NOTSUPPORTED, detail);
-  }
-
-  public HttpStatus getStatus() {
-    return status;
-  }
-
-  public OperationOutcome.IssueType getIssueType() {
-    return issueType;
-  }
-
-  public String getDiagnostics() {
-    return diagnostics;
+    return new FhirApiException(HttpStatus.NOT_IMPLEMENTED, IssueType.NOTSUPPORTED, detail);
   }
 }

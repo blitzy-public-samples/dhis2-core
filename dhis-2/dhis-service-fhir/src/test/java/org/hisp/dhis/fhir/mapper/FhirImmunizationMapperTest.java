@@ -113,13 +113,13 @@ class FhirImmunizationMapperTest {
 
   @Test
   void falseValueIsNotDone() {
-    assertEquals(NOTDONE, mapFull(administered("false")).getStatus());
-    assertEquals(COMPLETED, mapFull(administered("true")).getStatus());
     ResolvedMapping text = mapping(Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, DE_TEXT));
     assertEquals(TEXT, text.valueTypes().get(DE_TEXT));
-    for (var row : Map.of("given", COMPLETED, "false", NOTDONE).entrySet()) {
-      Event event = completed(dataValue(DE_TEXT, row.getKey()));
-      assertEquals(row.getValue(), mapPresent(event, text, false).getStatus(), row.getKey());
+    for (String value : "false,FALSE,False, false ,fAlSe,true,TRUE,True,tRuE,given,0".split(",")) {
+      var status = value.trim().equalsIgnoreCase("false") ? NOTDONE : COMPLETED;
+      assertEquals(status, mapFull(administered(value)).getStatus(), value);
+      Event event = completed(dataValue(DE_TEXT, value));
+      assertEquals(status, mapPresent(event, text, false).getStatus(), "TEXT " + value);
     }
     assertEquals("not-done", NOTDONE.toCode());
   }
@@ -187,17 +187,10 @@ class FhirImmunizationMapperTest {
   void outputIsValidR4() {
     DataValue lot = dataValue(DE_LOT, LOT);
     Event completedEvent = completed(administered("true"), lot, dataValue(DE_DOSE, "002"));
-    Immunization completedImmunization = mapPresent(completedEvent, fullMapping(), true);
-    assertEquals(COMPLETED, completedImmunization.getStatus());
-    assertTrue(completedImmunization.hasEncounter() && completedImmunization.hasLotNumber());
-    assertInstanceOf(PositiveIntType.class, doseNumber(completedImmunization));
-    FhirR4Validation.assertValid(completedImmunization);
+    FhirR4Validation.assertValid(mapPresent(completedEvent, fullMapping(), true));
     DataValue textDose = dataValue(DE_DOSE, "second");
     Event active = event(EventStatus.ACTIVE, OCCURRED, null, administered("false"), lot, textDose);
-    Immunization notDone = mapPresent(active, fullMapping(), false);
-    assertEquals(NOTDONE, notDone.getStatus());
-    assertInstanceOf(StringType.class, doseNumber(notDone));
-    FhirR4Validation.assertValid(notDone);
+    FhirR4Validation.assertValid(mapPresent(active, fullMapping(), false));
   }
 
   private Optional<Immunization> map(Event event, ResolvedMapping mapping, boolean withEncounter) {

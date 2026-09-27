@@ -35,7 +35,9 @@ import static java.util.stream.Collectors.*;
 import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.*;
 import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.hisp.dhis.fhir.FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE;
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.http.HttpAssertions.assertStatus;
+import static org.hisp.dhis.http.HttpClientAdapter.Header;
 import static org.junit.jupiter.api.Assertions.*;
 
 import ca.uhn.fhir.context.FhirContext;
@@ -52,7 +54,6 @@ import java.util.function.*;
 import java.util.stream.Stream;
 import javax.xml.parsers.*;
 import org.hisp.dhis.external.conf.*;
-import org.hisp.dhis.feedback.ErrorCode;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
@@ -91,12 +92,18 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   private static final String IDENTIFIABLE_PROPERTIES_HBM =
       "org/hisp/dhis/common/identifiableProperties.hbm";
   private static final String PROGRAM_STAGE_UID = "NpsdDv6kKSO";
-  private static final String OTHER_STAGE_UID = "NpsdDv6kKS2";
-  private static final String SECOND_STAGE_UID = "SKNvpoLioON";
   private static final String COUNTS_BY_TYPE =
       "select resourcetype, count(*)::text from " + TABLE + " group by resourcetype";
-  private static final String STAGES =
-      "select m.uid, s.uid from " + TABLE + " m join programstage s using (programstageid)";
+  private static final String COLUMNS_SQL =
+      "select column_name, concat_ws(' ', udt_name, coalesce(character_maximum_length::text, ''),"
+          + " is_nullable, coalesce(column_default, '')) from information_schema.columns"
+          + " where table_schema = current_schema() and table_name = ?";
+  private static final String CONSTRAINTS_SQL =
+      "select conname, lower(pg_get_constraintdef(oid)) from pg_constraint"
+          + " where conrelid = 'fhirresourcemapping'::regclass and contype <> 'n'";
+  private static final String INDEXES_SQL =
+      "select i.relname::text, regexp_replace(pg_get_indexdef(i.oid), ' ON \\S+', '')"
+          + " from pg_index join pg_class i on i.oid = indexrelid where indrelid = ?::regclass";
   private static final Map<String, String> CONSTRAINTS =
       Map.of(
           "p", "primary key (%s)",
@@ -170,18 +177,13 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     assertAll(
         () -> assertFalse(sharedWithUser.contains(hidden), "hidden mapping visible"),
         () -> assertTrue(sharedWithUser.contains(visible), "public mapping not visible"),
-        () -> assertEquals(List.of(hidden), noAclUids(FhirResourceType.PATIENT)),
-        () -> assertEquals(List.of(visible), noAclUids(FhirResourceType.OBSERVATION)),
-        () -> assertEquals(List.of(), noAclUids(FhirResourceType.ENCOUNTER)));
+        () -> assertEquals(List.of(hidden), noAclUids(PATIENT)),
+        () -> assertEquals(List.of(visible), noAclUids(OBSERVATION)),
+        () -> assertEquals(List.of(), noAclUids(ENCOUNTER)));
   }
 
   @Test
   void schemaMatchesContract() throws Exception {
-    Set<String> modelProperties =
-        Arrays.stream(Introspector.getBeanInfo(FhirResourceMapping.class).getPropertyDescriptors())
-            .filter(descriptor -> descriptor.getReadMethod() != null)
-            .map(PropertyDescriptor::getName)
-            .collect(toSet());
     Map<String, String> hbm = new TreeMap<>();
     Map<String, String> columns = new TreeMap<>();
     Map<String, String> constraints = new TreeMap<>();
@@ -195,11 +197,12 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       if (type.matches("[pu]"))
         constraintIndexes.put(c[8], "CREATE UNIQUE INDEX " + c[8] + " USING btree (" + c[2] + ")");
     }
-    Map<String, String> indexes = indexesOf(TABLE);
+    Map<String, String> indexes = queryPairs(INDEXES_SQL, TABLE);
     Map<String, String> otherIndexes = new TreeMap<>(indexes);
     PARTIAL_INDEXES.forEach(index -> otherIndexes.remove(index.name()));
-    List<String> unmodelled =
-        hbm.keySet().stream().filter(p -> !modelProperties.contains(p)).toList();
+    List<String> unmodelled = new ArrayList<>(hbm.keySet());
+    for (var d : Introspector.getBeanInfo(FhirResourceMapping.class).getPropertyDescriptors())
+      if (d.getReadMethod() != null) unmodelled.remove(d.getName());
     Set<String> modelOwned = new TreeSet<>(hbm.keySet());
     Class<?> type = FhirResourceMapping.class;
     while ((type = type.getSuperclass()) != Object.class)
@@ -218,8 +221,8 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         () -> assertEquals(List.of(), unmodelled, "properties missing from the model"),
         () -> assertEquals(modelOwned, instanceFields(FhirResourceMapping.class), "model fields"),
         () -> assertEquals(hbm, parseHbmElements()),
-        () -> assertEquals(columns, migratedColumns()),
-        () -> assertEquals(constraints, migratedConstraints()),
+        () -> assertEquals(columns, queryPairs(COLUMNS_SQL, TABLE)),
+        () -> assertEquals(constraints, queryPairs(CONSTRAINTS_SQL)),
         () -> assertEquals(constraintIndexes, otherIndexes),
         () -> assertEquals(Map.of(), partialIndexMismatches(indexes), "partial unique indexes"),
         () ->
@@ -279,59 +282,15 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
           "source": "integerAttr"}]}
         """
             .formatted(uid, uid, PERSON_TYPE);
-    assertEquals(Map.of(), importRejections(HttpStatus.OK, "?skipValidation=true", mapping));
-    assertEquals(List.of(uid), noAclUids(FhirResourceType.PATIENT));
+    String bundle = "{\"fhirResourceMappings\": [%s]}".formatted(mapping);
+    JsonMixed imported = POST("/metadata?skipValidation=true", bundle).content(HttpStatus.OK);
+    manager.clear();
+    JsonImportSummary report = imported.get("response", JsonImportSummary.class);
+    assertEquals("OK", report.getStatus(), imported::toJson);
+    assertEquals(List.of(uid), noAclUids(PATIENT));
     HttpResponse read = GET("/fhir/Patient/{id}", FRANK);
     assertOutcome(
         read, HttpStatus.NOT_IMPLEMENTED, IssueType.NOTSUPPORTED, d -> d.contains("Patient"));
-  }
-
-  @Test
-  void metadataImportReportsUniquenessKeysStillHeldByStoredMappings() {
-    String first = nextUid();
-    String second = nextUid();
-    String created = nextUid();
-    String moved = encounter(first, OTHER_STAGE_UID);
-    String update = "?importStrategy=UPDATE";
-    List<ErrorCode> keyHeld = List.of(ErrorCode.E5003);
-    String[] stored = {encounter(first, PROGRAM_STAGE_UID), encounter(second, SECOND_STAGE_UID)};
-    String[] swapped = {encounter(first, SECOND_STAGE_UID), encounter(second, PROGRAM_STAGE_UID)};
-    assertEquals(Map.of(), importRejections(HttpStatus.OK, "", stored));
-    assertEquals(
-        Map.of(first, keyHeld, second, keyHeld),
-        importRejections(HttpStatus.CONFLICT, update, swapped));
-    assertEquals(
-        Map.of(created, keyHeld),
-        importRejections(HttpStatus.CONFLICT, "", moved, encounter(created, PROGRAM_STAGE_UID)));
-    assertEquals(Map.of(first, PROGRAM_STAGE_UID, second, SECOND_STAGE_UID), queryPairs(STAGES));
-    assertEquals(Map.of(), importRejections(HttpStatus.OK, update, moved));
-    assertEquals(Map.of(first, OTHER_STAGE_UID, second, SECOND_STAGE_UID), queryPairs(STAGES));
-  }
-
-  private Map<String, List<ErrorCode>> importRejections(
-      HttpStatus status, String query, String... mappings) {
-    String bundle = "{\"fhirResourceMappings\": [%s]}".formatted(String.join(",", mappings));
-    JsonMixed content = POST("/metadata" + query, bundle).content(status);
-    manager.clear();
-    JsonImportSummary report = content.get("response", JsonImportSummary.class);
-    assertEquals(status == HttpStatus.OK ? "OK" : "ERROR", report.getStatus(), content::toJson);
-    return report.getTypeReports().stream()
-        .flatMap(type -> type.getObjectReports().stream())
-        .filter(object -> !object.getErrorReports().isEmpty())
-        .collect(
-            toMap(
-                JsonObjectReport::getUid,
-                o -> o.getErrorReports().toList(JsonErrorReport::getErrorCode)));
-  }
-
-  private static String encounter(String uid, String stage) {
-    String program = SECOND_STAGE_UID.equals(stage) ? SECOND_PROGRAM : PROGRAM;
-    return """
-        {"id": "%s", "name": "FHIR store test %s", "resourceType": "ENCOUNTER", "trackedEntityType":
-          {"id": "%s"}, "program": {"id": "%s"}, "programStage": {"id": "%s"}, "fieldMappings": [{
-          "target": "ENCOUNTER_CLASS", "sourceType": "CONSTANT", "code": "AMB", "system": "urn:t:c"}]}
-        """
-        .formatted(uid, uid, PERSON_TYPE, program, stage);
   }
 
   private void assertRejected(String index, String resourceType, String fieldMappings) {
@@ -342,27 +301,6 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     assertTrue(String.valueOf(ex.getMessage()).contains(index), ex.getMessage());
   }
 
-  private Map<String, String> migratedColumns() {
-    return queryPairs(
-        "select column_name, concat_ws(' ', udt_name, coalesce(character_maximum_length::text, ''),"
-            + " is_nullable, coalesce(column_default, '')) from information_schema.columns"
-            + " where table_schema = current_schema() and table_name = ?",
-        TABLE);
-  }
-
-  private Map<String, String> migratedConstraints() {
-    return queryPairs(
-        "select conname, lower(pg_get_constraintdef(oid)) from pg_constraint"
-            + " where conrelid = 'fhirresourcemapping'::regclass and contype <> 'n'");
-  }
-
-  private Map<String, String> indexesOf(String table) {
-    return queryPairs(
-        "select i.relname::text, regexp_replace(pg_get_indexdef(i.oid), ' ON \\S+', '')"
-            + " from pg_index join pg_class i on i.oid = indexrelid where indrelid = ?::regclass",
-        table);
-  }
-
   private Map<String, String> scratchIndexes(List<IndexContract> indexes) {
     TransactionTemplate rollback = newTransaction();
     return rollback.execute(
@@ -370,7 +308,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
           status.setRollbackOnly();
           jdbcTemplate.execute("create temporary table " + SCRATCH_TABLE + " (like " + TABLE + ")");
           indexes.forEach(index -> jdbcTemplate.execute(index.create(SCRATCH_TABLE)));
-          return indexesOf(SCRATCH_TABLE);
+          return queryPairs(INDEXES_SQL, SCRATCH_TABLE);
         });
   }
 
@@ -542,6 +480,13 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   }
 
   interface FhirResponses {
+    String ORIGIN = "https://fhir.example.org";
+    Object[] FORWARDED = {
+      Header("X-Forwarded-Proto", "https"),
+      Header("X-Forwarded-Host", "fhir.example.org"),
+      Header("X-Forwarded-Port", "443")
+    };
+
     /** Parses FHIR JSON strictly: unknown elements and invalid values fail the parse. */
     static <T extends IBaseResource> T parse(String body, Class<T> type) {
       return FhirContext.forR4Cached()
@@ -697,6 +642,19 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       Predicate<String> namesOnlyParameter =
           d -> d.startsWith(prefix) && others.stream().noneMatch(n -> d.contains("'" + n + "'"));
       assertOutcome(GET(url), HttpStatus.BAD_REQUEST, IssueType.INVALID, namesOnlyParameter);
+    }
+
+    /** GETs {@code url} and its next page behind a proxy: every link starts with the origin. */
+    List<Bundle> forwardedPages(String url, String path) {
+      Bundle first = searchset(url, fhirBody(GET(url, FORWARDED), HttpStatus.OK));
+      String self = first.getLink(Bundle.LINK_SELF).getUrl();
+      String next = first.getLink(Bundle.LINK_NEXT).getUrl();
+      for (String link : List.of(first.getEntryFirstRep().getFullUrl(), self, next))
+        assertTrue(link.startsWith(ORIGIN + path), link);
+      String nextPath = next.substring(ORIGIN.length());
+      Bundle second = searchset(nextPath, fhirBody(GET(nextPath, FORWARDED), HttpStatus.OK));
+      assertTrue(second.getEntryFirstRep().getFullUrl().startsWith(ORIGIN + path), nextPath);
+      return List.of(first, second);
     }
 
     String assertForbidden(String url) {

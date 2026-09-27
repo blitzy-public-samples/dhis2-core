@@ -29,6 +29,8 @@
  */
 package org.hisp.dhis.fhir.service;
 
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
+
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 import javax.annotation.*;
@@ -81,16 +83,10 @@ public class FhirPatientService {
     return reader.withinDeadline(
         () ->
             readPatient(
-                Operation.READ,
-                patientMapping(mappingService.resolve(FhirResourceType.PATIENT)),
-                id,
-                request));
+                Operation.READ, patientMapping(mappingService.resolve(PATIENT)), id, request));
   }
 
-  /**
-   * Searches {@code Patient}s into a paged searchset under the operation's deadline, if any; a
-   * {@code gender} search keeps only the {@code Patient}s mapped to a requested gender.
-   */
+  /** Searches {@code Patient}s into a paged searchset under the operation's deadline, if any. */
   @Nonnull
   public Bundle search(@Nonnull HttpServletRequest request) {
     Objects.requireNonNull(request, "request");
@@ -105,7 +101,7 @@ public class FhirPatientService {
   }
 
   private Bundle searchWithinDeadline(HttpServletRequest request) {
-    ResolvedMapping mapping = patientMapping(mappingService.resolve(FhirResourceType.PATIENT));
+    ResolvedMapping mapping = patientMapping(mappingService.resolve(PATIENT));
     ParsedSearch parsed = parameters.parse(Operation.PATIENT_SEARCH, request, mapping);
     TranslatedSearch translated = translator.toTrackedEntityParams(parsed, mapping);
     List<Patient> patients = new ArrayList<>();
@@ -130,7 +126,7 @@ public class FhirPatientService {
     Bundle bundle = FhirEventResourceService.searchset();
     eventResourceService.addEntries(bundle, request, patients, reader::checkpoint);
     eventResourceService.addPagingLinks(
-        bundle, request, FhirResourceType.PATIENT.fhirType(), translated.page(), hasNext);
+        bundle, request, PATIENT.fhirType(), translated.page(), hasNext);
     reader.checkpoint();
     return bundle;
   }
@@ -147,7 +143,7 @@ public class FhirPatientService {
     eventResourceService.addEntries(bundle, request, resources, reader::checkpoint);
     bundle.setTotal(bundle.getEntry().size());
     eventResourceService.addSelfLink(
-        bundle, request, FhirResourceType.PATIENT.fhirType() + PATH_SEPARATOR + id + EVERYTHING);
+        bundle, request, PATIENT.fhirType() + PATH_SEPARATOR + id + EVERYTHING);
     reader.checkpoint();
     return bundle;
   }
@@ -157,11 +153,11 @@ public class FhirPatientService {
         mappings == null
             ? null
             : mappings.stream()
-                .filter(m -> m != null && m.resourceType() == FhirResourceType.PATIENT)
+                .filter(m -> m != null && m.resourceType() == PATIENT)
                 .findFirst()
                 .orElse(null);
     if (mapping == null) {
-      throw FhirApiException.notSupported(NO_USABLE_MAPPING + FhirResourceType.PATIENT.fhirType());
+      throw FhirApiException.notSupported(NO_USABLE_MAPPING + PATIENT.fhirType());
     }
     reader.checkpoint();
     return mapping;

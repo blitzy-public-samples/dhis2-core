@@ -36,24 +36,12 @@ import javax.annotation.*;
 import org.hisp.dhis.event.EventStatus;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.webapi.controller.tracker.view.DataValue;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Event;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Encounter.EncounterStatus;
 import org.springframework.stereotype.Component;
 
-/**
- * Maps one Tracker event of an {@code ENCOUNTER} mapping's program stage to a FHIR R4 {@link
- * Encounter} with {@code id} {@code {enrollmentUid}-{eventUid}}, {@code meta.lastUpdated} from
- * {@code updatedAt}, {@code status} from the event status ({@code null} as {@code unknown}), {@code
- * subject} {@code Patient/{trackedEntityUid}}, {@code period.start} from {@code scheduledAt} for
- * {@code SCHEDULE} and {@code OVERDUE} events and from {@code occurredAt} otherwise, {@code class}
- * from the {@code CONSTANT} {@link FhirTargetField#ENCOUNTER_CLASS} entry, one {@code type} per
- * {@link FhirTargetField#ENCOUNTER_TYPE} entry as its constant coding or as its {@code system} with
- * the first non-blank data element value as {@code code}, trimmed and whitespace-collapsed, and one
- * {@code reasonCode} text per {@link FhirTargetField#ENCOUNTER_REASON} data element value.
- */
+/** Maps a Tracker event to a FHIR R4 {@link Encounter} as its mapping configures. */
 @Component
 public class FhirEncounterMapper {
   private static final String PATIENT_REFERENCE_PREFIX = "Patient/";
@@ -73,16 +61,13 @@ public class FhirEncounterMapper {
     Objects.requireNonNull(event, "event must not be null");
     Objects.requireNonNull(mapping, "mapping must not be null");
     String enrollmentUid =
-        Objects.requireNonNull(enrollment.getEnrollment(), "enrollment UID must not be null")
-            .getValue();
-    String eventUid =
-        Objects.requireNonNull(event.getEvent(), "event UID must not be null").getValue();
+        FhirValueConverter.uid(enrollment.getEnrollment(), "enrollment UID must not be null");
+    String eventUid = FhirValueConverter.uid(event.getEvent(), "event UID must not be null");
     String trackedEntityUid =
-        Objects.requireNonNull(
-                enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null")
-            .getValue();
+        FhirValueConverter.uid(
+            enrollment.getTrackedEntity(), "enrollment tracked entity UID must not be null");
     EventStatus status = event.getStatus();
-    Map<String, String> values = dataValues(event);
+    Map<String, String> values = FhirValueConverter.dataValues(event.getDataValues());
     Encounter encounter = new Encounter();
     encounter.setId(FhirLogicalId.encounter(enrollmentUid, eventUid).compose());
     if (event.getUpdatedAt() != null) {
@@ -140,23 +125,5 @@ public class FhirEncounterMapper {
       return Optional.empty();
     }
     return Optional.ofNullable(values.get(entry.getSource()));
-  }
-
-  private static Map<String, String> dataValues(Event event) {
-    Map<String, String> values = new LinkedHashMap<>();
-    Set<DataValue> dataValues = event.getDataValues();
-    if (dataValues == null) {
-      return values;
-    }
-    for (DataValue dataValue : dataValues) {
-      if (dataValue == null
-          || dataValue.getDataElement() == null
-          || dataValue.getValue() == null
-          || dataValue.getValue().isBlank()) {
-        continue;
-      }
-      values.putIfAbsent(dataValue.getDataElement(), dataValue.getValue());
-    }
-    return values;
   }
 }

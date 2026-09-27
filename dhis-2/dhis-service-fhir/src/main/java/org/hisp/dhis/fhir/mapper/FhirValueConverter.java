@@ -33,9 +33,12 @@ import ca.uhn.fhir.model.api.TemporalPrecisionEnum;
 import java.math.BigDecimal;
 import java.time.*;
 import java.time.format.*;
+import java.time.temporal.*;
 import java.util.*;
 import javax.annotation.*;
+import org.hisp.dhis.common.UID;
 import org.hisp.dhis.common.ValueType;
+import org.hisp.dhis.webapi.controller.tracker.view.DataValue;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.stereotype.Component;
 
@@ -46,15 +49,22 @@ public class FhirValueConverter {
   private static final char DATE_TIME_SEPARATOR = 'T';
   private static final int MIN_YEAR = 1;
   private static final int MAX_YEAR = 9999;
-  private static final int NANOS_PER_MILLI = 1_000_000;
   private static final String TRUE = "true";
   private static final String FALSE = "false";
   private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-  /**
-   * Converts a value to the FHIR datatype of its value type, trimming numeric, boolean and temporal
-   * input and keeping text verbatim; empty for a null type or a null, blank or unparseable value.
-   */
+  private static final DateTimeFormatter DATE_TIME_FORMAT =
+      new DateTimeFormatterBuilder()
+          .parseCaseInsensitive()
+          .appendPattern("uuuu-MM-dd['T'HH[:mm[:ss[")
+          .appendFraction(ChronoField.NANO_OF_SECOND, 1, 9, true)
+          .appendPattern("]]][")
+          .parseLenient()
+          .appendOffset("+HH", "Z")
+          .toFormatter(Locale.ROOT)
+          .withResolverStyle(ResolverStyle.STRICT);
+
+  /** Converts a value to the FHIR datatype of its value type; empty when it cannot convert. */
   @Nonnull
   public Optional<Type> toFhir(
       @CheckForNull ValueType type, @CheckForNull String value, @CheckForNull String unit) {
@@ -70,7 +80,7 @@ public class FhirValueConverter {
           PERCENTAGE,
           UNIT_INTERVAL ->
           quantityValue(value, unit);
-      case BOOLEAN, TRUE_ONLY -> booleanValue(value);
+      case BOOLEAN, TRUE_ONLY -> toBoolean(value).map(BooleanType::new);
       case DATE, AGE -> datePart(value).map(date -> new DateTimeType(date.toString()));
       case DATETIME -> dateTimeValue(value).map(Type.class::cast);
       case TIME -> timeValue(value);
@@ -87,16 +97,47 @@ public class FhirValueConverter {
     return datePart(value).map(date -> new DateType(date.toString()));
   }
 
+  /** Reads {@code true} or {@code false} after trimming, in any letter case; empty otherwise. */
+  @Nonnull
+  public Optional<Boolean> toBoolean(@CheckForNull String value) {
+    return switch (value == null ? "" : value.trim().toLowerCase(Locale.ROOT)) {
+      case TRUE -> Optional.of(true);
+      case FALSE -> Optional.of(false);
+      default -> Optional.empty();
+    };
+  }
+
   /** Converts a timestamp to a FHIR {@code instant} at millisecond precision. */
   @Nonnull
   public InstantType instant(@Nonnull Instant instant) {
     return new InstantType(Date.from(Objects.requireNonNull(instant, "instant")));
   }
 
-  /** Converts a timestamp to a FHIR {@code dateTime} in the system default time zone. */
+  /** Converts a timestamp to a FHIR {@code dateTime} in the system time zone with its fraction. */
   @Nonnull
   public DateTimeType dateTime(@Nonnull Instant instant) {
     return timestamp(Objects.requireNonNull(instant, "instant"));
+  }
+
+  @Nonnull
+  static Map<String, String> dataValues(@CheckForNull Collection<DataValue> dataValues) {
+    Map<String, String> values = new LinkedHashMap<>();
+    if (dataValues != null) {
+      for (DataValue dataValue : dataValues) {
+        if (dataValue != null
+            && dataValue.getDataElement() != null
+            && dataValue.getValue() != null
+            && !dataValue.getValue().isBlank()) {
+          values.putIfAbsent(dataValue.getDataElement(), dataValue.getValue());
+        }
+      }
+    }
+    return values;
+  }
+
+  @Nonnull
+  static String uid(@CheckForNull UID uid, @Nonnull String message) {
+    return Objects.requireNonNull(uid, message).getValue();
   }
 
   private static Optional<Type> quantityValue(String value, @CheckForNull String unit) {
@@ -113,15 +154,6 @@ public class FhirValueConverter {
     return Optional.of(quantity);
   }
 
-  private static Optional<Type> booleanValue(String value) {
-    return switch (value.trim()) {
-      case TRUE -> Optional.of(new BooleanType(true));
-      case FALSE -> Optional.of(new BooleanType(false));
-      default -> Optional.empty();
-    };
-  }
-
-  /** Converts ISO local time text, or text with a one-digit hour such as {@code 8:30}. */
   private static Optional<Type> timeValue(String value) {
     String trimmed = value.trim();
     try {
@@ -135,21 +167,11 @@ public class FhirValueConverter {
 
   private static Optional<LocalDate> datePart(String value) {
     String trimmed = value.trim();
-    if (trimmed.length() == ISO_DATE_LENGTH) {
-      try {
-        LocalDate date = LocalDate.parse(trimmed, DateTimeFormatter.ISO_LOCAL_DATE);
-        return isSupportedYear(date.getYear()) ? Optional.of(date) : Optional.empty();
-      } catch (DateTimeParseException ex) {
-        return Optional.empty();
-      }
-    }
     if (trimmed.length() > ISO_DATE_LENGTH
-        && trimmed.charAt(ISO_DATE_LENGTH) == DATE_TIME_SEPARATOR) {
-      return localDateTime(trimmed)
-          .map(LocalDateTime::toLocalDate)
-          .or(() -> offsetDateTime(trimmed).map(OffsetDateTime::toLocalDate));
+        && trimmed.charAt(ISO_DATE_LENGTH) != DATE_TIME_SEPARATOR) {
+      return Optional.empty();
     }
-    return Optional.empty();
+    return parse(trimmed, DATE_TIME_FORMAT).map(LocalDate::from);
   }
 
   private static Optional<DateTimeType> dateTimeValue(String value) {
@@ -157,36 +179,24 @@ public class FhirValueConverter {
     if (trimmed.length() == ISO_DATE_LENGTH) {
       return datePart(trimmed).map(date -> new DateTimeType(date.toString()));
     }
-    return offsetDateTime(trimmed)
-        .map(OffsetDateTime::toInstant)
-        .or(
-            () ->
-                localDateTime(trimmed)
-                    .map(local -> local.atZone(ZoneId.systemDefault()).toInstant()))
+    DateTimeFormatter format = DATE_TIME_FORMAT.withZone(ZoneId.systemDefault());
+    return parse(trimmed.replace(' ', DATE_TIME_SEPARATOR), format)
+        .map(Instant::from)
         .map(FhirValueConverter::timestamp);
   }
 
   private static DateTimeType timestamp(Instant instant) {
     TemporalPrecisionEnum precision =
-        instant.getNano() >= NANOS_PER_MILLI
-            ? TemporalPrecisionEnum.MILLI
-            : TemporalPrecisionEnum.SECOND;
-    return new DateTimeType(Date.from(instant), precision, TimeZone.getDefault());
+        instant.getNano() == 0 ? TemporalPrecisionEnum.SECOND : TemporalPrecisionEnum.MILLI;
+    DateTimeType dateTime = new DateTimeType(Date.from(instant), precision, TimeZone.getDefault());
+    dateTime.setNanos(instant.getNano());
+    return dateTime;
   }
 
-  private static Optional<OffsetDateTime> offsetDateTime(String value) {
+  private static Optional<TemporalAccessor> parse(String value, DateTimeFormatter format) {
     try {
-      OffsetDateTime dateTime = OffsetDateTime.parse(value, DateTimeFormatter.ISO_OFFSET_DATE_TIME);
-      return isSupportedYear(dateTime.getYear()) ? Optional.of(dateTime) : Optional.empty();
-    } catch (DateTimeParseException ex) {
-      return Optional.empty();
-    }
-  }
-
-  private static Optional<LocalDateTime> localDateTime(String value) {
-    try {
-      LocalDateTime dateTime = LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-      return isSupportedYear(dateTime.getYear()) ? Optional.of(dateTime) : Optional.empty();
+      TemporalAccessor parsed = format.parse(value);
+      return isSupportedYear(parsed.get(ChronoField.YEAR)) ? Optional.of(parsed) : Optional.empty();
     } catch (DateTimeParseException ex) {
       return Optional.empty();
     }

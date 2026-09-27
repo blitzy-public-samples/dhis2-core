@@ -32,29 +32,16 @@ package org.hisp.dhis.fhir.mapper;
 import java.time.Instant;
 import java.util.*;
 import javax.annotation.*;
-import org.hisp.dhis.common.UID;
 import org.hisp.dhis.common.ValueType;
 import org.hisp.dhis.event.EventStatus;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.webapi.controller.tracker.view.DataValue;
-import org.hisp.dhis.webapi.controller.tracker.view.Enrollment;
-import org.hisp.dhis.webapi.controller.tracker.view.Event;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Observation.ObservationStatus;
 import org.springframework.stereotype.Component;
 
-/**
- * Maps one Tracker event to FHIR R4 {@link Observation}s, one per {@link
- * FhirTargetField#OBSERVATION_VALUE} entry, in entry order, whose data element has a non-blank
- * value on the event, each with {@code id} {@code {enrollmentUid}-{eventUid}-{dataElementUid}},
- * {@code meta.lastUpdated} from {@code updatedAt}, {@code status} from the event status ({@code
- * null} as {@code unknown}), {@code code} as the entry's coding, {@code subject} {@code
- * Patient/{trackedEntityUid}}, {@code encounter} {@code Encounter/{enrollmentUid}-{eventUid}} when
- * an {@code ENCOUNTER} mapping exists, {@code effectiveDateTime} from {@code occurredAt}, and
- * {@code value[x]} converted by {@link FhirValueConverter#toFhir} from the first of repeated data
- * values with the entry's {@code unit}, omitted when not convertible.
- */
+/** Maps a Tracker event to one FHIR R4 {@link Observation} per non-blank mapped data value. */
 @Component
 public class FhirObservationMapper {
   private static final String PATIENT_REFERENCE_PREFIX = "Patient/";
@@ -165,9 +152,12 @@ public class FhirObservationMapper {
     @Nonnull
     static EventSource of(
         @Nonnull Enrollment enrollment, @Nonnull Event event, boolean encounterMapped) {
-      String enrollmentUid = uid(enrollment.getEnrollment(), "enrollment");
-      String eventUid = uid(event.getEvent(), "event");
-      String trackedEntityUid = uid(enrollment.getTrackedEntity(), "trackedEntity");
+      String enrollmentUid =
+          FhirValueConverter.uid(enrollment.getEnrollment(), "enrollment UID must not be null");
+      String eventUid = FhirValueConverter.uid(event.getEvent(), "event UID must not be null");
+      String trackedEntityUid =
+          FhirValueConverter.uid(
+              enrollment.getTrackedEntity(), "trackedEntity UID must not be null");
       return new EventSource(
           enrollmentUid,
           eventUid,
@@ -176,11 +166,6 @@ public class FhirObservationMapper {
           event.getUpdatedAt(),
           event.getOccurredAt(),
           encounterMapped ? FhirLogicalId.encounter(enrollmentUid, eventUid).compose() : null);
-    }
-
-    @Nonnull
-    private static String uid(@CheckForNull UID uid, @Nonnull String name) {
-      return Objects.requireNonNull(uid, () -> name + " UID must not be null").getValue();
     }
   }
 }

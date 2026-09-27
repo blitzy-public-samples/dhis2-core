@@ -38,6 +38,8 @@ import static org.springframework.transaction.support.TransactionSynchronization
 
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.servlet.Filter;
+import java.io.*;
+import java.net.*;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
@@ -53,6 +55,7 @@ import org.hisp.dhis.tracker.export.timeout.TrackerExportTimeout;
 import org.hisp.dhis.webapi.filter.*;
 import org.hl7.fhir.r4.model.Bundle;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.function.ThrowingConsumer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
@@ -63,10 +66,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-/** Tests FHIR requests with and without the open-EntityManager-in-view filter on a small pool. */
+/**
+ * Tests FHIR requests with and without the open-EntityManager-in-view filter on a small pool whose
+ * connections pass through a {@link FreezableProxy} to the database.
+ */
 @ContextConfiguration(classes = FhirRequestLifecycleTest.SmallPoolConfig.class)
 class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   private static final int POOL_SIZE = 10;
+  private static final String JDBC = "jdbc:";
   private static final String PATIENT_READ = "/api/fhir/Patient/" + FRANK;
   private static final String EVERYTHING = PATIENT_READ + "/$everything";
   private static final String OBSERVATION_SEARCH = "/api/fhir/Observation?patient=" + FRANK;
@@ -79,20 +86,113 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   @Autowired private RequestIdFilter requestIdFilter;
   @Autowired private ApiVersionFilter apiVersionFilter;
   @Autowired private DhisConfigurationProvider config;
+  @Autowired private FreezableProxy databaseProxy;
   private ConditionalOpenEntityManagerInViewFilter openInViewFilter;
   private MockMvc withFilter;
   private MockMvc withoutFilter;
 
   public static class SmallPoolConfig {
     @Bean
-    public DhisConfigurationProvider dhisConfigurationProvider() {
+    public FreezableProxy databaseProxy() throws IOException {
+      return new FreezableProxy(databaseUri(new PostgresDhisConfigurationProvider(null)));
+    }
+
+    @Bean
+    public DhisConfigurationProvider dhisConfigurationProvider(FreezableProxy databaseProxy) {
+      PostgresDhisConfigurationProvider provider = new PostgresDhisConfigurationProvider(null);
+      String url = provider.getProperty(ConfigurationKey.CONNECTION_URL);
+      String proxied = "//127.0.0.1:" + databaseProxy.port() + "/";
       Properties override = new Properties();
       override.put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
       override.put(ConfigurationKey.CONNECTION_POOL_MAX_SIZE.getKey(), String.valueOf(POOL_SIZE));
       override.put(ConfigurationKey.CONNECTION_POOL_TIMEOUT.getKey(), "20000");
-      PostgresDhisConfigurationProvider provider = new PostgresDhisConfigurationProvider(null);
+      override.put(
+          ConfigurationKey.CONNECTION_URL.getKey(),
+          url.replace("//" + databaseUri(provider).getRawAuthority() + "/", proxied));
       provider.addProperties(override);
       return provider;
+    }
+
+    private static URI databaseUri(DhisConfigurationProvider provider) {
+      String url = provider.getProperty(ConfigurationKey.CONNECTION_URL);
+      return URI.create(url.substring(JDBC.length()));
+    }
+  }
+
+  /**
+   * Forwards every accepted TCP connection to one upstream address on daemon threads. While frozen
+   * it still accepts and connects new sockets but forwards no byte in either direction.
+   */
+  static final class FreezableProxy implements AutoCloseable {
+    private final ServerSocket server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+    private final ExecutorService threads = Executors.newCachedThreadPool(FreezableProxy::daemon);
+    private final URI upstream;
+    private boolean frozen;
+
+    FreezableProxy(URI upstream) throws IOException {
+      this.upstream = upstream;
+      threads.submit(this::accept);
+    }
+
+    int port() {
+      return server.getLocalPort();
+    }
+
+    synchronized void setFrozen(boolean frozen) {
+      this.frozen = frozen;
+      notifyAll();
+    }
+
+    @Override
+    public void close() throws IOException {
+      threads.shutdownNow();
+      server.close();
+    }
+
+    private Void accept() throws IOException {
+      while (!server.isClosed()) {
+        Socket client = server.accept();
+        threads.submit(() -> connect(client));
+      }
+      return null;
+    }
+
+    private Void connect(Socket client) throws IOException {
+      Socket target;
+      try {
+        target = new Socket(upstream.getHost(), upstream.getPort());
+      } catch (IOException e) {
+        client.close();
+        throw e;
+      }
+      threads.submit(() -> pump(client, target));
+      threads.submit(() -> pump(target, client));
+      return null;
+    }
+
+    private Void pump(Socket from, Socket to) throws IOException, InterruptedException {
+      try (from;
+          to) {
+        InputStream in = from.getInputStream();
+        OutputStream out = to.getOutputStream();
+        byte[] buffer = new byte[8192];
+        for (int read = in.read(buffer); read >= 0; read = in.read(buffer)) {
+          awaitThaw();
+          out.write(buffer, 0, read);
+          out.flush();
+        }
+      }
+      return null;
+    }
+
+    private synchronized void awaitThaw() throws InterruptedException {
+      while (frozen) wait();
+    }
+
+    private static Thread daemon(Runnable runnable) {
+      Thread thread = new Thread(runnable, "fhir-database-proxy");
+      thread.setDaemon(true);
+      return thread;
     }
   }
 
@@ -149,6 +249,38 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
         assertConnectionsReturnTo(baseline, path);
       }
     }
+    List<String> paths = new ArrayList<>(FHIR_REQUESTS);
+    paths.addAll(FHIR_REQUESTS);
+    int baseline = activeConnections();
+    assertEquals(POOL_SIZE, hikari("getMaximumPoolSize"));
+    List<Connection> held = new ArrayList<>();
+    ExecutorService executor = Executors.newFixedThreadPool(paths.size());
+    try {
+      await().atMost(Duration.ofSeconds(10)).until(() -> holdAllButOne(held));
+      CountDownLatch ready = new CountDownLatch(paths.size());
+      CountDownLatch release = new CountDownLatch(1);
+      List<Future<HttpResponse>> responses = new ArrayList<>();
+      for (String path : paths)
+        responses.add(
+            submit(
+                executor,
+                () -> {
+                  ready.countDown();
+                  assertTrue(release.await(30, TimeUnit.SECONDS), "requests released");
+                  return perform(withFilter, path);
+                }));
+      assertTrue(ready.await(30, TimeUnit.SECONDS), "every request thread is ready");
+      release.countDown();
+      for (int i = 0; i < paths.size(); i++) {
+        HttpResponse response = responses.get(i).get(2, TimeUnit.MINUTES);
+        assertTrue(fhirBody(response, HttpStatus.OK).contains(FRANK), paths.get(i));
+      }
+    } finally {
+      executor.shutdownNow();
+      for (Connection connection : held) connection.close();
+      assertTrue(executor.awaitTermination(1, TimeUnit.MINUTES), "request threads end");
+    }
+    assertConnectionsReturnTo(baseline, "concurrent requests");
   }
 
   @Test
@@ -179,67 +311,75 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
-  void concurrentRequestsBeyondFreeConnectionsAllSucceedBehindOpenEntityManagerInView()
-      throws Exception {
-    List<String> paths = new ArrayList<>(FHIR_REQUESTS);
-    paths.addAll(FHIR_REQUESTS);
+  void unresponsiveDatabaseAnswersPlatformTimeoutInBoundedTime() throws Throwable {
     int baseline = activeConnections();
-    assertEquals(POOL_SIZE, hikari("getMaximumPoolSize"));
-    List<Connection> held = new ArrayList<>();
-    ExecutorService executor = Executors.newFixedThreadPool(paths.size());
+    ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
-      await().atMost(Duration.ofSeconds(10)).until(() -> holdAllButOne(held));
-      SecurityContext context = SecurityContextHolder.getContext();
-      CountDownLatch ready = new CountDownLatch(paths.size());
-      CountDownLatch release = new CountDownLatch(1);
-      List<Future<HttpResponse>> responses = new ArrayList<>();
-      for (String path : paths)
-        responses.add(
-            executor.submit(
-                () -> {
-                  SecurityContextHolder.setContext(context);
-                  try {
-                    ready.countDown();
-                    assertTrue(release.await(30, TimeUnit.SECONDS), "requests released");
-                    return perform(withFilter, path);
-                  } finally {
-                    SecurityContextHolder.clearContext();
-                  }
-                }));
-      assertTrue(ready.await(30, TimeUnit.SECONDS), "every request thread is ready");
-      release.countDown();
-      for (int i = 0; i < paths.size(); i++) {
-        HttpResponse response = responses.get(i).get(2, TimeUnit.MINUTES);
-        assertTrue(fhirBody(response, HttpStatus.OK).contains(FRANK), paths.get(i));
-      }
+      doAnswer(i -> Deadline.in(Duration.ofSeconds(1))).when(trackerExportTimeout).newDeadline();
+      withMappingTableLocked(
+          statement -> {
+            for (String path : List.of(PATIENT_READ, OBSERVATION_SEARCH, EVERYTHING)) {
+              JsonWebMessage message = platformTimeout(perform(withFilter, path), path);
+              assertEquals("Request exceeded its time budget of 1s", message.getMessage(), path);
+            }
+          });
+      assertConnectionsReturnTo(baseline, "mapping resolution timed out");
+      doAnswer(i -> Deadline.in(Duration.ofSeconds(2))).when(trackerExportTimeout).newDeadline();
+      withMappingTableLocked(
+          statement -> {
+            var response = submit(executor, () -> perform(withFilter, PATIENT_READ));
+            await().atMost(Duration.ofSeconds(10)).until(() -> waitsOnMappingLock(statement));
+            databaseProxy.setFrozen(true);
+            try {
+              JsonWebMessage message =
+                  platformTimeout(response.get(20, TimeUnit.SECONDS), "unresponsive database");
+              assertEquals("Request exceeded its time budget of 2s", message.getMessage());
+            } finally {
+              databaseProxy.setFrozen(false);
+            }
+          });
     } finally {
-      executor.shutdownNow();
-      for (Connection connection : held) connection.close();
-      assertTrue(executor.awaitTermination(1, TimeUnit.MINUTES), "request threads end");
+      reset(trackerExportTimeout);
+      executor.shutdown();
     }
-    assertConnectionsReturnTo(baseline, "concurrent requests");
+    assertTrue(executor.awaitTermination(1, TimeUnit.MINUTES), "request thread ends");
+    assertConnectionsReturnTo(baseline, "unresponsive database");
+    assertTrue(fhirBody(perform(withFilter, PATIENT_READ), HttpStatus.OK).contains(FRANK));
   }
 
-  @Test
-  void queryTimeoutDuringMappingResolutionAnswersPlatformTimeout() throws Exception {
-    doAnswer(i -> Deadline.in(Duration.ofSeconds(1))).when(trackerExportTimeout).newDeadline();
-    int baseline = activeConnections();
+  private void withMappingTableLocked(ThrowingConsumer<Statement> test) throws Throwable {
     try (Connection lock = dataSource().getConnection()) {
       lock.setAutoCommit(false);
       try (Statement statement = lock.createStatement()) {
         statement.execute("set local lock_timeout = '10s'");
         statement.execute("lock table fhirresourcemapping in access exclusive mode");
-        for (String path : List.of(PATIENT_READ, OBSERVATION_SEARCH, EVERYTHING)) {
-          JsonWebMessage message = platformTimeout(perform(withFilter, path), path);
-          assertEquals("Request exceeded its time budget of 1s", message.getMessage(), path);
-        }
+        test.accept(statement);
       } finally {
         lock.rollback();
       }
-    } finally {
-      reset(trackerExportTimeout);
     }
-    assertConnectionsReturnTo(baseline, "mapping resolution timed out");
+  }
+
+  private Future<HttpResponse> submit(ExecutorService executor, Callable<HttpResponse> call) {
+    SecurityContext context = SecurityContextHolder.getContext();
+    return executor.submit(
+        () -> {
+          SecurityContextHolder.setContext(context);
+          try {
+            return call.call();
+          } finally {
+            SecurityContextHolder.clearContext();
+          }
+        });
+  }
+
+  private static boolean waitsOnMappingLock(Statement statement) throws SQLException {
+    String waiting =
+        "select count(*) from pg_locks"
+            + " where relation = 'fhirresourcemapping'::regclass and not granted";
+    try (ResultSet rows = statement.executeQuery(waiting)) {
+      return rows.next() && rows.getInt(1) > 0;
+    }
   }
 
   private static JsonWebMessage platformTimeout(HttpResponse response, String path) {

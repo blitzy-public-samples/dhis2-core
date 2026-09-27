@@ -34,24 +34,13 @@ import javax.annotation.*;
 import org.hisp.dhis.common.UID;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
-import org.hisp.dhis.webapi.controller.tracker.view.Attribute;
-import org.hisp.dhis.webapi.controller.tracker.view.TrackedEntity;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.ContactPoint.ContactPointSystem;
 import org.hl7.fhir.r4.model.Enumerations.AdministrativeGender;
 import org.springframework.stereotype.Component;
 
-/**
- * Maps a Tracker {@link TrackedEntity} to a FHIR R4 {@link Patient} with {@code id} and {@code
- * meta.lastUpdated} from its UID and {@code updatedAt}, and elements from the first non-blank value
- * of each attribute a {@link FhirSourceType#ATTRIBUTE} entry names: one {@code identifier} with the
- * entry's {@code system} per {@code PATIENT_IDENTIFIER} entry, {@code name[0]} family and given,
- * {@code gender} as the {@code valueMap} translation of the key equal to the value, else of the
- * first key that {@link FhirResourceMappingValidator#genderKeyMatches} it, when that is {@code
- * male}, {@code female}, {@code other} or {@code unknown}, {@code birthDate} converted by {@link
- * FhirValueConverter#toDate}, one {@code phone} then one {@code email} {@code telecom} per entry,
- * and {@code address[0].text}, omitting an element whose value is missing or unconvertible.
- */
+/** Maps a Tracker {@link TrackedEntity} to a FHIR R4 {@link Patient} as its mapping configures. */
 @Component
 public class FhirPatientMapper {
   private static final Set<String> ADMINISTRATIVE_GENDER_CODES =
@@ -185,13 +174,11 @@ public class FhirPatientMapper {
       return values;
     }
     for (Attribute attribute : attributes) {
-      if (attribute == null) {
-        continue;
-      }
-      String uid = attribute.getAttribute();
-      String value = attribute.getValue();
-      if (uid != null && value != null && !value.isBlank()) {
-        values.putIfAbsent(uid, value);
+      if (attribute != null
+          && attribute.getAttribute() != null
+          && attribute.getValue() != null
+          && !attribute.getValue().isBlank()) {
+        values.putIfAbsent(attribute.getAttribute(), attribute.getValue());
       }
     }
     return values;

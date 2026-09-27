@@ -33,6 +33,7 @@ import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenA
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
@@ -45,15 +46,10 @@ import org.springframework.web.bind.annotation.*;
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir/Encounter")
+@RequiredArgsConstructor
 public class FhirEncounterController {
   private final FhirEventResourceService eventResourceService;
   private final FhirResourceSerializer serializer;
-
-  public FhirEncounterController(
-      FhirEventResourceService eventResourceService, FhirResourceSerializer serializer) {
-    this.eventResourceService = eventResourceService;
-    this.serializer = serializer;
-  }
 
   @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)

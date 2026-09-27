@@ -105,7 +105,6 @@ class FhirResourceMappingServiceTest {
     verify(service).logIgnored(List.of("forged\\u000D\\u000AWARN line"), List.of(ErrorCode.E4000));
     assertNull(escapeControlCharacters(null));
     assertEquals("\\u0085\\u2029", escapeControlCharacters("\u0085\u2029"));
-    assertEquals("\\u000A", escapeControlCharacters("\n"));
     assertEquals("\\\\u000A", escapeControlCharacters("\\u000A"));
   }
 
@@ -127,11 +126,7 @@ class FhirResourceMappingServiceTest {
     service.init();
     ArgumentCaptor<SchemaDescriptor> descriptor = ArgumentCaptor.forClass(SchemaDescriptor.class);
     verify(schemaService).register(descriptor.capture());
-    assertInstanceOf(FhirResourceMappingSchemaDescriptor.class, descriptor.getValue());
-    Schema schema = descriptor.getValue().getSchema();
-    assertEquals(FhirResourceMapping.class, schema.getKlass());
-    assertEquals("fhirResourceMapping", schema.getSingular());
-    assertEquals("fhirResourceMappings", schema.getPlural());
+    assertEquals("fhirResourceMapping", descriptor.getValue().getSchema().getSingular());
     verifyNoInteractions(store, validator, manager);
     FhirResourceMapping invalid = observation(uid(), stageA);
     rejects(invalid);

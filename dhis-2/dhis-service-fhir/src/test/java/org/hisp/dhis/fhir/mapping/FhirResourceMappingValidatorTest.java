@@ -122,8 +122,8 @@ class FhirResourceMappingValidatorTest {
     "OBSERVATION_VALUE, programStage"
   })
   void entryWithoutPropertyIsMissingRequiredProperty(FhirTargetField target, String property) {
-    String blank = property.equals("system") ? " " : null;
-    assertOnly(validate(withValue(target, property, blank)), E4000, property);
+    var mapping = withValue(target, property, property.equals("system") ? " " : null);
+    assertOnly(validate(mapping), E4000, at(mapping, target, property));
   }
 
   @ParameterizedTest
@@ -154,10 +154,11 @@ class FhirResourceMappingValidatorTest {
     for (IdentifiableObject source : List.of(strayTea, programTea, strayDe)) {
       FhirTargetField target = source == strayDe ? ENCOUNTER_TYPE : PATIENT_FAMILY_NAME;
       FhirResourceMapping m = withEntries(target, entry(target, source));
-      assertOnly(validate(m), E5002, source.getUID().getValue(), m.getUid(), target.name());
+      assertOnly(
+          validate(m), E5002, source.getUID().getValue(), describe(m), at(m, target, "source"));
     }
     mapping = withValue(PATIENT_FAMILY_NAME, "source", "not-a-uid");
-    assertOnly(validate(mapping), E4014, "not-a-uid", "source");
+    assertOnly(validate(mapping), E4014, "not-a-uid", at(mapping, PATIENT_FAMILY_NAME, "source"));
   }
 
   @ParameterizedTest
@@ -170,9 +171,11 @@ class FhirResourceMappingValidatorTest {
       String k1, String v1, String k2, String v2, ErrorCode code, String arg) {
     FhirResourceMapping mapping = validMapping(PATIENT);
     entryOf(mapping, PATIENT_GENDER).setValueMap(new TreeMap<>(Map.of(k1, v1, k2, v2)));
-    String id = mapping.getUid();
+    String row = at(mapping, PATIENT_GENDER, "");
     String[] args =
-        code == E5003 ? new String[] {"valueMap", arg, id, id} : new String[] {arg, "valueMap"};
+        code == E5003
+            ? new String[] {"valueMap", arg, row, row + " key `" + k1 + "`"}
+            : new String[] {arg, row + ".valueMap"};
     assertOnly(validate(mapping), code, args);
   }
 
@@ -216,7 +219,7 @@ class FhirResourceMappingValidatorTest {
       default -> mapping.setProgramStage(type == PATIENT ? stage : otherStage);
     }
     var ref = property.equals("programStage") ? mapping.getProgramStage() : mapping.getProgram();
-    assertOnly(validate(mapping), E5002, ref.getUID().getValue(), mapping.getUid(), property);
+    assertOnly(validate(mapping), E5002, ref.getUID().getValue(), describe(mapping), property);
   }
 
   @ParameterizedTest
@@ -227,8 +230,10 @@ class FhirResourceMappingValidatorTest {
     sameUid.setUid(mapping.getUid());
     FhirResourceMapping other = validMapping(type);
     List<ErrorReport> reports = validate(mapping, mapping, sameUid, other);
-    String key = uniquenessKey(mapping);
-    assertOnly(reports, E5003, "resourceType", key, mapping.getUid(), OTHER_MAPPING);
+    String administered = type == IMMUNIZATION ? ", " + IMMUNIZATION_ADMINISTERED : "";
+    String property = type == PATIENT ? "resourceType" : "programStage" + administered;
+    String value = uniquenessKey(mapping).replaceFirst("^[A-Z]+:", "").replace(":", ", ");
+    assertOnly(reports, E5003, property, value, describe(mapping), OTHER_MAPPING);
     String message = reports.get(0).getMessage();
     assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
   }
@@ -246,9 +251,9 @@ class FhirResourceMappingValidatorTest {
     assertEquals(List.of(), validate(mapping));
     Entry repeat = sourceOf(target, type, valueType).system(SYSTEM + 2).code("2");
     mapping.getFieldMappings().add(repeat.build());
-    String id = mapping.getUid();
+    int last = mapping.getFieldMappings().size() - 1;
     if (cardinality == Cardinality.ONE) {
-      assertOnly(validate(mapping), E5003, "target", target.name(), id, id);
+      assertOnly(validate(mapping), E5003, "target", target.name(), row(last), row(last - 1));
     } else {
       assertEquals(List.of(), validate(mapping));
     }
@@ -258,16 +263,14 @@ class FhirResourceMappingValidatorTest {
   void duplicateSystemSourceAndDataElementAreDuplicateButFoldedGenderKeysAreNot() {
     FhirResourceMapping mapping =
         withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
-    String id = mapping.getUid();
-    assertOnly(validate(mapping), E5003, "system", SYSTEM, id, id);
+    int last = mapping.getFieldMappings().size() - 1;
+    assertOnly(validate(mapping), E5003, "system", SYSTEM, row(last), row(0));
     mapping = validMapping(PATIENT);
     entryOf(mapping, PATIENT_GIVEN_NAME).setSource(textTea.getUid());
-    id = mapping.getUid();
-    assertOnly(validate(mapping), E5003, "source", textTea.getUid(), id, id);
+    assertOnly(validate(mapping), E5003, "source", textTea.getUid(), row(2), row(1));
     mapping = validMapping(OBSERVATION);
     mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_WEIGHT_CODE, null).build());
-    id = mapping.getUid();
-    assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), id, id);
+    assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), row(2), row(0));
     var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
     assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
     assertEquals("PATIENT", uniquenessKey(validMapping(PATIENT)));
@@ -308,11 +311,11 @@ class FhirResourceMappingValidatorTest {
   @CsvSource("PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1, true")
   void codeOrSystemFollowsR4CodeAndUriRules(
       FhirTargetField target, String property, String value, boolean valid) {
-    List<ErrorReport> reports = validate(withValue(target, property, value));
+    FhirResourceMapping mapping = withValue(target, property, value);
     if (valid) {
-      assertEquals(List.of(), reports);
+      assertEquals(List.of(), validate(mapping));
     } else {
-      assertOnly(reports, E4027, value, property);
+      assertOnly(validate(mapping), E4027, value, at(mapping, target, property));
     }
   }
 
@@ -325,9 +328,10 @@ class FhirResourceMappingValidatorTest {
     for (String property : properties.split(" ")) {
       assertEquals(List.of(), validate(sized(bound, property, 0)), property);
       FhirResourceMapping mapping = sized(bound, property, 1);
-      assertOnly(validate(mapping), E4027, value, property);
-      assertOnly(validator.validateStructure(mapping), E4027, value, property);
-      assertOnly(validator.validate(mapping, List.of()), E4027, value, property);
+      String path = property.equals("fieldMappings") ? property : row(0) + "." + property;
+      assertOnly(validate(mapping), E4027, value, path);
+      assertOnly(validator.validateStructure(mapping), E4027, value, path);
+      assertOnly(validator.validate(mapping, List.of()), E4027, value, path);
     }
     verifyNoInteractions(manager);
   }
@@ -340,7 +344,7 @@ class FhirResourceMappingValidatorTest {
     mapping.setProgramStage(otherStage);
     assertEquals(List.of(), validator.validateStructure(mapping));
     entryOf(mapping, ENCOUNTER_TYPE).setTarget(null);
-    assertOnly(validator.validateStructure(mapping), E4000, "target");
+    assertOnly(validator.validateStructure(mapping), E4000, at(mapping, null, "target"));
     verifyNoInteractions(manager);
     var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
     when(manager.getNoAcl(any(), anyString()))
@@ -450,6 +454,16 @@ class FhirResourceMappingValidatorTest {
       }
     }
     return mapping;
+  }
+
+  /** Returns a mapping property as is, else the path of the null entry or of the target's entry. */
+  private static String at(FhirResourceMapping mapping, FhirTargetField target, String property) {
+    if (property.matches("resourceType|trackedEntityType|program|programStage")) return property;
+    List<FhirFieldMapping> entries = mapping.getFieldMappings();
+    if (property.equals("fieldMappings")) return row(entries.lastIndexOf(null));
+    FhirTargetField wanted = property.equals("target") ? null : target;
+    var entry = entries.stream().filter(e -> e != null && e.getTarget() == wanted).findFirst();
+    return row(entries.indexOf(entry.orElseThrow())) + (property.isEmpty() ? "" : "." + property);
   }
 
   private static FhirFieldMapping entryOf(FhirResourceMapping mapping, FhirTargetField target) {

@@ -29,23 +29,18 @@
  */
 package org.hisp.dhis.fhir.web;
 
+import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * Answers unmapped FHIR GET, HEAD, POST, PUT, PATCH and DELETE requests: 501 for R4 resource types
- * and write methods, else 404.
- */
+/** Answers unmapped FHIR requests: 501 for R4 resource types and write methods, else 404. */
 @OpenApi.Ignore
 @RestController
+@RequiredArgsConstructor
 public class FhirFallbackController {
   private final FhirResourceSerializer serializer;
-
-  public FhirFallbackController(FhirResourceSerializer serializer) {
-    this.serializer = serializer;
-  }
 
   /** Rejects a type-level GET: {@code 501} for an R4 resource type, otherwise {@code 404}. */
   @GetMapping("/api/fhir/{type}")
@@ -60,7 +55,7 @@ public class FhirFallbackController {
   }
 
   /** Rejects every other GET under {@code /api/fhir} with {@code 404 not-found}. */
-  @GetMapping({"/api/fhir", "/api/fhir/**"})
+  @GetMapping({"/api/fhir", "/api/fhir/**", "/api/fhir/openapi.html", "/api/fhir/openapi.yaml"})
   public ResponseEntity<String> unknownPath() {
     throw FhirApiException.notFound();
   }

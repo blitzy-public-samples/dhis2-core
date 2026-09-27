@@ -69,12 +69,14 @@ class FhirValueConverterTest {
     }
     Quantity number = assertInstanceOf(Quantity.class, convert(NUMBER, " 42 ", null));
     assertEquals(0, new BigDecimal("42").compareTo(number.getValue()));
-    for (ValueType type : BOOLEANS) {
-      var value = assertInstanceOf(BooleanType.class, convert(type, "true", null), type.name());
-      assertTrue(value.booleanValue(), type.name());
+    for (String value : "true, true ,TRUE,True,tRuE,false,FALSE,False, FALSE ".split(",")) {
+      boolean expected = Boolean.parseBoolean(value.trim());
+      assertEquals(Optional.of(expected), converter.toBoolean(value), value);
+      for (ValueType type : BOOLEANS) {
+        var bool = assertInstanceOf(BooleanType.class, convert(type, value, null), value);
+        assertEquals(expected, bool.getValue(), type + " " + value);
+      }
     }
-    assertFalse(assertInstanceOf(BooleanType.class, convert(BOOLEAN, "false", null)).getValue());
-    assertTrue(assertInstanceOf(BooleanType.class, convert(BOOLEAN, " true ", null)).getValue());
     var texts = EnumSet.of(TEXT, LONG_TEXT, MULTI_TEXT, LETTER, PHONE_NUMBER, EMAIL, USERNAME, URL);
     texts.addAll(List.of(COORDINATE, ORGANISATION_UNIT, REFERENCE, FILE_RESOURCE, IMAGE, GEOJSON));
     Set<ValueType> others = EnumSet.complementOf(EnumSet.of(DATE, DATETIME, AGE, TIME));
@@ -95,46 +97,37 @@ class FhirValueConverterTest {
         NUMBER=abc; INTEGER=abc; DATE=2020-13-45; DATE=0000-01-01; DATE=2024-03-01 10:15;
         AGE=2020-13-45; DATE=2024-03-01T25:00:00; AGE=2024-03-01T25:00:00; DATE=2024-03-01Tgarbage;
         AGE=2024-03-01Tgarbage; DATETIME=2024-03-01T25:00:00; DATETIME=0000-03-01T10:15:30Z;
-        DATETIME=not a date; TIME=25:99; BOOLEAN=yes; BOOLEAN=TRUE; TRUE_ONLY=1\
+        DATETIME=not a date; TIME=25:99; BOOLEAN=yes; TRUE_ONLY=1; DATETIME=2024-06-01T10:30:00+020;
+        DATETIME=2024-06-01T10:30:00+02:0; DATETIME=2024-06-01T24:00; DATETIME=2024-02-30T10:00;
+        DATETIME=2024-06-01T10:30:00.; AGE=0000-01-01; BOOLEAN=0; BOOLEAN=T\
         """;
-    var rows = Stream.of(rejected.split(";\\s*")).map(row -> row.split("=", 2));
-    rows.forEach(row -> assertNotConverted(ValueType.valueOf(row[0]), row[1]));
+    rows(rejected).forEach(row -> assertNotConverted(ValueType.valueOf(row[0]), row[1]));
   }
 
   @Test
   void dateTypesBecomeDateTime() {
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, " 2024-03-01 ", null));
-    assertDayPrecisionDateTime("2024-03-01", convert(DATE, "2024-03-01", null));
     assertDayPrecisionDateTime("2019-05-17", convert(AGE, "2019-05-17", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, "2024-03-01T10:15:30.000", null));
     assertDayPrecisionDateTime("2024-03-01", convert(AGE, "2024-03-01T23:30:00-05:00", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATETIME, "2024-03-01", null));
-    var local = LocalDateTime.of(2024, 3, 1, 10, 15, 30).atZone(ZoneId.systemDefault()).toInstant();
-    Map.of(
-            "2024-03-01T10:15:30Z", Instant.parse("2024-03-01T10:15:30Z"),
-            "2024-03-01T10:15:30.123Z", Instant.parse("2024-03-01T10:15:30.123Z"),
-            "2024-03-01T10:15:30+02:00", Instant.parse("2024-03-01T08:15:30Z"),
-            "2024-03-01T10:15:30", local)
-        .forEach(
-            (value, instant) -> {
-              var dateTime = assertInstanceOf(DateTimeType.class, convert(DATETIME, value, null));
-              assertEquals(instant, dateTime.getValue().toInstant(), value);
-              assertEquals(value.contains(".") ? MILLI : SECOND, dateTime.getPrecision(), value);
-              assertEquals(TimeZone.getDefault().getID(), dateTime.getTimeZone().getID(), value);
-            });
-    assertDate("1985-04-12", converter.toDate(DATE, "1985-04-12"));
-    assertDate("2019-05-17", converter.toDate(AGE, "2019-05-17"));
+    String accepted =
+        """
+        2024-03-01T10:15:30Z=2024-03-01T10:15:30Z; 2024-03-01T10:15:30+02:00=2024-03-01T08:15:30Z;
+        2024-03-01T10:15:30.123Z=2024-03-01T10:15:30.123Z; 2024-03-01T10:15:30=2024-03-01T10:15:30;
+        2024-06-01T10:30:00.000+0200=2024-06-01T08:30:00Z; 2024-06-01T10+0200=2024-06-01T08:00:00Z;
+        2024-06-01T10:30:00+02=2024-06-01T08:30:00Z; 2024-06-01T10:30+0200=2024-06-01T08:30:00Z;
+        2024-06-01T10:30:00.000456Z=2024-06-01T10:30:00.000456Z; 2024-06-01T10=2024-06-01T10:00:00;
+        2024-06-01 10:30:00+0200=2024-06-01T08:30:00Z; 2024-06-01t10:30:00z=2024-06-01T10:30:00Z;
+        2024-06-01T10:30:00.123456=2024-06-01T10:30:00.123456;
+        2024-06-01T10:30:00.123456789-05:30=2024-06-01T16:00:00.123456789Z\
+        """;
+    rows(accepted).forEach(row -> assertDateTime(row[1], convert(DATETIME, row[0], null), row[0]));
     assertDate("1985-04-12", converter.toDate(DATE, "1985-04-12T00:00:00.000"));
     assertDate("1985-04-12", converter.toDate(DATE, "1985-04-12T00:00:00+02:00"));
     assertDate("1985-04-12", converter.toDate(AGE, "1985-04-12T23:30:00Z"));
     EnumSet.complementOf(EnumSet.of(DATE, AGE))
         .forEach(type -> assertTrue(converter.toDate(type, "1985-04-12").isEmpty(), type.name()));
-    for (String invalid :
-        Arrays.asList(
-            "2024-03-01T25:00:00", "2024-03-01Tgarbage", "2020-13-45", "0000-01-01", null, "   ")) {
-      assertTrue(converter.toDate(DATE, invalid).isEmpty(), invalid);
-      assertTrue(converter.toDate(AGE, invalid).isEmpty(), invalid);
-    }
     assertTrue(converter.toDate(null, "1985-04-12").isEmpty());
     Instant timestamp = Instant.parse("2024-03-01T10:15:30Z");
     Instant fractional = Instant.parse("2024-03-01T10:15:30.123Z");
@@ -143,12 +136,11 @@ class FhirValueConverterTest {
     assertEquals(MILLI, instant.getPrecision());
     List.of(converter.instant(fractional), converter.dateTime(fractional))
         .forEach(t -> assertTrue(t.getValueAsString().contains(":30.123"), t.getValueAsString()));
-    for (Instant value : List.of(timestamp, fractional)) {
-      DateTimeType dateTime = converter.dateTime(value);
-      assertEquals(value, dateTime.getValue().toInstant());
-      assertEquals(value == timestamp ? SECOND : MILLI, dateTime.getPrecision(), value::toString);
-      assertEquals(TimeZone.getDefault().getID(), dateTime.getTimeZone().getID());
+    for (Instant value : List.of(timestamp, fractional, fractional.plusNanos(456_000))) {
+      assertDateTime(value.toString(), converter.dateTime(value), value.toString());
     }
+    var milli = new DateTimeType(Date.from(fractional), MILLI, TimeZone.getDefault());
+    assertEquals(milli.getValueAsString(), converter.dateTime(fractional).getValueAsString());
   }
 
   @ParameterizedTest
@@ -167,6 +159,23 @@ class FhirValueConverterTest {
 
   private void assertNotConverted(ValueType type, String value) {
     assertTrue(converter.toFhir(type, value, null).isEmpty(), () -> type + " " + value);
+    assertTrue(converter.toDate(type, value).isEmpty(), () -> "toDate " + type + " " + value);
+    assertTrue(converter.toBoolean(value).isEmpty(), () -> "toBoolean " + value);
+  }
+
+  private static Stream<String[]> rows(String table) {
+    return Stream.of(table.split(";\\s*")).map(row -> row.split("=", 2));
+  }
+
+  private static void assertDateTime(String expected, Type actual, String label) {
+    ZoneId zone = expected.endsWith("Z") ? ZoneOffset.UTC : ZoneId.systemDefault();
+    Instant instant = LocalDateTime.parse(expected.replace("Z", "")).atZone(zone).toInstant();
+    DateTimeType dateTime = assertInstanceOf(DateTimeType.class, actual, label);
+    assertEquals(instant, OffsetDateTime.parse(dateTime.getValueAsString()).toInstant(), label);
+    assertEquals(Instant.ofEpochMilli(instant.toEpochMilli()), dateTime.getValue().toInstant());
+    assertEquals((long) instant.getNano(), dateTime.getNanos(), label);
+    assertEquals(instant.getNano() == 0 ? SECOND : MILLI, dateTime.getPrecision(), label);
+    assertEquals(TimeZone.getDefault().getID(), dateTime.getTimeZone().getID(), label);
   }
 
   private static void assertDayPrecisionDateTime(String expected, Type actual) {

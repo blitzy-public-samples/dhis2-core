@@ -29,14 +29,18 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
+import static org.hisp.dhis.common.ValueType.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.Cardinality.*;
 
 import java.util.*;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 import org.hisp.dhis.common.ValueType;
 
 /** The closed catalog of FHIR R4 elements a {@link FhirFieldMapping} may target. */
+@Accessors(fluent = true)
 public enum FhirTargetField {
   /** A {@code Patient.identifier} under the entry's {@code system} per readable, nonblank value. */
   PATIENT_IDENTIFIER(PATIENT, EnumSet.of(ATTRIBUTE), MANY, false, ValueTypes.IDENTIFIER),
@@ -79,11 +83,12 @@ public enum FhirTargetField {
     MANY
   }
 
-  private final FhirResourceType resourceType;
-  private final Set<FhirSourceType> allowedSources;
-  private final Cardinality cardinality;
+  @Getter private final FhirResourceType resourceType;
+  @Getter private final Set<FhirSourceType> allowedSources;
+  @Getter private final Cardinality cardinality;
   private final boolean required;
-  private final Set<ValueType> acceptedValueTypes;
+
+  @Getter private final Set<ValueType> acceptedValueTypes;
 
   FhirTargetField(
       FhirResourceType resourceType,
@@ -98,25 +103,8 @@ public enum FhirTargetField {
     this.acceptedValueTypes = Collections.unmodifiableSet(EnumSet.copyOf(acceptedValueTypes));
   }
 
-  public FhirResourceType resourceType() {
-    return resourceType;
-  }
-
-  public Set<FhirSourceType> allowedSources() {
-    return allowedSources;
-  }
-
-  public Cardinality cardinality() {
-    return cardinality;
-  }
-
   public boolean isRequired() {
     return required;
-  }
-
-  /** Returns the accepted source value types; empty for a target that takes only constants. */
-  public Set<ValueType> acceptedValueTypes() {
-    return acceptedValueTypes;
   }
 
   /** Returns whether a source of the given value type may back this target; false for null. */
@@ -131,34 +119,19 @@ public enum FhirTargetField {
 
   private static final class ValueTypes {
     static final EnumSet<ValueType> NONE = EnumSet.noneOf(ValueType.class);
-    static final EnumSet<ValueType> TEXT =
-        EnumSet.of(ValueType.TEXT, ValueType.LONG_TEXT, ValueType.LETTER);
+    static final EnumSet<ValueType> TEXT = EnumSet.of(ValueType.TEXT, LONG_TEXT, LETTER);
     static final EnumSet<ValueType> INTEGER =
-        EnumSet.of(
-            ValueType.INTEGER,
-            ValueType.INTEGER_POSITIVE,
-            ValueType.INTEGER_NEGATIVE,
-            ValueType.INTEGER_ZERO_OR_POSITIVE);
+        EnumSet.of(ValueType.INTEGER, INTEGER_POSITIVE, INTEGER_NEGATIVE, INTEGER_ZERO_OR_POSITIVE);
     static final EnumSet<ValueType> IDENTIFIER =
-        union(
-            TEXT,
-            INTEGER,
-            EnumSet.of(ValueType.USERNAME, ValueType.EMAIL, ValueType.PHONE_NUMBER, ValueType.URL));
-    static final EnumSet<ValueType> BIRTH_DATE = EnumSet.of(ValueType.DATE, ValueType.AGE);
-    static final EnumSet<ValueType> PHONE = EnumSet.of(ValueType.PHONE_NUMBER, ValueType.TEXT);
+        union(TEXT, INTEGER, EnumSet.of(USERNAME, ValueType.EMAIL, PHONE_NUMBER, URL));
+    static final EnumSet<ValueType> BIRTH_DATE = EnumSet.of(DATE, AGE);
+    static final EnumSet<ValueType> PHONE = EnumSet.of(PHONE_NUMBER, ValueType.TEXT);
     static final EnumSet<ValueType> EMAIL = EnumSet.of(ValueType.EMAIL, ValueType.TEXT);
-    static final EnumSet<ValueType> ADMINISTERED =
-        EnumSet.of(ValueType.BOOLEAN, ValueType.TRUE_ONLY, ValueType.TEXT);
+    static final EnumSet<ValueType> ADMINISTERED = EnumSet.of(BOOLEAN, TRUE_ONLY, ValueType.TEXT);
     static final EnumSet<ValueType> DOSE_NUMBER = union(INTEGER, EnumSet.of(ValueType.TEXT));
     static final EnumSet<ValueType> OBSERVATION =
         EnumSet.complementOf(
-            EnumSet.of(
-                ValueType.FILE_RESOURCE,
-                ValueType.IMAGE,
-                ValueType.COORDINATE,
-                ValueType.GEOJSON,
-                ValueType.ORGANISATION_UNIT,
-                ValueType.REFERENCE));
+            EnumSet.of(FILE_RESOURCE, IMAGE, COORDINATE, GEOJSON, ORGANISATION_UNIT, REFERENCE));
 
     private ValueTypes() {}
 

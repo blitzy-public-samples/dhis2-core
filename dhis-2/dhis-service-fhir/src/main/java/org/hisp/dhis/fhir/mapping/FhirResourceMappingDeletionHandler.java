@@ -32,18 +32,12 @@ package org.hisp.dhis.fhir.mapping;
 import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.IdentifiableObject;
-import org.hisp.dhis.program.Program;
-import org.hisp.dhis.program.ProgramStage;
-import org.hisp.dhis.system.deletion.DeletionVeto;
-import org.hisp.dhis.system.deletion.IdObjectDeletionHandler;
+import org.hisp.dhis.program.*;
+import org.hisp.dhis.system.deletion.*;
 import org.hisp.dhis.trackedentity.TrackedEntityType;
 import org.springframework.stereotype.Component;
 
-/**
- * Vetoes deleting a {@link TrackedEntityType}, {@link Program} or {@link ProgramStage} that a
- * {@link FhirResourceMapping} references, a program also when a mapping references one of its
- * stages, and a user who created or last updated a mapping. The veto names only the mapping type.
- */
+/** Vetoes deleting metadata or a user that a {@link FhirResourceMapping} references. */
 @Component
 @RequiredArgsConstructor
 public class FhirResourceMappingDeletionHandler
@@ -58,7 +52,6 @@ public class FhirResourceMappingDeletionHandler
     whenVetoing(ProgramStage.class, stage -> vetoIfMapped("s = :o", stage));
   }
 
-  /** Returns {@link #VETO} when mapping {@code m} or its stage {@code s} meets the condition. */
   private DeletionVeto vetoIfMapped(String condition, IdentifiableObject object) {
     String query = "select m.id from FhirResourceMapping m left join m.programStage s where ";
     return entityManager

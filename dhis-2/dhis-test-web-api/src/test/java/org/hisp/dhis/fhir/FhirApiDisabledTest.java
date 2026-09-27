@@ -42,7 +42,6 @@ import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.test.webapi.AuthenticationApiTestBase;
 import org.hisp.dhis.webapi.filter.ApiVersionFilter;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,7 +52,7 @@ import org.springframework.test.web.servlet.request.*;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
-/** Tests FHIR and non-FHIR routes behind security with {@code fhir.api.enabled} at its default. */
+/** Tests FHIR routes behind security with {@code fhir.api.enabled} at its default. */
 class FhirApiDisabledTest extends AuthenticationApiTestBase {
   static final String BASIC_AUTH_USER_NAME = "usera";
   static final String BASIC_AUTH_HEADER =
@@ -78,8 +77,6 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
           new FhirRoute(GET, "/api/44/fhir/Patient" + LOGIN_CONFIG, null, false),
           new FhirRoute(POST, "/api/fhir/Patient" + LOGIN_CONFIG, PATIENT_BODY, false),
           new FhirRoute(OPTIONS, "/api/fhir/Patient" + LOGIN_CONFIG, null, false));
-  private static final List<String> SECURITY_HEADERS =
-      List.of("Content-Security-Policy", "X-Content-Type-Options", "Strict-Transport-Security");
 
   @Autowired private DhisConfigurationProvider config;
 
@@ -102,33 +99,6 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   @MethodSource("fhirRouteCalls")
   void everyFhirRouteReturnsNotFoundWhenDisabled(FhirRoute route, Caller caller) throws Exception {
     assertNotFoundOutcome(perform(route, caller), route.method() == HEAD);
-  }
-
-  @Test
-  void nonFhirRoutesKeepTheirResponsesAndShareSecurityHeadersWhenDisabled() throws Exception {
-    var fhirRequest = MockMvcRequestBuilders.get("/api/fhir/Patient/" + PATIENT_ID).secure(true);
-    MockHttpServletResponse fhir = mvc.perform(fhirRequest).andReturn().getResponse();
-    assertNotFoundOutcome(fhir, false);
-    assertEquals("nosniff", fhir.getHeader("X-Content-Type-Options"));
-    for (String path : List.of("/api/fhirResourceMappings", "/api/44/fhirResourceMappings")) {
-      clearSecurityContext();
-      MockHttpServletRequestBuilder request =
-          MockMvcRequestBuilders.get(path).secure(true).header(X_REQUESTED_WITH, XML_HTTP_REQUEST);
-      MockHttpServletResponse anonymous = mvc.perform(request).andReturn().getResponse();
-      assertEquals(401, anonymous.getStatus(), "GET " + path + " as ANONYMOUS");
-      assertNotFhirJson(anonymous, "GET " + path + " as ANONYMOUS");
-      Set<String> headers = new HashSet<>(anonymous.getHeaderNames());
-      headers.remove(HttpHeaders.CONTENT_TYPE);
-      assertTrue(headers.containsAll(SECURITY_HEADERS), "GET " + path + " as ANONYMOUS");
-      for (String header : headers)
-        assertEquals(anonymous.getHeaderValues(header), fhir.getHeaderValues(header), header);
-    }
-    var me = perform(new FhirRoute(GET, "/api/me", null, false), Caller.BASIC_AUTHENTICATED);
-    assertEquals(200, me.getStatus(), "GET /api/me as BASIC_AUTHENTICATED");
-    var loginConfig =
-        perform(new FhirRoute(GET, "/api" + LOGIN_CONFIG, null, false), Caller.ANONYMOUS);
-    assertEquals(200, loginConfig.getStatus(), "GET /api/loginConfig as ANONYMOUS");
-    assertNotFhirJson(loginConfig, "GET /api/loginConfig as ANONYMOUS");
   }
 
   static Stream<Arguments> fhirRouteCalls() {

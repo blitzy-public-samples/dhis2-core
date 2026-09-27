@@ -32,8 +32,7 @@ package org.hisp.dhis.fhir.service;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.*;
-import java.util.function.Function;
-import java.util.function.Predicate;
+import java.util.function.*;
 import javax.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.UID;
@@ -46,9 +45,9 @@ import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
 import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.EnrollmentResult;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
+import org.hisp.dhis.webapi.utils.HttpServletRequestPaths;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /** Serves Encounter, Immunization and Observation reads, searches and Patient/$everything data. */
@@ -147,9 +146,8 @@ public class FhirEventResourceService {
     return Collections.unmodifiableList(resources);
   }
 
-  /** Builds {@code /api/fhir} on the request's scheme, server name, port and context path. */
-  static UriComponentsBuilder fhirBase(HttpServletRequest request) {
-    return ServletUriComponentsBuilder.fromContextPath(request).path(FHIR_BASE_PATH);
+  static String fhirBase(HttpServletRequest request) {
+    return HttpServletRequestPaths.getContextPath(request) + FHIR_BASE_PATH;
   }
 
   static Bundle searchset() {
@@ -161,7 +159,7 @@ public class FhirEventResourceService {
       HttpServletRequest request,
       List<? extends Resource> resources,
       Runnable checkpoint) {
-    String base = fhirBase(request).build().toUriString() + PATH_SEPARATOR;
+    String base = fhirBase(request) + PATH_SEPARATOR;
     for (Resource resource : resources) {
       bundle
           .addEntry()
@@ -175,28 +173,34 @@ public class FhirEventResourceService {
   }
 
   UriComponentsBuilder addSelfLink(Bundle bundle, HttpServletRequest request, String path) {
-    UriComponentsBuilder base =
-        fhirBase(request).path(PATH_SEPARATOR + path).query(request.getQueryString());
-    bundle.addLink().setRelation(Bundle.LINK_SELF).setUrl(base.build().toUriString());
-    return base;
+    UriComponentsBuilder relative =
+        UriComponentsBuilder.fromPath(PATH_SEPARATOR + path).query(request.getQueryString());
+    bundle
+        .addLink()
+        .setRelation(Bundle.LINK_SELF)
+        .setUrl(fhirBase(request) + relative.build().toUriString());
+    return relative;
   }
 
   void addPagingLinks(
       Bundle bundle, HttpServletRequest request, String resourceType, int page, boolean hasNext) {
-    UriComponentsBuilder base = addSelfLink(bundle, request, resourceType);
+    UriComponentsBuilder relative = addSelfLink(bundle, request, resourceType);
+    String base = fhirBase(request);
     if (hasNext) {
-      bundle.addLink().setRelation(Bundle.LINK_NEXT).setUrl(pageUrl(base, page + 1));
+      bundle.addLink().setRelation(Bundle.LINK_NEXT).setUrl(pageUrl(base, relative, page + 1));
     }
     if (page > 1) {
-      bundle.addLink().setRelation(Bundle.LINK_PREV).setUrl(pageUrl(base, page - 1));
+      bundle.addLink().setRelation(Bundle.LINK_PREV).setUrl(pageUrl(base, relative, page - 1));
     }
   }
 
-  private static String pageUrl(UriComponentsBuilder base, int page) {
-    return base.cloneBuilder()
-        .replaceQueryParam(FhirSearchParameters.PAGE, page)
-        .build()
-        .toUriString();
+  private static String pageUrl(String base, UriComponentsBuilder relative, int page) {
+    return base
+        + relative
+            .cloneBuilder()
+            .replaceQueryParam(FhirSearchParameters.PAGE, page)
+            .build()
+            .toUriString();
   }
 
   private Resource readWithinDeadline(
@@ -390,11 +394,6 @@ public class FhirEventResourceService {
     }
   }
 
-  /**
-   * Resolves mappings in one call, {@code resolve(ENCOUNTER)} for Encounter and {@code
-   * resolveAll()} otherwise, and returns those of the type with, for Immunization and Observation,
-   * the stages of the Encounter mappings. Throws not-supported when the type has none usable.
-   */
   private OperationMappings requireMappings(FhirResourceType type) {
     boolean encounter = type == FhirResourceType.ENCOUNTER;
     List<ResolvedMapping> resolved =
@@ -459,6 +458,5 @@ public class FhirEventResourceService {
 
   private record FlattenedResource(Resource resource, ResolvedMapping mapping) {}
 
-  /** The usable mappings of one operation's type and the stages its Encounter mappings cover. */
   private record OperationMappings(List<ResolvedMapping> mappings, Set<String> encounterStages) {}
 }

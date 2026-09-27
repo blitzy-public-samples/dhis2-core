@@ -37,11 +37,7 @@ import java.util.stream.Stream;
 import javax.annotation.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 
-/**
- * Segments of an event-derived resource id. {@code parse} accepts only two UID segments for {@code
- * Encounter} and three for {@code Immunization} and {@code Observation}; {@code compose} joins the
- * present segments in order with {@code -}.
- */
+/** Segments of an event-derived resource id: two UIDs for Encounter, three for the others. */
 public record FhirLogicalId(
     @Nonnull String enrollment, @CheckForNull String event, @CheckForNull String dataElement) {
   private static final Pattern UID_SEGMENT = Pattern.compile("^[A-Za-z][A-Za-z0-9]{10}$");
@@ -77,10 +73,7 @@ public record FhirLogicalId(
         .collect(joining(SEPARATOR));
   }
 
-  /**
-   * Parses an id of the given type; empty, without throwing, when the type is {@code null} or
-   * {@code PATIENT}, or the id is not exactly 2 UID segments for {@code ENCOUNTER} and 3 otherwise.
-   */
+  /** Parses an id of the given type; empty, without throwing, when it is not a valid id. */
   @Nonnull
   public static Optional<FhirLogicalId> parse(
       @CheckForNull FhirResourceType type, @CheckForNull String id) {
@@ -98,13 +91,9 @@ public record FhirLogicalId(
       return Optional.empty();
     }
     String[] segments = id.split(SEPARATOR, -1);
-    if (segments.length != expectedSegments) {
+    if (segments.length != expectedSegments
+        || !Arrays.stream(segments).allMatch(segment -> UID_SEGMENT.matcher(segment).matches())) {
       return Optional.empty();
-    }
-    for (String segment : segments) {
-      if (!UID_SEGMENT.matcher(segment).matches()) {
-        return Optional.empty();
-      }
     }
     return Optional.of(
         expectedSegments == ENCOUNTER_SEGMENTS

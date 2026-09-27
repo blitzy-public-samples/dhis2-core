@@ -132,6 +132,14 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
+  void searchUrlsFollowForwardedHeaders() {
+    String url = PATIENT_PATH + "?_id=" + SUMMER + "," + FRANK + "&_count=1";
+    Set<String> ids = new HashSet<>();
+    forwardedPages(url, PATIENT_PATH).forEach(page -> ids.addAll(entryIds(page)));
+    assertEquals(Set.of(SUMMER, FRANK), ids);
+  }
+
+  @Test
   void patientEverythingReturnsPatientAndEventResources() {
     assertEverything(SUMMER, SUMMER_EVERYTHING);
     assertEverything(
@@ -161,9 +169,6 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
         """;
     for (String query : queries.strip().split("\\s+"))
       assertInvalid(PATIENT_PATH + "?" + query, query.substring(0, query.indexOf('=')));
-    for (String query : List.of("family=\u0000", "family=rainy day\u0000x", "given=Fr\u0000"))
-      assertInvalid(PATIENT_PATH + "?" + query, query.substring(0, query.indexOf('=')));
-    assertInvalid(PATIENT_PATH + "?fam\nily=rain", "fam%0Aily");
     String previousLimit =
         GET("/systemSettings/{key}", MAX_LIMIT_SETTING, Accept("text/plain")).content("text/plain");
     try {

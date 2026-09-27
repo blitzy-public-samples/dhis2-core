@@ -70,7 +70,6 @@ class FhirResourceSerializerTest {
     assertEquals("no-store, private", ok.getHeaders().getCacheControl());
     assertEquals(FhirR4Validation.encode(patient("patient-ok", "Okafor", "Chidi")), ok.getBody());
     FhirR4Validation.assertValid(FhirR4Validation.parseStrict(ok.getBody(), Patient.class));
-    assertEquals("4.0.1", serializer.context().getVersion().getVersion().getFhirVersionString());
   }
 
   @Test

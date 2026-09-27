@@ -32,22 +32,19 @@ package org.hisp.dhis.fhir.mapping;
 import static java.util.stream.Collectors.joining;
 import static org.hisp.dhis.dxf2.webmessage.WebMessageUtils.error;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.*;
 import java.io.*;
-import java.util.HashSet;
-import java.util.List;
+import java.util.*;
 import java.util.regex.*;
-import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
+import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.*;
 import org.hisp.dhis.dxf2.metadata.MetadataExportParams;
 import org.hisp.dhis.dxf2.webmessage.WebMessageException;
 import org.hisp.dhis.feedback.*;
 import org.hisp.dhis.gist.*;
-import org.hisp.dhis.query.Filters;
-import org.hisp.dhis.query.GetObjectListParams;
-import org.hisp.dhis.query.Query;
+import org.hisp.dhis.query.*;
 import org.hisp.dhis.webapi.controller.AbstractCrudController;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.*;
@@ -88,6 +85,8 @@ public class FhirResourceMappingController
   }
 
   /** Exports the mapping in the metadata import format, honouring the /api/metadata options. */
+  @OpenApi.Description("The mapping in the `/api/metadata` export format.")
+  @OpenApi.Response(ObjectNode.class)
   @GetMapping("/{uid}/metadata")
   public ResponseEntity<MetadataExportParams> getFhirResourceMappingMetadata(
       @PathVariable("uid") UID uid,
@@ -131,7 +130,6 @@ public class FhirResourceMappingController
     neutralize(response, r -> super.getObjectPropertyGistAsCsv(uid, property, params, request, r));
   }
 
-  /** Buffers what {@code gist} writes and writes it neutralized, in the platform charset. */
   @SneakyThrows
   private static void neutralize(
       HttpServletResponse response, ThrowingConsumer<HttpServletResponse> gist) {
@@ -141,7 +139,6 @@ public class FhirResourceMappingController
     response.getOutputStream().write(text.getBytes());
   }
 
-  /** Prefixes {@code '} to cell text that starts, after any BOM, with =, +, -, @, tab or CR. */
   static String neutralize(String csv, char separator) {
     Matcher cells = Pattern.compile(CELL.formatted((int) separator)).matcher(csv);
     return cells.replaceAll(
@@ -173,8 +170,11 @@ public class FhirResourceMappingController
             .toList();
     List<ErrorReport> reports = validator.validate(mapping, others);
     if (!reports.isEmpty()) {
+      List<ErrorReport> all = new ArrayList<>(reports);
+      boolean unnamed = mapping.getName() == null || mapping.getName().isBlank();
+      if (unnamed) all.add(0, new ErrorReport(FhirResourceMapping.class, ErrorCode.E4000, "name"));
       throw new ConflictException(
-          reports.stream().map(ErrorReport::getMessage).collect(joining("; ")));
+          all.stream().map(r -> r.getMessage().replaceAll("\\R", " ")).collect(joining("\n")));
     }
   }
 }

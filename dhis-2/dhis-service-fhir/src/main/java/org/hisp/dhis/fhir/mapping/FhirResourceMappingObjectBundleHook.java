@@ -42,10 +42,7 @@ import org.hisp.dhis.preheat.*;
 import org.hisp.dhis.security.acl.AclService;
 import org.springframework.stereotype.Component;
 
-/**
- * Validates FHIR resource mappings during metadata import when the importing user may create the
- * mapping or update its stored version; otherwise it reports nothing and skips no-ACL lookups.
- */
+/** Validates FHIR resource mappings during metadata import for a user who may write them. */
 @Component
 @RequiredArgsConstructor
 public class FhirResourceMappingObjectBundleHook
@@ -64,7 +61,6 @@ public class FhirResourceMappingObjectBundleHook
     }
   }
 
-  /** Whether the bundle user, when there is one, may update the stored mapping or create it. */
   private boolean mayWrite(FhirResourceMapping mapping, ObjectBundle bundle) {
     var user = bundle.getUserDetails();
     Preheat preheat = bundle.getPreheat();
@@ -74,7 +70,6 @@ public class FhirResourceMappingObjectBundleHook
             : aclService.canCreate(user, FhirResourceMapping.class));
   }
 
-  /** Returns the stored, then the bundle mappings holding the mapping's key, except its own UID. */
   private List<FhirResourceMapping> others(FhirResourceMapping mapping, ObjectBundle bundle) {
     String key = FhirResourceMappingValidator.uniquenessKey(mapping);
     String uid = mapping.getUid();
@@ -85,7 +80,6 @@ public class FhirResourceMappingObjectBundleHook
             .toList();
   }
 
-  /** Groups the mappings of one store read, then the bundle mappings, by uniqueness key. */
   private UniquenessView view(FhirResourceMapping mapping, ObjectBundle bundle) {
     if (bundle.getExtras(mapping, UNIQUENESS_VIEW) instanceof UniquenessView kept) {
       return kept;

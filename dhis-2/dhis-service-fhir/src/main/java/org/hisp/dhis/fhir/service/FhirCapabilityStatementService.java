@@ -75,7 +75,7 @@ public class FhirCapabilityStatementService {
     statement
         .getImplementation()
         .setDescription(IMPLEMENTATION_DESCRIPTION)
-        .setUrl(FhirEventResourceService.fhirBase(request).build().toUriString());
+        .setUrl(FhirEventResourceService.fhirBase(request));
     CapabilityStatementRestComponent rest =
         statement.addRest().setMode(RestfulCapabilityMode.SERVER);
     mappingsByType.forEach((type, mappingsOfType) -> addResource(rest, type, mappingsOfType));

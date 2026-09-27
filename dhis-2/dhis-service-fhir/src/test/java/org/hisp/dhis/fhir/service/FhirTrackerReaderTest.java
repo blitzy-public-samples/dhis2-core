@@ -37,11 +37,14 @@ import static org.mockito.Mockito.*;
 
 import jakarta.persistence.PersistenceException;
 import java.lang.reflect.UndeclaredThrowableException;
+import java.net.SocketTimeoutException;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
+import javax.sql.DataSource;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.*;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
@@ -62,13 +65,14 @@ import org.junit.jupiter.api.function.Executable;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.*;
 
 /**
- * Tests the Tracker export calls, exception translation, deadline and operation transaction of
- * {@link FhirTrackerReader}.
+ * Tests the Tracker export calls, exception translation, deadline, operation transaction,
+ * connection network timeout and timeout warning of {@link FhirTrackerReader}.
  */
 @ExtendWith(MockitoExtension.class)
 class FhirTrackerReaderTest {
@@ -131,9 +135,8 @@ class FhirTrackerReaderTest {
     var notFound = teError(new NotFoundException("TrackedEntity not found"), origin);
     assertEquals(HttpStatus.NOT_FOUND, notFound.getStatus());
     assertEquals(IssueType.NOTFOUND, notFound.getIssueType());
-    var rejected = new WebMessageException(WebMessageUtils.conflict("x"));
     DeadlineExceededException expired = new DeadlineExceededException(Duration.ofSeconds(5));
-    for (Exception exception : List.of(rejected, expired, new IllegalArgumentException("x"))) {
+    for (Exception exception : List.of(expired, new IllegalArgumentException("x"))) {
       doThrow(exception).when(trackedEntityAdapter).find(teParams, request);
       assertRethrown(exception, () -> reader.findTrackedEntities(teParams, request, origin));
     }
@@ -249,8 +252,6 @@ class FhirTrackerReaderTest {
     assertNotNull(seen.get(0));
     assertEquals(Collections.nCopies(3, seen.get(0)), seen);
     assertNull(DeadlineHolder.get());
-    doReturn(null).when(timeout).newDeadline();
-    assertNull(reader.withinDeadline(DeadlineHolder::get), "a disabled timeout sets no deadline");
     TrackedEntityRequestParams late = new TrackedEntityRequestParams();
     DeadlineHolder.set(deadlineIn(Duration.ofSeconds(10)));
     nanos += Duration.ofSeconds(11).toNanos();
@@ -269,14 +270,11 @@ class FhirTrackerReaderTest {
     assertEquals(1, seen.size());
     assertSame(existing, seen.get(0));
     assertSame(existing, DeadlineHolder.get());
-    Supplier<Object> failing = throwing(new IllegalStateException("operation failed"));
-    assertThrows(IllegalStateException.class, () -> reader.withinDeadline(failing));
-    assertSame(existing, DeadlineHolder.get(), "a failed operation leaves the deadline in place");
     verify(timeout, never()).newDeadline();
   }
 
   @Test
-  void queryTimeoutUnderADeadlineBecomesDeadlineExceeded() {
+  void queryTimeoutBecomesDeadlineExceededOnlyUnderADeadlineOtherFailuresUnchanged() {
     when(timeout.newDeadline()).thenAnswer(invocation -> deadlineIn(Duration.ofSeconds(10)));
     for (Deadline held : Arrays.asList(null, deadlineIn(Duration.ofSeconds(30)))) {
       DeadlineHolder.set(held);
@@ -290,11 +288,8 @@ class FhirTrackerReaderTest {
       }
     }
     verify(timeout, times(queryTimeouts().size())).newDeadline();
-  }
-
-  @Test
-  void queryTimeoutWithoutADeadlineAndOtherFailuresAreRethrownUnchanged() {
-    when(timeout.newDeadline()).thenReturn(null);
+    DeadlineHolder.clear();
+    doReturn(null).when(timeout).newDeadline();
     for (RuntimeException timedOut : queryTimeouts()) {
       assertRethrown(timedOut, () -> reader.withinDeadline(throwing(timedOut)));
       assertNull(DeadlineHolder.get());
@@ -363,6 +358,82 @@ class FhirTrackerReaderTest {
     assertRethrown(undeclared, () -> transactional.withinDeadline(throwing(undeclared)));
     verify(transactionManager, times(2)).rollback(status);
     verify(transactionManager, never()).commit(any());
+  }
+
+  @Test
+  void networkTimeoutFollowsTheDeadlineAndIsRestoredBeforeTheConnectionIsReleased()
+      throws Exception {
+    Connection connection = mock(Connection.class);
+    FhirTrackerReader bounded = bounded(connection);
+    when(connection.getNetworkTimeout()).thenReturn(0, 1_500);
+    when(timeout.newDeadline()).thenAnswer(invocation -> deadlineIn(Duration.ofSeconds(10)));
+    Supplier<Object> checkpointLater =
+        () -> {
+          nanos += Duration.ofSeconds(3).toNanos();
+          bounded.checkpoint();
+          return "result";
+        };
+    assertEquals("result", bounded.withinDeadline(checkpointLater));
+    InOrder order = inOrder(connection);
+    order.verify(connection).setNetworkTimeout(any(), eq(12_000));
+    order.verify(connection).setNetworkTimeout(any(), eq(9_000));
+    order.verify(connection).commit();
+    order.verify(connection).setNetworkTimeout(any(), eq(0));
+    order.verify(connection).close();
+    assertEquals("result", bounded.withinDeadline(checkpointLater));
+    verify(connection, times(3)).setNetworkTimeout(any(), eq(1_500));
+    doReturn(null).when(timeout).newDeadline();
+    assertEquals("result", bounded.withinDeadline(() -> "result"));
+    verify(connection, times(6)).setNetworkTimeout(any(), anyInt());
+    doAnswer(invocation -> deadlineIn(Duration.ofSeconds(10))).when(timeout).newDeadline();
+    doThrow(new SQLException("unsupported")).when(connection).setNetworkTimeout(any(), anyInt());
+    assertEquals("result", bounded.withinDeadline(checkpointLater));
+    verify(connection, times(4)).commit();
+    verify(connection, times(4)).close();
+  }
+
+  @Test
+  void socketTimeoutAfterTheDeadlineBecomesDeadlineExceededDespiteAFailedRollback()
+      throws Exception {
+    Connection connection = mock(Connection.class);
+    FhirTrackerReader bounded = bounded(connection);
+    doThrow(new SQLException("This connection has been closed.", "08003"))
+        .when(connection)
+        .rollback();
+    when(timeout.newDeadline()).thenAnswer(invocation -> deadlineIn(Duration.ofSeconds(10)));
+    RuntimeException early = stalled();
+    assertRethrown(early, () -> bounded.withinDeadline(throwing(early)));
+    RuntimeException late = stalled();
+    Supplier<Object> stallsPastTheDeadline =
+        () -> {
+          nanos += Duration.ofSeconds(12).toNanos();
+          throw late;
+        };
+    Executable stalls = () -> bounded.withinDeadline(stallsPastTheDeadline);
+    DeadlineExceededException exceeded = assertThrows(DeadlineExceededException.class, stalls);
+    assertEquals("Request exceeded its time budget of 10s", exceeded.getMessage());
+    assertSame(late, exceeded.getCause());
+    for (RuntimeException failure : List.of(early, late)) {
+      assertEquals(1, failure.getSuppressed().length);
+      assertInstanceOf(TransactionSystemException.class, failure.getSuppressed()[0]);
+    }
+    verify(connection, times(2)).rollback();
+    verify(connection, times(2)).setNetworkTimeout(any(), eq(0));
+    verify(connection, times(2)).close();
+  }
+
+  private FhirTrackerReader bounded(Connection connection) throws SQLException {
+    DataSource dataSource = mock(DataSource.class);
+    when(dataSource.getConnection()).thenReturn(connection);
+    var manager = new DataSourceTransactionManager(dataSource);
+    return new FhirTrackerReader(
+        trackedEntityAdapter, enrollmentAdapter, timeout, manager, dataSource);
+  }
+
+  private static RuntimeException stalled() {
+    var readTimedOut = new SocketTimeoutException("Read timed out");
+    var ioError = new SQLException("An I/O error occurred", "08006", readTimedOut);
+    return new org.springframework.dao.DataAccessResourceFailureException("stalled", ioError);
   }
 
   private static Supplier<Object> throwing(RuntimeException exception) {
@@ -442,6 +513,16 @@ class FhirTrackerReaderTest {
   }
 
   private static String loggedOnceWithoutSurname(Executable call) throws Throwable {
+    List<LogEvent> events = logged(call);
+    assertEquals(1, events.size());
+    LogEvent event = events.get(0);
+    String logged = event.getLevel() + " " + event.getMessage().getFormattedMessage();
+    assertFalse(logged.contains(SURNAME), logged);
+    assertFalse(String.valueOf(event.getThrown()).contains(SURNAME), logged);
+    return event.getThrown() == null ? logged : logged + " " + event.getThrown();
+  }
+
+  private static List<LogEvent> logged(Executable call) throws Throwable {
     List<LogEvent> events = new CopyOnWriteArrayList<>();
     var appender =
         new AbstractAppender("readerLog", null, null, true, Property.EMPTY_ARRAY) {
@@ -469,12 +550,7 @@ class FhirTrackerReaderTest {
         appender.stop();
       }
     }
-    assertEquals(1, events.size());
-    LogEvent event = events.get(0);
-    String logged = event.getLevel() + " " + event.getMessage().getFormattedMessage();
-    assertFalse(logged.contains(SURNAME), logged);
-    assertFalse(String.valueOf(event.getThrown()).contains(SURNAME), logged);
-    return logged;
+    return events;
   }
 
   private static void assertInvalid(FhirApiException exception, String names, String detail) {

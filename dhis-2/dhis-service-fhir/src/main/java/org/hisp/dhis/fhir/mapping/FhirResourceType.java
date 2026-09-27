@@ -29,24 +29,21 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
+import lombok.*;
+import lombok.experimental.Accessors;
 import org.hl7.fhir.r4.model.ResourceType;
 
 /** The FHIR R4 resource type that a {@link FhirResourceMapping} produces. */
+@Getter
+@Accessors(fluent = true)
+@RequiredArgsConstructor
 public enum FhirResourceType {
   PATIENT(ResourceType.Patient.name()),
   ENCOUNTER(ResourceType.Encounter.name()),
   IMMUNIZATION(ResourceType.Immunization.name()),
   OBSERVATION(ResourceType.Observation.name());
+
   private final String fhirType;
-
-  FhirResourceType(String fhirType) {
-    this.fhirType = fhirType;
-  }
-
-  /** Returns the FHIR R4 resource type name, for example {@code Patient}. */
-  public String fhirType() {
-    return fhirType;
-  }
 
   /** Returns whether resources of this type are built from Tracker events: all but PATIENT. */
   public boolean isEventDerived() {

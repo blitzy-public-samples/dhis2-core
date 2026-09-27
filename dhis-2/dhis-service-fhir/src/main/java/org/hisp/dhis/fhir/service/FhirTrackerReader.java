@@ -29,15 +29,20 @@
  */
 package org.hisp.dhis.fhir.service;
 
+import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.springframework.transaction.support.TransactionOperations.withoutTransaction;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.UndeclaredThrowableException;
+import java.net.SocketTimeoutException;
+import java.sql.*;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.regex.*;
 import javax.annotation.*;
+import javax.sql.DataSource;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.hisp.dhis.common.IllegalQueryException;
@@ -53,20 +58,17 @@ import org.hisp.dhis.webapi.controller.tracker.export.enrollment.*;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.*;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.support.TransactionOperations;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.*;
+import org.springframework.transaction.support.*;
 
-/**
- * Reads Tracker data for the FHIR API, translating export-path errors into FHIR errors. Each
- * operation runs under one deadline and, with a transaction manager, one read-only transaction.
- */
+/** Reads Tracker data for the FHIR API, translating export-path errors into FHIR errors. */
 @Slf4j
 @Service
 public class FhirTrackerReader {
+  static final Duration NETWORK_TIMEOUT_GRACE = Duration.ofSeconds(2);
+
   static final String PARAMETER_SEPARATOR = ", ";
   static final String ATTRIBUTE_VALUE_REJECTED =
       "The value is not accepted by the mapped attribute";
@@ -76,72 +78,103 @@ public class FhirTrackerReader {
       " and none is configured, so " + FhirSearchParameters.ID + " is required";
   static final String SELECTOR_NOT_FOUND = "is specified but does not exist";
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
-  private static final List<Class<? extends RuntimeException>> QUERY_TIMEOUTS =
+  private static final List<Class<? extends Exception>> QUERY_TIMEOUTS =
       List.of(
           jakarta.persistence.QueryTimeoutException.class,
           org.hibernate.QueryTimeoutException.class,
           org.springframework.dao.QueryTimeoutException.class);
+  private static final List<Class<? extends Exception>> NETWORK_TIMEOUTS =
+      List.of(SocketTimeoutException.class);
+  private static final ThreadLocal<OperationScope> OPERATION = new ThreadLocal<>();
   private final FhirTrackedEntityExportAdapter trackedEntityAdapter;
   private final FhirEnrollmentExportAdapter enrollmentAdapter;
   private final TrackerExportTimeout timeout;
   private final TransactionOperations operationTransaction;
+  @CheckForNull private final DataSource dataSource;
 
   /** Creates a reader whose operations run without a transaction of their own. */
   public FhirTrackerReader(
       FhirTrackedEntityExportAdapter trackedEntityAdapter,
       FhirEnrollmentExportAdapter enrollmentAdapter,
       TrackerExportTimeout timeout) {
-    this(trackedEntityAdapter, enrollmentAdapter, timeout, withoutTransaction());
+    this(trackedEntityAdapter, enrollmentAdapter, timeout, withoutTransaction(), null);
   }
 
   /** Creates a reader whose operations each run in a read-only transaction when none is active. */
-  @Autowired
   public FhirTrackerReader(
       FhirTrackedEntityExportAdapter trackedEntityAdapter,
       FhirEnrollmentExportAdapter enrollmentAdapter,
       TrackerExportTimeout timeout,
       PlatformTransactionManager transactionManager) {
-    this(trackedEntityAdapter, enrollmentAdapter, timeout, readOnlyTransaction(transactionManager));
+    this(
+        trackedEntityAdapter,
+        enrollmentAdapter,
+        timeout,
+        readOnlyTransaction(transactionManager),
+        null);
+  }
+
+  /** Creates a transactional reader whose deadline bounds the network timeout of its connection. */
+  @Autowired
+  public FhirTrackerReader(
+      FhirTrackedEntityExportAdapter trackedEntityAdapter,
+      FhirEnrollmentExportAdapter enrollmentAdapter,
+      TrackerExportTimeout timeout,
+      PlatformTransactionManager transactionManager,
+      DataSource dataSource) {
+    this(
+        trackedEntityAdapter,
+        enrollmentAdapter,
+        timeout,
+        readOnlyTransaction(transactionManager),
+        Objects.requireNonNull(dataSource, "dataSource"));
   }
 
   private FhirTrackerReader(
       FhirTrackedEntityExportAdapter trackedEntityAdapter,
       FhirEnrollmentExportAdapter enrollmentAdapter,
       TrackerExportTimeout timeout,
-      TransactionOperations operationTransaction) {
+      TransactionOperations operationTransaction,
+      @CheckForNull DataSource dataSource) {
     this.trackedEntityAdapter = trackedEntityAdapter;
     this.enrollmentAdapter = enrollmentAdapter;
     this.timeout = timeout;
     this.operationTransaction = operationTransaction;
+    this.dataSource = dataSource;
   }
 
-  /**
-   * Runs {@code operation} under the held or a configured new deadline, if any, and clears only its
-   * own. The operation then runs in the active transaction or else in the reader's operation
-   * transaction, which rolls back when it throws. Under a deadline, a query timeout, alone or as a
-   * cause, becomes a {@link DeadlineExceededException} naming the budget; anything else is rethrown
-   * unchanged.
-   */
+  /** Runs {@code operation} under one deadline, in the reader's transaction if it has one. */
   public <T> T withinDeadline(@Nonnull Supplier<T> operation) {
     Objects.requireNonNull(operation, "operation");
+    if (OPERATION.get() != null) {
+      return operation.get();
+    }
     boolean owner = DeadlineHolder.get() == null;
     if (owner) {
       DeadlineHolder.set(timeout.newDeadline());
     }
+    OperationScope scope = new OperationScope();
+    OPERATION.set(scope);
     try {
-      return inOperationTransaction(operation);
+      return inOperationTransaction(operation, scope);
     } catch (RuntimeException e) {
       throw asDeadlineExceeded(e);
     } finally {
+      scope.restore();
+      OPERATION.remove();
       if (owner) {
         DeadlineHolder.clear();
       }
     }
   }
 
-  /** Throws {@code DeadlineExceededException} when the thread's deadline has expired. */
+  /** Throws {@code DeadlineExceededException} once expired, else re-bounds the network timeout. */
   public void checkpoint() {
     DeadlineHolder.checkNotExpired();
+    OperationScope scope = OPERATION.get();
+    if (scope != null) {
+      scope.refresh();
+    }
   }
 
   /** Finds tracked entities after a checkpoint, translating export-path errors to FHIR errors. */
@@ -201,15 +234,16 @@ public class FhirTrackerReader {
     }
   }
 
-  /** Runs {@code operation} in the active or else the operation transaction, rethrowing as is. */
-  private <T> T inOperationTransaction(Supplier<T> operation) {
+  private <T> T inOperationTransaction(Supplier<T> operation, OperationScope scope) {
     if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      boundNetworkTimeout(scope, false);
       return operation.get();
     }
     AtomicReference<Exception> failure = new AtomicReference<>();
     try {
       return operationTransaction.execute(
           status -> {
+            boundNetworkTimeout(scope, status.isNewTransaction());
             try {
               return operation.get();
             } catch (Exception e) {
@@ -217,13 +251,54 @@ public class FhirTrackerReader {
               throw e;
             }
           });
-    } catch (UndeclaredThrowableException e) {
-      Throwable undeclared = e.getUndeclaredThrowable();
-      if (undeclared != null && undeclared == failure.get()) {
-        throw rethrow(undeclared);
+    } catch (RuntimeException e) {
+      Exception own = failure.get();
+      if (own == null || own == e) {
+        throw e;
       }
-      throw e;
+      if (!(e instanceof UndeclaredThrowableException undeclared
+          && undeclared.getUndeclaredThrowable() == own)) {
+        own.addSuppressed(e);
+      }
+      throw rethrow(own);
     }
+  }
+
+  private void boundNetworkTimeout(OperationScope scope, boolean newTransaction) {
+    Deadline deadline = DeadlineHolder.get();
+    if (dataSource == null
+        || deadline == null
+        || !(TransactionSynchronizationManager.getResource(dataSource)
+            instanceof ConnectionHolder holder)
+        || holder.getConnectionHandle() == null) {
+      return;
+    }
+    scope.bound(holder.getConnection(), deadline);
+    if (newTransaction
+        && scope.isBound()
+        && TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(scope);
+    }
+  }
+
+  private static int networkTimeout(Deadline deadline, int previous) {
+    long bound = Math.max(deadline.remaining().toMillis(), 0) + NETWORK_TIMEOUT_GRACE.toMillis();
+    long ceiling = previous > 0 ? previous : Integer.MAX_VALUE;
+    return (int) Math.max(1, Math.min(ceiling, bound));
+  }
+
+  private static void setNetworkTimeout(Connection connection, int millis) {
+    try {
+      connection.setNetworkTimeout(Runnable::run, millis);
+    } catch (SQLException e) {
+      networkTimeoutUnchanged(e);
+    }
+  }
+
+  private static void networkTimeoutUnchanged(SQLException exception) {
+    log.debug(
+        "The network timeout of a FHIR operation connection is unchanged ({})",
+        exceptionName(exception));
   }
 
   @SneakyThrows
@@ -231,23 +306,23 @@ public class FhirTrackerReader {
     throw throwable;
   }
 
-  /** {@code exception}, or the held deadline's timeout when it is caused by a query timeout. */
   private static RuntimeException asDeadlineExceeded(RuntimeException exception) {
     Deadline deadline = DeadlineHolder.get();
     if (deadline == null
         || exception instanceof DeadlineExceededException
-        || !isOrIsCausedByQueryTimeout(exception)) {
+        || !(isOrIsCausedBy(exception, QUERY_TIMEOUTS)
+            || (deadline.isExpired() && isOrIsCausedBy(exception, NETWORK_TIMEOUTS)))) {
       return exception;
     }
     log.debug("A FHIR operation query timed out under its deadline ({})", exceptionName(exception));
     return new DeadlineExceededException(deadline.budget(), exception);
   }
 
-  /** Whether {@code exception} or a cause in its chain is a query timeout; stops at a cycle. */
-  private static boolean isOrIsCausedByQueryTimeout(Throwable exception) {
+  private static boolean isOrIsCausedBy(
+      Throwable exception, List<Class<? extends Exception>> types) {
     Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
     for (Throwable t = exception; t != null && visited.add(t); t = t.getCause()) {
-      for (Class<? extends RuntimeException> type : QUERY_TIMEOUTS) {
+      for (Class<? extends Exception> type : types) {
         if (type.isInstance(t)) {
           return true;
         }
@@ -265,7 +340,6 @@ public class FhirTrackerReader {
     return template;
   }
 
-  /** Whether {@code message} reports a selector as missing, as it does for unreadable metadata. */
   private static boolean hidesSelector(@CheckForNull String message, UID... selectors) {
     return message != null
         && message.contains(SELECTOR_NOT_FOUND)
@@ -287,8 +361,7 @@ public class FhirTrackerReader {
         return FhirApiException.invalidParameter(entry.getValue(), ATTRIBUTE_VALUE_REJECTED);
       }
     }
-    return unusableMapping(
-        FhirResourceType.PATIENT, exception, params.getProgram(), params.getTrackedEntityType());
+    return unusableMapping(PATIENT, exception, params.getProgram(), params.getTrackedEntityType());
   }
 
   private static FhirApiException translateIllegalQuery(
@@ -326,8 +399,7 @@ public class FhirTrackerReader {
       return FhirApiException.invalidParameter(
           named, names.isEmpty() ? required + NO_ATTRIBUTE_PARAMETERS : required);
     }
-    return unusableMapping(
-        FhirResourceType.PATIENT, exception, params.getProgram(), params.getTrackedEntityType());
+    return unusableMapping(PATIENT, exception, params.getProgram(), params.getTrackedEntityType());
   }
 
   private static FhirApiException unusableMapping(
@@ -366,6 +438,47 @@ public class FhirTrackerReader {
       }
     }
     return false;
+  }
+
+  private static final class OperationScope implements TransactionSynchronization {
+    @CheckForNull private Connection connection;
+    private int previous;
+
+    void bound(Connection target, Deadline deadline) {
+      try {
+        int current = target.getNetworkTimeout();
+        target.setNetworkTimeout(Runnable::run, networkTimeout(deadline, current));
+        connection = target;
+        previous = current;
+      } catch (SQLException e) {
+        networkTimeoutUnchanged(e);
+      }
+    }
+
+    boolean isBound() {
+      return connection != null;
+    }
+
+    void refresh() {
+      Deadline deadline = DeadlineHolder.get();
+      if (connection != null && deadline != null) {
+        setNetworkTimeout(connection, networkTimeout(deadline, previous));
+      }
+    }
+
+    void restore() {
+      Connection bounded = connection;
+      connection = null;
+      if (bounded != null) {
+        setNetworkTimeout(bounded, previous);
+      }
+    }
+
+    /** Restores the previous network timeout after commit or rollback. */
+    @Override
+    public void afterCompletion(int status) {
+      restore();
+    }
   }
 
   /** The FHIR search parameters behind the attribute filters of one tracked entity request. */

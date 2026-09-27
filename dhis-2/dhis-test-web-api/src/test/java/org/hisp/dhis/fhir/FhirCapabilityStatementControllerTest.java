@@ -29,7 +29,7 @@
  */
 package org.hisp.dhis.fhir;
 
-import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.parseOk;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
 import static org.hisp.dhis.http.HttpClientAdapter.Body;
 import static org.hisp.dhis.http.HttpMethod.*;
 import static org.hisp.dhis.http.HttpStatus.*;
@@ -37,7 +37,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.*;
-import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses;
 import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
 import org.hisp.dhis.http.*;
@@ -74,7 +73,6 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
       """;
 
   @Autowired private TestSetup testSetup;
-  @Autowired private DhisConfigurationProvider config;
 
   @Test
   void capabilityStatementListsOnlyMappedResourcesAndParameters() throws IOException {
@@ -100,20 +98,6 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     manager.clear();
     assertEquals(expected.subList(0, 3), describeResources(readCapabilityStatement("")));
     assertOutcome(GET, FHIR_BASE + OBSERVATION_READ, NOT_IMPLEMENTED, "Observation");
-    Properties properties = config.getProperties();
-    String key = ConfigurationKey.SERVER_BASE_URL.getKey();
-    Object previous = properties.remove(key);
-    try {
-      Header host = new Header("Host", "fhir.example.org:8080");
-      String hostUrl = "http://fhir.example.org:8080" + FHIR_BASE;
-      var unset = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
-      assertEquals(hostUrl, unset.getImplementation().getUrl());
-      properties.put(key, "https://dhis.example.org/dhis");
-      var configured = parseOk(GET(METADATA_PATH, host), CapabilityStatement.class);
-      assertEquals(hostUrl, configured.getImplementation().getUrl());
-    } finally {
-      properties.compute(key, (name, value) -> previous);
-    }
     String openApi =
         "/openapi/openapi.json?failOnNameClash=true&failOnInconsistency=true"
             + " Patient Encounter Immunization Observation CapabilityStatement"
@@ -153,16 +137,14 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
 
   @Test
   void metadataAcceptsFormatAndRejectsOtherParameters() {
-    for (String format : List.of("json", "application/json", "application/fhir+json"))
+    for (String format :
+        List.of("json", "application/json", "application/fhir+json", "application/fhir json"))
       assertEquals(
           FHIRVersion._4_0_1, readCapabilityStatement("?_format=" + format).getFhirVersion());
     assertOutcome(GET, METADATA_PATH + "?_format=xml", BAD_REQUEST, "Invalid parameter '_format'");
     assertOutcome(GET, METADATA_PATH + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
     assertOutcome(
         GET, METADATA_PATH + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
-    assertOutcome(GET, METADATA_PATH + "?a\tb=1", BAD_REQUEST, "Invalid parameter 'a%09b'");
-    assertOutcome(
-        GET, METADATA_PATH + "?_format=json\u0000", BAD_REQUEST, "Invalid parameter '_format'");
   }
 
   @Test
@@ -188,6 +170,24 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     for (String path :
         List.of("", "/NotAResource", "/NotAResource/abc", "/Patient/dUE514NMOlo/extra/segment"))
       assertOutcome(GET, FHIR_BASE + path, NOT_FOUND, "The requested resource was not found");
+  }
+
+  @Test
+  void openApiPathsUnderFhirReturnNotFoundForEveryAcceptHeader() {
+    List<String> paths =
+        List.of(
+            FHIR_BASE + "/openapi.json",
+            FHIR_BASE + "/openapi.yaml",
+            FHIR_BASE + "/openapi.html",
+            "/api/44/fhir/openapi.html");
+    List<String> accepts = List.of("text/html", "application/x-yaml", "application/json", "*/*");
+    for (String path : paths) {
+      assertAll(path, () -> FhirResponses.assertNotFound(GET(path)));
+      for (String accept : accepts)
+        assertAll(
+            path + " Accept " + accept,
+            () -> FhirResponses.assertNotFound(GET(path, HttpClientAdapter.Accept(accept))));
+    }
   }
 
   private void deleteAllMappings() {

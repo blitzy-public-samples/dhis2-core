@@ -51,11 +51,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.UrlPathHelper;
 
-/**
- * Answers FHIR requests with 404, the platform security headers and a same-origin frame policy
- * while {@code fhir.api.enabled} is off, before authentication. At the handler, answers 404 while
- * off, and with the platform authentication entry point's response while on without a user.
- */
+/** Answers FHIR requests with 404 while {@code fhir.api.enabled} is off, before authentication. */
 @Configuration
 public class FhirApiDisabledSecurityConfig {
   static final Pattern FHIR_PATH = Pattern.compile("^/api/(?:\\d+/)?fhir(?:/.*)?$");

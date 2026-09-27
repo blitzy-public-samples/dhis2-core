@@ -33,6 +33,7 @@ import static org.hisp.dhis.fhir.web.FhirCapabilityStatementController.FhirOpenA
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.service.FhirPatientService;
@@ -44,15 +45,10 @@ import org.springframework.web.bind.annotation.*;
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir/Patient")
+@RequiredArgsConstructor
 public class FhirPatientController {
   private final FhirPatientService patientService;
   private final FhirResourceSerializer serializer;
-
-  public FhirPatientController(
-      FhirPatientService patientService, FhirResourceSerializer serializer) {
-    this.patientService = patientService;
-    this.serializer = serializer;
-  }
 
   @OpenApi.Response(value = ObjectNode.class, mediaTypes = FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)

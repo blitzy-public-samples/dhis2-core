@@ -30,19 +30,17 @@
 package org.hisp.dhis.fhir.search;
 
 import java.util.*;
+import java.util.Objects;
 import javax.annotation.*;
 import lombok.RequiredArgsConstructor;
-import org.hisp.dhis.common.QueryFilter;
-import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.common.UID;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.FhirLogicalId;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
 import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.FhirSearchOrigin;
-import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
-import org.hisp.dhis.tracker.export.fieldfiltering.FieldsParser;
+import org.hisp.dhis.tracker.export.fieldfiltering.*;
 import org.hisp.dhis.webapi.controller.tracker.export.enrollment.EnrollmentRequestParams;
 import org.hisp.dhis.webapi.controller.tracker.export.trackedentity.TrackedEntityRequestParams;
 import org.springframework.stereotype.Component;
@@ -63,12 +61,7 @@ public class FhirSearchTranslator {
   private static final int PATIENT_READ_PAGE_SIZE = 1;
   private final FhirSearchParameters parameters;
 
-  /**
-   * Translates a Patient search, filtering on the {@link FhirResourceMappingValidator#genderFold}
-   * of each mapped gender value; a rejected filter throws {@link FhirApiException}, and a requested
-   * blank gender key, or several requested gender values one holding {@code ;}, throws {@link
-   * IllegalArgumentException}.
-   */
+  /** Translates a Patient search; throws {@link FhirApiException} for a rejected filter. */
   @Nonnull
   public TranslatedSearch toTrackedEntityParams(
       @Nonnull ParsedSearch parsed, @Nonnull ResolvedMapping mapping) {
@@ -295,16 +288,14 @@ public class FhirSearchTranslator {
   }
 
   private static boolean matchesAnyToken(List<Token> tokens, @CheckForNull FhirFieldMapping entry) {
-    if (entry == null || entry.getCode() == null) {
-      return false;
-    }
-    for (Token token : tokens) {
-      if (token.value().equals(entry.getCode())
-          && (token.system() == null || systemMatches(token.system(), entry.getSystem()))) {
-        return true;
-      }
-    }
-    return false;
+    return entry != null
+        && entry.getCode() != null
+        && tokens.stream()
+            .anyMatch(
+                token ->
+                    token.value().equals(entry.getCode())
+                        && (token.system() == null
+                            || systemMatches(token.system(), entry.getSystem())));
   }
 
   private static boolean systemMatches(String system, @CheckForNull String entrySystem) {
@@ -314,14 +305,9 @@ public class FhirSearchTranslator {
     return system.equals(entrySystem);
   }
 
-  /** A Tracker attribute filter, written {@code {teaUid}:{OPERATOR}:{escaped value}}. */
   private record AttributeFilter(String teaUid, QueryOperator operator, String value) {
     String toFilterString() {
-      return teaUid
-          + FILTER_SEGMENT_SEPARATOR
-          + operator.name()
-          + FILTER_SEGMENT_SEPARATOR
-          + escape(value);
+      return String.join(FILTER_SEGMENT_SEPARATOR, teaUid, operator.name(), escape(value));
     }
   }
 

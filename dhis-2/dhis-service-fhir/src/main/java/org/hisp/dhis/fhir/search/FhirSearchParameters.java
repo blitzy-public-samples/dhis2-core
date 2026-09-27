@@ -33,19 +33,17 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.*;
 import javax.annotation.CheckForNull;
-import lombok.RequiredArgsConstructor;
-import org.hisp.dhis.common.QueryFilter;
-import org.hisp.dhis.common.QueryOperator;
-import org.hisp.dhis.common.UID;
-import org.hisp.dhis.common.ValueType;
+import lombok.*;
+import lombok.experimental.Accessors;
+import org.hisp.dhis.common.*;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.FhirLogicalId;
 import org.hisp.dhis.fhir.mapping.*;
@@ -55,19 +53,7 @@ import org.hl7.fhir.r4.model.Enumerations;
 import org.springframework.security.web.firewall.RequestRejectedException;
 import org.springframework.stereotype.Component;
 
-/**
- * Parses and validates FHIR query parameters; each rejection is a 400 naming one parameter.
- *
- * <p>Search parameter values use FHIR search escaping: {@code \,}, {@code \|}, {@code \$} and
- * {@code \\} stand for the character after the backslash, and any other backslash is literal. A
- * value is split at its unescaped commas, into the OR list of {@code _id}, {@code gender} or {@code
- * code} (any other parameter rejects an unescaped comma), and a token at its unescaped {@code |};
- * each part is unescaped after splitting. {@code _format}, {@code _count} and {@code _page} are
- * read literally. A value holding a NUL character is rejected. A query the container or the
- * firewall cannot decode is rejected naming its first undecodable, unsupported or repeated
- * parameter. Diagnostics cite names with ISO control characters percent-encoded, for example {@code
- * fam%0Aily}.
- */
+/** Parses and validates FHIR query parameters; each rejection is a 400 naming one parameter. */
 @Component
 @RequiredArgsConstructor
 public class FhirSearchParameters {
@@ -89,10 +75,11 @@ public class FhirSearchParameters {
       Set.of("json", "application/json", "application/fhir+json");
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
 
-  /** The largest Patient page size; a larger valid {@code _count} pages by this size. */
   private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
 
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
+  private static final String FHIR_JSON_FORMAT = "application/fhir+json";
+  private static final String FHIR_JSON_FORM_DECODED = "application/fhir json";
   private static final char OR_SEPARATOR = ',';
   private static final char TOKEN_SEPARATOR = '|';
   private static final char ESCAPE = '\\';
@@ -105,7 +92,10 @@ public class FhirSearchParameters {
   private static final HexFormat UPPER_HEX = HexFormat.of().withUpperCase();
   private final SystemSettingsProvider settingsProvider;
 
-  /** A FHIR operation and the query parameters it accepts, in validation order. */
+  /** A FHIR operation and the query parameters it accepts, unmodifiable, in validation order. */
+  @Getter
+  @Accessors(fluent = true)
+  @RequiredArgsConstructor
   public enum Operation {
     READ(null, List.of(FORMAT)),
     EVERYTHING(null, List.of(FORMAT)),
@@ -118,24 +108,10 @@ public class FhirSearchParameters {
     IMMUNIZATION_SEARCH(FhirResourceType.IMMUNIZATION, List.of(PATIENT, ID, COUNT, PAGE, FORMAT)),
     OBSERVATION_SEARCH(
         FhirResourceType.OBSERVATION, List.of(PATIENT, SUBJECT, ID, CODE, COUNT, PAGE, FORMAT));
+
     @CheckForNull private final FhirResourceType resourceType;
+
     private final List<String> allowed;
-
-    Operation(@CheckForNull FhirResourceType resourceType, List<String> allowed) {
-      this.resourceType = resourceType;
-      this.allowed = allowed;
-    }
-
-    /** Returns the accepted parameter names, unmodifiable, in validation order. */
-    public List<String> allowed() {
-      return allowed;
-    }
-
-    /** Returns the searched resource type; {@code null} for read, everything and metadata. */
-    @CheckForNull
-    public FhirResourceType resourceType() {
-      return resourceType;
-    }
 
     public boolean isSearch() {
       return resourceType != null;
@@ -153,6 +129,9 @@ public class FhirSearchParameters {
   }
 
   /** The attribute-backed Patient search parameters, in Tracker filter build order. */
+  @Getter
+  @Accessors(fluent = true)
+  @RequiredArgsConstructor
   public enum PatientParameter {
     IDENTIFIER(
         FhirSearchParameters.IDENTIFIER, FhirTargetField.PATIENT_IDENTIFIER, QueryOperator.EQ),
@@ -162,32 +141,11 @@ public class FhirSearchParameters {
     GENDER(FhirSearchParameters.GENDER, FhirTargetField.PATIENT_GENDER, QueryOperator.EQ);
     private final String parameter;
     private final FhirTargetField target;
+
     private final QueryOperator defaultOperator;
-
-    PatientParameter(String parameter, FhirTargetField target, QueryOperator defaultOperator) {
-      this.parameter = parameter;
-      this.target = target;
-      this.defaultOperator = defaultOperator;
-    }
-
-    public String parameter() {
-      return parameter;
-    }
-
-    public FhirTargetField target() {
-      return target;
-    }
-
-    /** Returns the default Tracker operator; {@link DateCriterion} holds a birthdate prefix. */
-    public QueryOperator defaultOperator() {
-      return defaultOperator;
-    }
   }
 
-  /**
-   * A FHIR token split at its only unescaped {@code |}, both parts unescaped; {@code system} is
-   * {@code null} without one.
-   */
+  /** A FHIR token's unescaped parts; {@code system} is {@code null} when it has no {@code |}. */
   public record Token(@CheckForNull String system, String value) {
     public Token {
       Objects.requireNonNull(value, "value");
@@ -297,13 +255,6 @@ public class FhirSearchParameters {
     parse(operation, request, null);
   }
 
-  /**
-   * Reads the query as one value per allowed name. When the container or the firewall cannot
-   * provide the parameters (undecodable percent-encoding or UTF-8, or a rejected name), the raw
-   * query string is decoded pair by pair and the first pair with an undecodable name, an
-   * unsupported name, an undecodable value or a repeated name is rejected; without such a pair the
-   * original exception is rethrown.
-   */
   private static Map<String, String> readQuery(Operation operation, HttpServletRequest request) {
     Map<String, String> query = new LinkedHashMap<>();
     Map<String, String[]> parameterMap;
@@ -367,12 +318,6 @@ public class FhirSearchParameters {
             : "is not a supported parameter");
   }
 
-  /**
-   * Form-decodes one query-string component strictly: {@code +} is a space, every {@code %} must
-   * start two hexadecimal digits, and the bytes must be valid UTF-8.
-   *
-   * @return the decoded text, or {@code null} when the component cannot be decoded
-   */
   @CheckForNull
   private static String decodeQueryComponent(String raw) {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream(raw.length());
@@ -395,8 +340,6 @@ public class FhirSearchParameters {
     try {
       return StandardCharsets.UTF_8
           .newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
           .decode(ByteBuffer.wrap(bytes.toByteArray()))
           .toString();
     } catch (CharacterCodingException e) {
@@ -404,10 +347,6 @@ public class FhirSearchParameters {
     }
   }
 
-  /**
-   * Returns a parameter name for diagnostics, each ISO control character replaced by its
-   * percent-encoded UTF-8 bytes in upper-case hexadecimal, for example {@code fam%0Aily}.
-   */
   private static String display(String name) {
     StringBuilder text = new StringBuilder(name.length());
     for (char c : name.toCharArray()) {
@@ -439,7 +378,7 @@ public class FhirSearchParameters {
     List<String> elements = segments.stream().map(FhirSearchParameters::unescape).toList();
     switch (name) {
       case FORMAT -> {
-        if (!FORMATS.contains(value)) {
+        if (!FORMATS.contains(FHIR_JSON_FORM_DECODED.equals(value) ? FHIR_JSON_FORMAT : value)) {
           throw FhirApiException.invalidParameter(
               FORMAT, "must be json, application/json or application/fhir+json");
         }
@@ -483,24 +422,18 @@ public class FhirSearchParameters {
     }
   }
 
-  /** Splits a value at its unescaped commas; only an OR parameter may have several segments. */
   private static List<String> elements(String name, String value) {
     List<String> segments = splitUnescaped(value, OR_SEPARATOR);
     if (OR_PARAMETERS.contains(name)) {
       if (segments.stream().anyMatch(String::isBlank)) {
         throw FhirApiException.invalidParameter(name, "must not contain empty values");
       }
-      return segments;
-    }
-    if (segments.size() > 1) {
+    } else if (segments.size() > 1) {
       throw FhirApiException.invalidParameter(name, "does not support multiple values");
     }
     return segments;
   }
 
-  /**
-   * Splits {@code value} at each {@code separator} not escaped by a backslash; parts stay escaped.
-   */
   private static List<String> splitUnescaped(String value, char separator) {
     List<String> parts = new ArrayList<>();
     int start = 0;
@@ -516,9 +449,6 @@ public class FhirSearchParameters {
     return parts;
   }
 
-  /**
-   * Replaces each FHIR escape {@code \,}, {@code \|}, {@code \$} and {@code \\} by its character.
-   */
   private static String unescape(String value) {
     StringBuilder text = new StringBuilder(value.length());
     for (int i = 0; i < value.length(); i++) {
@@ -539,22 +469,18 @@ public class FhirSearchParameters {
   private static void parseId(Operation operation, List<String> elements, ParseState state) {
     FhirResourceType type = operation.resourceType();
     if (type == null || !type.isEventDerived()) {
-      for (String element : elements) {
-        if (!UID.isValid(element)) {
-          throw FhirApiException.invalidParameter(ID, "must contain only UIDs");
-        }
+      if (!elements.stream().allMatch(UID::isValid)) {
+        throw FhirApiException.invalidParameter(ID, "must contain only UIDs");
       }
       state.trackedEntityIds = elements;
       return;
     }
+    String invalid = "must contain only " + type.fhirType() + " logical ids";
     List<FhirLogicalId> logicalIds = new ArrayList<>(elements.size());
     for (String element : elements) {
       logicalIds.add(
           FhirLogicalId.parse(type, element)
-              .orElseThrow(
-                  () ->
-                      FhirApiException.invalidParameter(
-                          ID, "must contain only " + type.fhirType() + " logical ids")));
+              .orElseThrow(() -> FhirApiException.invalidParameter(ID, invalid)));
     }
     state.logicalIds = logicalIds;
   }
@@ -611,11 +537,9 @@ public class FhirSearchParameters {
 
   private static List<String> genders(List<String> elements, ResolvedMapping mapping) {
     requireConfigured(PatientParameter.GENDER, mapping);
-    for (String element : elements) {
-      if (!GENDER_CODES.contains(element)) {
-        throw FhirApiException.invalidParameter(
-            GENDER, "must contain only the codes male, female, other and unknown");
-      }
+    if (!GENDER_CODES.containsAll(elements)) {
+      throw FhirApiException.invalidParameter(
+          GENDER, "must contain only the codes male, female, other and unknown");
     }
     return elements;
   }
@@ -653,7 +577,6 @@ public class FhirSearchParameters {
     throw FhirApiException.invalidParameter(name, "must be a positive integer");
   }
 
-  /** Rejects a Patient {@code _count} above a positive KeyTrackedEntityMaxLimit. */
   private void checkPatientPageSize(int count, boolean explicit) {
     SystemSettings settings = settingsProvider.getCurrentSettings();
     int limit = settings == null ? 0 : settings.getTrackedEntityMaxLimit();
@@ -719,11 +642,9 @@ public class FhirSearchParameters {
     String value = trackerValue.toLowerCase(Locale.ROOT);
     List<String> values =
         operator.isIn() ? List.of(value.split(QueryFilter.OPTION_SEP)) : List.of(value);
-    for (String element : values) {
-      if (!matchesValueType(valueType, element)) {
-        throw FhirApiException.invalidParameter(
-            parameter, "value does not match the attribute value type");
-      }
+    if (!values.stream().allMatch(element -> matchesValueType(valueType, element))) {
+      throw FhirApiException.invalidParameter(
+          parameter, "value does not match the attribute value type");
     }
   }
 

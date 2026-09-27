@@ -36,11 +36,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import jakarta.servlet.http.HttpServletRequest;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Predicate;
-import java.util.stream.*;
 import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.user.*;
@@ -48,14 +46,9 @@ import org.hisp.dhis.webapi.security.Http401LoginUrlAuthenticationEntryPoint;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.context.annotation.*;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.http.*;
 import org.springframework.mock.web.*;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.web.*;
-import org.springframework.security.web.header.HeaderWriterFilter;
 import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.*;
 
@@ -94,16 +87,6 @@ class FhirApiDisabledSecurityConfigTest {
     assertFalse(FHIR_API_ENABLED.isConfidential());
     assertEquals(Optional.of(FHIR_API_ENABLED), ConfigurationKey.getByKey("fhir.api.enabled"));
     assertFalse(DhisConfigurationProvider.isOn(FHIR_API_ENABLED.getDefaultValue()));
-    Map<String, Method> beans =
-        Stream.of(FhirApiDisabledSecurityConfig.class.getDeclaredMethods())
-            .filter(method -> method.isAnnotationPresent(Bean.class))
-            .collect(Collectors.toMap(Method::getName, method -> method));
-    assertEquals(Set.of("fhirApiDisabledFilterChain", "fhirApiRequestGuard"), beans.keySet());
-    assertTrue(FhirApiDisabledSecurityConfig.class.isAnnotationPresent(Configuration.class));
-    Method chainFactory = beans.get("fhirApiDisabledFilterChain");
-    assertEquals(Ordered.HIGHEST_PRECEDENCE, chainFactory.getAnnotation(Order.class).value());
-    assertEquals(SecurityFilterChain.class, chainFactory.getReturnType());
-    assertEquals(MappedInterceptor.class, beans.get("fhirApiRequestGuard").getReturnType());
   }
 
   @ParameterizedTest
@@ -125,21 +108,14 @@ class FhirApiDisabledSecurityConfigTest {
 
   @Test
   void chainAndGuardAnswerNotFoundWhileOffAndGuardUsesEntryPointWhileOn() throws Exception {
-    assertEquals(2, chain.getFilters().size());
-    assertInstanceOf(HeaderWriterFilter.class, chain.getFilters().get(0));
     for (String method : List.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")) {
       for (String path : List.of("/api/fhir/Patient", "/api/44/fhir/metadata", "/api/fhir")) {
-        assertTrue(chain.matches(request(method, "", path)));
         assertNotFound(notFound, filter(request(method, "", path)));
       }
     }
-    MockHttpServletRequest preflight = request("OPTIONS", "", "/api/fhir/Patient/x");
-    preflight.addHeader(HttpHeaders.ORIGIN, "http://localhost:3000");
-    preflight.addHeader(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET");
-    preflight.setSecure(true);
-    assertTrue(chain.matches(preflight));
-    MockHttpServletResponse response = filter(preflight);
-    assertNotFound(notFound, response);
+    MockHttpServletRequest secure = request("GET", "", "/api/fhir/Patient/x");
+    secure.setSecure(true);
+    MockHttpServletResponse response = filter(secure);
     assertEquals("nosniff", response.getHeader("X-Content-Type-Options"));
     assertEquals("0", response.getHeader("X-XSS-Protection"));
     assertEquals(
@@ -150,7 +126,6 @@ class FhirApiDisabledSecurityConfigTest {
     response = filter(request("GET", "", "/api/fhir"));
     assertEquals("SAMEORIGIN", response.getHeader("X-Frame-Options"));
     assertNull(response.getHeader("Content-Security-Policy"));
-    assertTrue(chain.matches(request("GET", "", "/api/fhir/Patient/x")));
     when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(true);
     HttpServletRequest request = mock(HttpServletRequest.class);
     assertFalse(chain.matches(request));

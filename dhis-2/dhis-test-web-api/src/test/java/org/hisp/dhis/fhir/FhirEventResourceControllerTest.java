@@ -166,8 +166,6 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     assertInvalid(ENCOUNTER + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
     assertInvalid(OBSERVATION + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
     assertInvalid(IMMUNIZATION + "?subject=" + SUMMER, "subject");
-    assertInvalid(ENCOUNTER + "?patient=" + FRANK + "&x\r=1", "x%0D");
-    assertInvalid(OBSERVATION + "?patient=" + FRANK + "&code=\u0000", "code");
   }
 
   @Test

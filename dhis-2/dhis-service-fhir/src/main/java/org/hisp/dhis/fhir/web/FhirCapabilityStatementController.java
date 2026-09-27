@@ -32,6 +32,7 @@ package org.hisp.dhis.fhir.web;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.OpenApi;
 import org.hisp.dhis.fhir.FhirResourceSerializer;
 import org.hisp.dhis.fhir.service.FhirCapabilityStatementService;
@@ -42,16 +43,10 @@ import org.springframework.web.bind.annotation.*;
 @OpenApi.Document(classifiers = {"team:tracker", "purpose:data"})
 @RestController
 @RequestMapping("/api/fhir")
+@RequiredArgsConstructor
 public class FhirCapabilityStatementController {
   private final FhirCapabilityStatementService capabilityStatementService;
   private final FhirResourceSerializer serializer;
-
-  public FhirCapabilityStatementController(
-      FhirCapabilityStatementService capabilityStatementService,
-      FhirResourceSerializer serializer) {
-    this.capabilityStatementService = capabilityStatementService;
-    this.serializer = serializer;
-  }
 
   @OpenApi.Response(value = ObjectNode.class, mediaTypes = FhirOpenApi.FHIR_JSON)
   @OpenApi.Params(FhirOpenApi.FhirFormatParameter.class)
@@ -63,7 +58,6 @@ public class FhirCapabilityStatementController {
     return serializer.ok(capabilityStatementService.capabilities(request));
   }
 
-  /** OpenAPI media type and query-parameter descriptions of the FHIR controllers. */
   static final class FhirOpenApi {
     static final String FHIR_JSON = "application/fhir+json";
 
