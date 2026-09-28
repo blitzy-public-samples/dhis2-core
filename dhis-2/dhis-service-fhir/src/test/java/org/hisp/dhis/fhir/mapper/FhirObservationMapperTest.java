@@ -53,16 +53,9 @@ import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Observation.ObservationStatus;
 import org.junit.jupiter.api.Test;
 
-/** Unit tests of {@link FhirObservationMapper}. */
 class FhirObservationMapperTest {
-  private static final String TE_TYPE = "TeTypeUid01";
-  private static final String PROGRAM = "ProgramUid1";
-  private static final String STAGE = "StageUid001";
-  private static final String TE = "TrackedEnt1";
   private static final String TE_2 = "TrackedEnt2";
-  private static final String ENR = "Enrollment1";
   private static final String ENR_2 = "Enrollment2";
-  private static final String EVT = "EventUid001";
   private static final String EVT_2 = "EventUid002";
   private static final String EVT_3 = "EventUid003";
   private static final String DE_HEIGHT = "DeHeight001";
@@ -89,12 +82,12 @@ class FhirObservationMapperTest {
     var types = Map.of(DE_HEIGHT, NUMBER, DE_WEIGHT, NUMBER, DE_MISSING, NUMBER);
     ResolvedMapping mapping = observationMapping(fields, types);
     DataValue heightValue = dataValue(DE_HEIGHT, "172.5");
-    DataValue weightValue = dataValue(DE_WEIGHT, "68");
     DataValue unmapped = dataValue("DeUnmapped1", "unmapped value");
-    Event event = stageEvent(EVT, EventStatus.COMPLETED, heightValue, weightValue, unmapped);
+    Event event = stageEvent(EVT, COMPLETED, heightValue, dataValue(DE_WEIGHT, "68"), unmapped);
     var obs = mapper.map(enrollment(ENR, TE, PROGRAM, event), event, mapping, false);
     List<String> ids = obs.stream().map(Observation::getIdPart).toList();
-    assertEquals(List.of(id(ENR, EVT, DE_HEIGHT), id(ENR, EVT, DE_WEIGHT)), ids);
+    String prefix = ENR + "-" + EVT + "-";
+    assertEquals(List.of(prefix + DE_HEIGHT, prefix + DE_WEIGHT), ids);
     assertCoding(obs.get(0), LOINC_SYSTEM, LOINC_BODY_HEIGHT_CODE, LOINC_BODY_HEIGHT_DISPLAY);
     assertQuantity(obs.get(0).getValue(), "172.5", BODY_HEIGHT_UNIT);
     assertCoding(obs.get(1), LOINC_SYSTEM, LOINC_BODY_WEIGHT_CODE, LOINC_BODY_WEIGHT_DISPLAY);
@@ -155,13 +148,11 @@ class FhirObservationMapperTest {
 
   @Test
   void statusTranslation() {
-    Map<EventStatus, ObservationStatus> expected =
-        new HashMap<>(Map.of(COMPLETED, FINAL, ACTIVE, PRELIMINARY, VISITED, PRELIMINARY));
-    expected.putAll(Map.of(SCHEDULE, REGISTERED, OVERDUE, REGISTERED, SKIPPED, CANCELLED));
+    var expected = new HashMap<>(Map.of(COMPLETED, FINAL, ACTIVE, PRELIMINARY, SKIPPED, CANCELLED));
+    expected.putAll(Map.of(VISITED, PRELIMINARY, SCHEDULE, REGISTERED, OVERDUE, REGISTERED));
     Map<EventStatus, ObservationStatus> actual = new EnumMap<>(EventStatus.class);
-    for (EventStatus status : EventStatus.values()) {
-      actual.put(status, single(status, OCCURRED, UPDATED).getStatus());
-    }
+    Arrays.stream(EventStatus.values())
+        .forEach(status -> actual.put(status, single(status, OCCURRED, UPDATED).getStatus()));
     assertEquals(expected, actual);
     assertEquals(ObservationStatus.UNKNOWN, single(null, OCCURRED, UPDATED).getStatus());
   }
@@ -172,20 +163,19 @@ class FhirObservationMapperTest {
     ResolvedMapping empty = observationMapping(entries(), Map.of());
     assertTrue(mapper.map(enrollment(ENR, TE, PROGRAM, event), event, empty, true).isEmpty());
     Observation undated = single(EventStatus.COMPLETED, null, null);
-    assertEquals(id(ENR, EVT, DE_HEIGHT), undated.getIdPart());
+    assertEquals(ENR + "-" + EVT + "-" + DE_HEIGHT, undated.getIdPart());
     assertFalse(undated.hasEffective());
     assertFalse(undated.hasMeta());
   }
 
   @Test
   void idsAndFullUrlsAreUniqueWithinBundle() {
-    List<Observation> observations = fullObservations();
     List<String> expected = new ArrayList<>();
     for (String source : List.of(ENR + "-" + EVT, ENR + "-" + EVT_2, ENR_2 + "-" + EVT_3)) {
       List.of(DE_HEIGHT, DE_BOOLEAN, DE_TEXT).forEach(de -> expected.add(source + "-" + de));
     }
     Bundle bundle = new Bundle().setType(Bundle.BundleType.SEARCHSET);
-    for (Observation observation : observations) {
+    for (Observation observation : fullObservations()) {
       String id = observation.getIdPart();
       var entry = bundle.addEntry().setFullUrl(FULL_URL_BASE + id).setResource(observation);
       entry.getSearch().setMode(Bundle.SearchEntryMode.MATCH);
@@ -198,9 +188,7 @@ class FhirObservationMapperTest {
 
   @Test
   void outputIsValidR4() {
-    for (Observation observation : fullObservations()) {
-      FhirR4Validation.assertValid(observation);
-    }
+    fullObservations().forEach(FhirR4Validation::assertValid);
   }
 
   private List<Observation> fullObservations() {
@@ -208,17 +196,13 @@ class FhirObservationMapperTest {
     Event second = fullEvent(EVT_2, EventStatus.ACTIVE);
     Event other = fullEvent(EVT_3, null);
     Enrollment enrollment = enrollment(ENR, TE, PROGRAM, first, second);
-    ResolvedMapping mapping = fullMapping();
+    var fields = entries(height(), coded(DE_BOOLEAN, "smoker"), coded(DE_TEXT, "note"));
+    var types = Map.of(DE_HEIGHT, NUMBER, DE_BOOLEAN, BOOLEAN, DE_TEXT, TEXT);
+    ResolvedMapping mapping = observationMapping(fields, types);
     List<Observation> observations = new ArrayList<>(mapper.map(enrollment, first, mapping, true));
     observations.addAll(mapper.map(enrollment, second, mapping, true));
     observations.addAll(mapper.map(enrollment(ENR_2, TE_2, PROGRAM, other), other, mapping, true));
     return observations;
-  }
-
-  private static ResolvedMapping fullMapping() {
-    return observationMapping(
-        entries(height(), coded(DE_BOOLEAN, "smoker"), coded(DE_TEXT, "note")),
-        Map.of(DE_HEIGHT, NUMBER, DE_BOOLEAN, BOOLEAN, DE_TEXT, TEXT));
   }
 
   private static Event fullEvent(String uid, EventStatus status) {
@@ -247,10 +231,6 @@ class FhirObservationMapperTest {
   private static Entry coded(String dataElement, String code) {
     Entry entry = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement).system(TEST_SYSTEM);
     return entry.code(code).display("Test " + code);
-  }
-
-  private static String id(String enrollment, String event, String dataElement) {
-    return enrollment + "-" + event + "-" + dataElement;
   }
 
   private Observation single(EventStatus status, Instant occurredAt, Instant updatedAt) {

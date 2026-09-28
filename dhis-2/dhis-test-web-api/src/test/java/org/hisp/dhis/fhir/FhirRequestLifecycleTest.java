@@ -60,20 +60,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockFilterConfig;
-import org.springframework.security.core.context.*;
+import org.springframework.security.concurrent.DelegatingSecurityContextCallable;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-/**
- * Tests FHIR requests with and without the open-EntityManager-in-view filter on a small pool whose
- * connections pass through a {@link FreezableProxy} to the database.
- */
+/** Tests FHIR requests with and without open-EntityManager-in-view on a small, proxied pool. */
 @ContextConfiguration(classes = FhirRequestLifecycleTest.SmallPoolConfig.class)
 class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   private static final int POOL_SIZE = 10;
-  private static final String JDBC = "jdbc:";
   private static final String PATIENT_READ = "/api/fhir/Patient/" + FRANK;
   private static final String EVERYTHING = PATIENT_READ + "/$everything";
   private static final String OBSERVATION_SEARCH = "/api/fhir/Observation?patient=" + FRANK;
@@ -87,6 +83,7 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   @Autowired private ApiVersionFilter apiVersionFilter;
   @Autowired private DhisConfigurationProvider config;
   @Autowired private FreezableProxy databaseProxy;
+
   private ConditionalOpenEntityManagerInViewFilter openInViewFilter;
   private MockMvc withFilter;
   private MockMvc withoutFilter;
@@ -101,28 +98,24 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
     public DhisConfigurationProvider dhisConfigurationProvider(FreezableProxy databaseProxy) {
       PostgresDhisConfigurationProvider provider = new PostgresDhisConfigurationProvider(null);
       String url = provider.getProperty(ConfigurationKey.CONNECTION_URL);
+      String database = "//" + databaseUri(provider).getRawAuthority() + "/";
       String proxied = "//127.0.0.1:" + databaseProxy.port() + "/";
       Properties override = new Properties();
       override.put(ConfigurationKey.FHIR_API_ENABLED.getKey(), "true");
       override.put(ConfigurationKey.CONNECTION_POOL_MAX_SIZE.getKey(), String.valueOf(POOL_SIZE));
       override.put(ConfigurationKey.CONNECTION_POOL_TIMEOUT.getKey(), "20000");
-      override.put(
-          ConfigurationKey.CONNECTION_URL.getKey(),
-          url.replace("//" + databaseUri(provider).getRawAuthority() + "/", proxied));
+      override.put(ConfigurationKey.CONNECTION_URL.getKey(), url.replace(database, proxied));
       provider.addProperties(override);
       return provider;
     }
 
     private static URI databaseUri(DhisConfigurationProvider provider) {
       String url = provider.getProperty(ConfigurationKey.CONNECTION_URL);
-      return URI.create(url.substring(JDBC.length()));
+      return URI.create(url.substring("jdbc:".length()));
     }
   }
 
-  /**
-   * Forwards every accepted TCP connection to one upstream address on daemon threads. While frozen
-   * it still accepts and connects new sockets but forwards no byte in either direction.
-   */
+  /** Forwards TCP connections to one upstream; while frozen it accepts but forwards no byte. */
   static final class FreezableProxy implements AutoCloseable {
     private final ServerSocket server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
     private final ExecutorService threads = Executors.newCachedThreadPool(FreezableProxy::daemon);
@@ -158,15 +151,14 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
     }
 
     private Void connect(Socket client) throws IOException {
-      Socket target;
       try {
-        target = new Socket(upstream.getHost(), upstream.getPort());
+        Socket target = new Socket(upstream.getHost(), upstream.getPort());
+        threads.submit(() -> pump(client, target));
+        threads.submit(() -> pump(target, client));
       } catch (IOException e) {
         client.close();
         throw e;
       }
-      threads.submit(() -> pump(client, target));
-      threads.submit(() -> pump(target, client));
       return null;
     }
 
@@ -177,16 +169,14 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
         OutputStream out = to.getOutputStream();
         byte[] buffer = new byte[8192];
         for (int read = in.read(buffer); read >= 0; read = in.read(buffer)) {
-          awaitThaw();
+          synchronized (this) {
+            while (frozen) wait();
+          }
           out.write(buffer, 0, read);
           out.flush();
         }
       }
       return null;
-    }
-
-    private synchronized void awaitThaw() throws InterruptedException {
-      while (frozen) wait();
     }
 
     private static Thread daemon(Runnable runnable) {
@@ -249,8 +239,7 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
         assertConnectionsReturnTo(baseline, path);
       }
     }
-    List<String> paths = new ArrayList<>(FHIR_REQUESTS);
-    paths.addAll(FHIR_REQUESTS);
+    var paths = Collections.nCopies(2, FHIR_REQUESTS).stream().flatMap(List::stream).toList();
     int baseline = activeConnections();
     assertEquals(POOL_SIZE, hikari("getMaximumPoolSize"));
     List<Connection> held = new ArrayList<>();
@@ -361,24 +350,14 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   }
 
   private Future<HttpResponse> submit(ExecutorService executor, Callable<HttpResponse> call) {
-    SecurityContext context = SecurityContextHolder.getContext();
-    return executor.submit(
-        () -> {
-          SecurityContextHolder.setContext(context);
-          try {
-            return call.call();
-          } finally {
-            SecurityContextHolder.clearContext();
-          }
-        });
+    return executor.submit(new DelegatingSecurityContextCallable<>(call));
   }
 
   private static boolean waitsOnMappingLock(Statement statement) throws SQLException {
     String waiting =
-        "select count(*) from pg_locks"
-            + " where relation = 'fhirresourcemapping'::regclass and not granted";
+        "select 1 from pg_locks where relation = 'fhirresourcemapping'::regclass and not granted";
     try (ResultSet rows = statement.executeQuery(waiting)) {
-      return rows.next() && rows.getInt(1) > 0;
+      return rows.next();
     }
   }
 

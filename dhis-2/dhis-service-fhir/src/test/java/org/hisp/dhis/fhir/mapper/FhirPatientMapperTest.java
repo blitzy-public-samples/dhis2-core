@@ -47,10 +47,7 @@ import org.hisp.dhis.webapi.controller.tracker.view.Attribute;
 import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.Test;
 
-/** Unit tests of {@link FhirPatientMapper}. */
 class FhirPatientMapperTest {
-  private static final String TE_UID = "TePatient01";
-  private static final String TRACKED_ENTITY_TYPE = "TetPerson01";
   private static final String TEA_NATIONAL_ID = "TeaNationId";
   private static final String TEA_INTEGER = "TeaIntegerA";
   private static final String TEA_FAMILY = "TeaFamilyNm";
@@ -88,7 +85,7 @@ class FhirPatientMapperTest {
   @Test
   void mapsEveryPatientTarget() {
     Patient patient = mapFullPatient();
-    assertEquals(TE_UID, patient.getIdElement().getIdPart());
+    assertEquals(TE, patient.getIdElement().getIdPart());
     assertEquals(UPDATED, patient.getMeta().getLastUpdated().toInstant());
     assertEquals(
         List.of(
@@ -166,7 +163,7 @@ class FhirPatientMapperTest {
   }
 
   private Patient map(ResolvedMapping mapping, Attribute... attributes) {
-    return mapper.map(trackedEntity(TE_UID, TRACKED_ENTITY_TYPE, UPDATED, attributes), mapping);
+    return mapper.map(trackedEntity(TE, TE_TYPE, UPDATED, attributes), mapping);
   }
 
   private Patient mapFullPatient() {
@@ -192,7 +189,7 @@ class FhirPatientMapperTest {
   }
 
   private Patient mapEmptyMappingPatient() {
-    var empty = resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, List.of(), Map.of());
+    var empty = resolved(PATIENT, TE_TYPE, null, null, List.of(), Map.of());
     return map(empty, EMPTY_MAPPING_VALUES.toArray(Attribute[]::new));
   }
 
@@ -208,7 +205,7 @@ class FhirPatientMapperTest {
     List<FhirFieldMapping> built = entries(fields);
     var types = new LinkedHashMap<String, ValueType>();
     built.forEach(e -> types.put(e.getSource(), VALUE_TYPES.getOrDefault(e.getSource(), TEXT)));
-    return resolved(PATIENT, TRACKED_ENTITY_TYPE, null, null, built, types);
+    return resolved(PATIENT, TE_TYPE, null, null, built, types);
   }
 
   private static Attribute teaValue(String tea, String value) {

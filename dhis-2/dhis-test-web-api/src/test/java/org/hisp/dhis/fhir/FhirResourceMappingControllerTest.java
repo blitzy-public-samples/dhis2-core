@@ -31,6 +31,7 @@ package org.hisp.dhis.fhir;
 
 import static java.util.stream.Collectors.*;
 import static org.hisp.dhis.feedback.ErrorCode.*;
+import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
@@ -83,15 +84,9 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
 
   private static final String ENDPOINT = FhirResourceMappingSchemaDescriptor.API_ENDPOINT;
   private static final String MAPPINGS = FhirResourceMappingSchemaDescriptor.PLURAL;
-  private static final String PERSON = "ja8NY4PW7Xm";
-  private static final String PROGRAM = "BFcipDERJnf";
-  private static final String STAGE = "NpsdDv6kKSO";
   private static final String INTEGER_ATTRIBUTE = "integerAttr";
-  private static final String FAMILY_ATTRIBUTE = "toUpdate000";
-  private static final String GIVEN_ATTRIBUTE = "dIVt4l5vIOa";
   private static final String PROGRAM_ONLY_ATTRIBUTE = "fRGt4l6yIRb";
   private static final String INTEGER_ELEMENT = "DATAEL00006";
-  private static final String IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:integer-attr";
   private static final String CODING_SYSTEM = "urn:dhis2:fhir-test:coding";
   private static final String INVALID_ID = "FhirMapBad1";
   private static final String INVALID_NAME = "FHIR invalid mapping";
@@ -99,11 +94,13 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   private static final String STORED_ID = "FhirMapPat1";
   private static final String STORED_NAME = "FHIR stored Patient";
   private static final String STORED_PATH = ENDPOINT + "/" + STORED_ID;
+  private static final String OBSERVATION_NAME = "FHIR stored Observation";
+  private static final List<String> STORED_IDS = List.of(STORED_ID, "FhirMapObs1");
   private static final List<String> ENTRY_FIELDS =
       List.of("target", "sourceType", "source", "system", "code", "display", "unit", "valueMap");
+  private static final String OTHER = FhirResourceMappingValidator.OTHER_MAPPING;
   private static final ErrorMessage DUPLICATE =
-      new ErrorMessage(
-          E5003, "resourceType", PATIENT, INVALID, FhirResourceMappingValidator.OTHER_MAPPING);
+      new ErrorMessage(E5003, "resourceType", PATIENT, INVALID, OTHER);
   private static final String RENAMED = "FHIR renamed Patient";
   private static final String RENAME_PATCH =
       "[{\"op\": \"replace\", \"path\": \"/name\", \"value\": \"" + RENAMED + "\"}]";
@@ -147,10 +144,11 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
           observation("GieVkTxp4HH", "number", "Number value", "kg"));
   private static final String STORED_PATIENT =
       withId(STORED_ID, mapping(STORED_NAME, PATIENT, PATIENT_ENTRIES));
+  private static final String HIDDEN_PATIENT = shared("--------");
   private static final String FULL_PATIENT =
       withId(STORED_ID, mapping(STORED_NAME, PATIENT, GENDER_ENTRIES));
   private static final String FULL_OBSERVATION =
-      withId("FhirMapObs1", mapping("FHIR stored Observation", OBSERVATION, OBSERVATION_ENTRIES));
+      withId("FhirMapObs1", mapping(OBSERVATION_NAME, OBSERVATION, OBSERVATION_ENTRIES));
   private static final String REFERENCED_BUNDLE =
       """
       {"trackedEntityTypes": [{"id": "FhirDelTet1", "name": "FHIR del 1", "shortName": "FHIR del 1"},
@@ -160,20 +158,17 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         "programStages": [{"id": "FhirDelStg1"}]}],
       "programStages": [{"id": "FhirDelStg1", "name": "FHIR del", "program": {"id": "FhirDelPrg1"}}]}
       """;
-
   @Autowired private TestSetup testSetup;
 
   @BeforeEach
   void importTrackerMetadata() throws IOException {
     testSetup.importMetadata();
     manager.getAllNoAcl(FhirResourceMapping.class).forEach(manager::delete);
-    manager.flush();
-    manager.clear();
+    dbmsManager.clearSession();
   }
 
   @Test
   void createReadUpdateDeleteMapping() {
-    // Marks every attribute non-unique for the rest of this test's transaction.
     manager.getAllNoAcl(Attribute.class).forEach(attribute -> attribute.setUnique(false));
     assertStatus(OK, POST("/metadata", REFERENCED_BUNDLE));
     String[] refs = {"FhirDelTet1", "FhirDelPrg1", "FhirDelStg1"};
@@ -181,11 +176,8 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     String patient = mapping("FHIR delete Patient", PATIENT, List.of(), "FhirDelTet2", null, null);
     String encounterId = assertStatus(CREATED, POST(ENDPOINT, encounter));
     String patientId = assertStatus(CREATED, POST(ENDPOINT, patient));
-    List<String> referenced =
-        List.of(
-            "/programStages/FhirDelStg1",
-            "/programs/FhirDelPrg1",
-            "/trackedEntityTypes/FhirDelTet2");
+    String types = "/trackedEntityTypes/FhirDelTet";
+    var referenced = List.of("/programStages/FhirDelStg1", "/programs/FhirDelPrg1", types + "2");
     referenced.forEach(this::assertDeleteVetoed);
     var editor = switchToNewUser("fhir-editor", "F_FHIR_RESOURCE_MAPPING_PUBLIC_ADD");
     assertStatus(OK, PATCH(ENDPOINT + "/" + patientId, RENAME_PATCH));
@@ -194,7 +186,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertDeleteVetoed(editorPath);
     assertEquals(2, mappingCount());
     for (String id : List.of(encounterId, patientId)) assertStatus(OK, DELETE(ENDPOINT + "/" + id));
-    Stream.concat(referenced.stream(), Stream.of("/trackedEntityTypes/FhirDelTet1", editorPath))
+    Stream.concat(referenced.stream(), Stream.of(types + "1", editorPath))
         .forEach(path -> assertStatus(OK, DELETE(path)));
     String created = mapping(STORED_NAME, PATIENT, GENDER_ENTRIES);
     String uid = assertStatus(CREATED, POST(ENDPOINT, created));
@@ -210,16 +202,14 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     List<String> mappings = List.of(FULL_PATIENT, FULL_OBSERVATION);
     mappings.forEach(mapping -> assertStatus(CREATED, POST(ENDPOINT, mapping)));
     JsonObject all = GET("/metadata?" + MAPPINGS + "=true").content(OK);
-    assertStatus(OK, DELETE(ENDPOINT + "/" + STORED_ID));
-    assertStatus(OK, DELETE(ENDPOINT + "/FhirMapObs1"));
+    for (String id : STORED_IDS) assertStatus(OK, DELETE(ENDPOINT + "/" + id));
     assertEquals(0, mappingCount());
     JsonMixed imported = POST("/metadata", all.toJson()).content(OK);
     JsonImportSummary report = imported.get("response", JsonImportSummary.class);
     assertEquals("OK", report.getStatus());
     assertEquals(2, report.getStats().getCreated());
     mappings.forEach(this::assertStoredAsSent);
-    for (String id : List.of(STORED_ID, "FhirMapObs1"))
-      assertStatus(OK, DELETE(ENDPOINT + "/" + id));
+    for (String id : STORED_IDS) assertStatus(OK, DELETE(ENDPOINT + "/" + id));
     String formula = STORED_PATIENT.replace(STORED_NAME, "=1+1,-2").substring(1);
     assertStatus(CREATED, POST(ENDPOINT, "{\"code\": \"\\uFEFF@A1\", " + formula));
     List<String> rows = List.of("'\uFEFF@A1,\"'=1+1,-2\"");
@@ -231,14 +221,13 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         csv(STORED_PATH + "/gist.csv?fields=name,code"));
     assertEquals(List.of("name", "\"'=1+1,-2\""), csv(STORED_PATH + "/name/gist.csv"));
     assertStatus(OK, DELETE(STORED_PATH));
-    String hidden = shared("--------");
-    for (String mapping : List.of(hidden, FULL_OBSERVATION))
+    for (String mapping : List.of(HIDDEN_PATIENT, FULL_OBSERVATION))
       assertStatus(CREATED, POST(ENDPOINT, mapping));
     JsonObject export = GET(STORED_PATH + "/metadata?dataElements=true").content(OK);
     assertEquals(List.of(MAPPINGS, "system"), export.names().stream().sorted().toList());
     JsonList<JsonObject> exported = export.getList(MAPPINGS, JsonObject.class);
     assertEquals(List.of(STORED_ID), exported.toList(m -> m.getString("id").string()));
-    JsonObject sent = JsonMixed.of(hidden);
+    JsonObject sent = JsonMixed.of(HIDDEN_PATIENT);
     assertEquals(summary(sent, MAPPING_FIELDS), summary(exported.get(0), MAPPING_FIELDS));
     assertEquals(summaries(sent), summaries(exported.get(0)));
     String disposition = GET(STORED_PATH + "/metadata?download=true").header("Content-Disposition");
@@ -250,7 +239,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     switchToAdminUser();
     assertStatus(OK, DELETE(STORED_PATH));
     assertStatus(OK, POST("/metadata", export.toJson()));
-    assertStoredAsSent(hidden);
+    assertStoredAsSent(HIDDEN_PATIENT);
   }
 
   @ParameterizedTest(name = "[{index}] {0}")
@@ -273,8 +262,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertEquals("ERROR", report.getStatus());
     Set<String> reported =
         report.getTypeReports().stream()
-            .flatMap(typeReport -> typeReport.getObjectReports().stream())
-            .flatMap(objectReport -> objectReport.getErrorReports().stream())
+            .flatMap(t -> t.getObjectReports().stream().flatMap(o -> o.getErrorReports().stream()))
             .map(error -> error.getErrorCode() + " " + error.getMessage())
             .collect(toSet());
     for (int i = 0; i < rows.size(); i++) {
@@ -293,7 +281,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     String denied = importConflict(duplicate);
     assertEquals(denied, importConflict(foreign));
     switchToAdminUser();
-    assertStatus(CREATED, POST(ENDPOINT, shared("--------")));
+    assertStatus(CREATED, POST(ENDPOINT, HIDDEN_PATIENT));
     switchToNewUser(importer);
     assertEquals(denied, importConflict(duplicate));
     assertTrue(denied.contains("\"E3000\""), denied);
@@ -325,17 +313,60 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
   }
 
   @Test
-  void conflictMessageNamesAnUnnamedMappingAndPutsEachRuleOnItsOwnLine() {
+  void nameOrCodeConflictDoesNotRevealTheHiddenHolder() {
+    String code = "FHIR-hidden";
+    assertStatus(CREATED, POST(ENDPOINT, "{'code':'" + code + "', " + HIDDEN_PATIENT.substring(1)));
+    switchToNewUser("fhir-private", "F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD");
+    assertStatus(NOT_FOUND, GET(STORED_PATH));
+    String own = "{\"sharing\": {\"public\": \"--------\"}, " + FULL_OBSERVATION.substring(1);
+    String named = own.replace(OBSERVATION_NAME, STORED_NAME);
+    String coded = "{\"code\": \"" + code + "\", " + own.substring(1);
+    String self = " [FhirMapObs1] (FhirResourceMapping)";
+    var name = new ErrorMessage(E5003, "name", STORED_NAME, STORED_NAME + self, OTHER);
+    var codeTaken = new ErrorMessage(E5003, "code", code, OBSERVATION_NAME + self, OTHER);
+    assertHiddenConflict(POST(ENDPOINT, named), name);
+    assertHiddenConflict(POST(ENDPOINT, coded), codeTaken);
+    assertStatus(CREATED, POST(ENDPOINT, own));
+    String ownPath = ENDPOINT + "/FhirMapObs1";
+    assertHiddenConflict(PUT(ownPath, named), name);
+    assertHiddenConflict(PATCH(ownPath, RENAME_PATCH.replace(RENAMED, STORED_NAME)), name);
+    String recode = "[{\"op\": \"add\", \"path\": \"/code\", \"value\": \"" + code + "\"}]";
+    assertHiddenConflict(PATCH(ownPath, recode), codeTaken);
+    String imported = importConflict(named);
+    assertTrue(imported.contains(name.getMessage()), imported);
+    assertFalse(imported.contains(STORED_ID), imported);
+    switchToNewUser("fhir-outsider");
+    String denied = importConflict(named.replace("FhirMapObs1", "FhirMapObs3"));
+    assertFalse(denied.contains(STORED_ID) || denied.contains("\"E5003\""), denied);
+    switchToAdminUser();
+    assertEquals(2, mappingCount());
+    assertStoredAsSent(FULL_OBSERVATION);
+  }
+
+  @Test
+  void blankNameIsRejectedWhateverTheRequestOptions() {
     assertStatus(CREATED, POST(ENDPOINT, STORED_PATIENT));
+    List<ErrorMessage> unnamed = List.of(new ErrorMessage(E4000, "name"));
     String broken = entry(PATIENT_IDENTIFIER, ATTRIBUTE, INTEGER_ATTRIBUTE, "urn:a\\nb");
-    String unnamed = patient(0, broken).replace("\"name\": \"" + INVALID_NAME + "\", ", "");
-    String other = FhirResourceMappingValidator.OTHER_MAPPING;
-    assertConflict(
-        POST(ENDPOINT, unnamed),
-        List.of(
-            new ErrorMessage(E4000, "name"),
-            new ErrorMessage(E4027, "urn:a b", "fieldMappings[0].system"),
-            new ErrorMessage(E5003, "resourceType", PATIENT, "(new FhirResourceMapping)", other)));
+    String nameless = patient(0, broken).replace("\"name\": \"" + INVALID_NAME + "\", ", "");
+    var system = new ErrorMessage(E4027, "urn:a b", "fieldMappings[0].system");
+    var dupe = new ErrorMessage(E5003, "resourceType", PATIENT, "(new FhirResourceMapping)", OTHER);
+    assertConflict(POST(ENDPOINT, nameless), List.of(unnamed.get(0), system, dupe));
+    String bypass = "?skipValidation=true&atomicMode=NONE";
+    String blank = FULL_OBSERVATION.replace(OBSERVATION_NAME, "\u00a0 ");
+    assertConflict(POST(ENDPOINT + bypass, blank), unnamed);
+    assertConflict(PUT(STORED_PATH + bypass, STORED_PATIENT.replace(STORED_NAME, "   ")), unnamed);
+    assertConflict(PATCH(STORED_PATH + bypass, RENAME_PATCH.replace(RENAMED, "\\uFEFF")), unnamed);
+    assertStoredAsSent(STORED_PATIENT);
+    switchToNewUser("fhir-private", "F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD");
+    String hidden = "{\"sharing\": {\"public\": \"--------\"}, " + FULL_OBSERVATION.substring(1);
+    assertConflict(POST(ENDPOINT + bypass, hidden.replace(OBSERVATION_NAME, "   ")), unnamed);
+    String bundle = "{\"%s\": [%s]}".formatted(MAPPINGS, hidden.replace(OBSERVATION_NAME, "  "));
+    String query = "/metadata?importStrategy=CREATE&" + bypass.substring(1);
+    String imported = POST(query, bundle).content(CONFLICT).toJson();
+    assertTrue(imported.contains(unnamed.get(0).getMessage()), imported);
+    switchToAdminUser();
+    assertEquals(1, mappingCount());
   }
 
   /** As a user with the given authorities, creates or changes a mapping with the given access. */
@@ -380,6 +411,7 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertEquals(OK, response.status());
     String html = response.content("text/html");
     assertTrue(html.contains("id=\"fhir-mapping-form\""));
+    assertTrue(html.contains("Log in again in another browser tab, then return"), "401 text");
     assertTrue(String.valueOf(response.header("Cache-Control")).contains("no-store"), "no-store");
     List<String> scripts = SCRIPT.matcher(html).results().map(script -> script.group(1)).toList();
     assertEquals(1, scripts.size(), "inline scripts");
@@ -418,35 +450,29 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
       String detail = "{\"sharing\": " + edited.get("sharing").toJson() + empty + body.substring(1);
       assertTrue(JsonMixed.of(detail).equivalentTo(edited), edited::toJson);
     }
-    String translations =
-        "\"translations\": [{\"property\": \"NAME\", \"locale\": \"fr\", \"value\": \"Patient FHIR\"}]";
-    String values =
-        "\"attributeValues\": [{\"attribute\": {\"id\": \"j45AR9cBQKc\"}, \"value\": \"note\"}]";
+    var french = "'translations': [{'property': 'NAME', 'locale': 'fr', 'value': 'Patient FHIR'}]";
+    String values = "'attributeValues': [{'attribute': {'id': 'j45AR9cBQKc'}, 'value': 'note'}]";
     assertStatus(OK, DELETE(STORED_PATH));
     assertStatus(CREATED, POST(ENDPOINT, STORED_PATIENT));
-    assertStatus(NO_CONTENT, PUT(STORED_PATH + "/translations", "{" + translations + "}"));
+    assertStatus(NO_CONTENT, PUT(STORED_PATH + "/translations", "{" + french + "}"));
     JsonObject translated = GET(STORED_PATH + EDIT_FIELDS).content(OK);
     assertEquals(1, translated.getArray("translations").size(), translated::toJson);
     assertStatus(OK, PUT(STORED_PATH, pageBody(translated)));
     JsonObject kept = GET(STORED_PATH + EDIT_FIELDS).content(OK);
     assertTrue(translated.equivalentTo(kept), kept::toJson);
     String bundle =
-        "{\"%s\": [{%s, %s, %s]}"
-            .formatted(MAPPINGS, translations, values, STORED_PATIENT.substring(1));
+        "{\"%s\": [{%s, %s, %s]}".formatted(MAPPINGS, french, values, STORED_PATIENT.substring(1));
     assertStatus(OK, POST("/metadata?skipValidation=true", bundle));
-    JsonObject annotated = GET(STORED_PATH + EDIT_FIELDS).content(OK);
-    assertEquals(1, annotated.getArray("translations").size(), annotated::toJson);
-    assertEquals(1, annotated.getArray("attributeValues").size(), annotated::toJson);
-    JsonObject report =
-        PUT(STORED_PATH, pageBody(annotated)).content(CONFLICT).getObject("response");
+    JsonObject noted = GET(STORED_PATH + EDIT_FIELDS).content(OK);
+    assertEquals(1, noted.getArray("translations").size(), noted::toJson);
+    assertEquals(1, noted.getArray("attributeValues").size(), noted::toJson);
+    JsonObject report = PUT(STORED_PATH, pageBody(noted)).content(CONFLICT).getObject("response");
     JsonList<JsonErrorReport> errors = report.getList("errorReports", JsonErrorReport.class);
     assertEquals(List.of(E6012), errors.toList(JsonErrorReport::getErrorCode), report::toJson);
     kept = GET(STORED_PATH + EDIT_FIELDS).content(OK);
-    assertTrue(annotated.equivalentTo(kept), kept::toJson);
-    for (String id : List.of(STORED_ID, "FhirMapObs1"))
-      assertStatus(OK, DELETE(ENDPOINT + "/" + id));
+    assertTrue(noted.equivalentTo(kept), kept::toJson);
+    for (String id : STORED_IDS) assertStatus(OK, DELETE(ENDPOINT + "/" + id));
     ClassLoader original = Thread.currentThread().getContextClassLoader();
-    // The request thread's class loader no longer sees the application class path or the page.
     Thread.currentThread().setContextClassLoader(ClassLoader.getPlatformClassLoader());
     try {
       HttpResponse missing = GET(ENDPOINT + "/settings", Accept("text/html"));
@@ -572,6 +598,12 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     assertTrue(conflict.get("response.errorReports").isUndefined(), conflict::toJson);
   }
 
+  private static void assertHiddenConflict(HttpResponse response, ErrorMessage expected) {
+    assertConflict(response, List.of(expected));
+    String json = response.content(CONFLICT).toJson();
+    assertFalse(json.contains(STORED_ID), json);
+  }
+
   private void assertDeleteVetoed(String path) {
     JsonWebMessage vetoed = DELETE(path).content(CONFLICT).as(JsonWebMessage.class);
     var errors = vetoed.getResponse().getList("errorReports", JsonErrorReport.class);
@@ -579,17 +611,15 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     String message = new ErrorMessage(E4030, "FhirResourceMapping").getMessage();
     assertEquals(message, errors.get(0).getMessage());
     String body = vetoed.toJson();
-    assertFalse(
-        body.matches("(?s).*fhirresourcemapping.*|(?is).*(foreign key|constraint).*"), body);
+    assertFalse(body.matches("(?s).*(fhirresourcemapping|(?i:foreign key|constraint)).*"), body);
     assertStatus(OK, GET(path));
   }
 
   private void assertMappingNotFound(String uid) {
     HttpResponse response = GET(ENDPOINT + "/" + uid + "/metadata");
-    JsonWebMessage message = response.content(NOT_FOUND).as(JsonWebMessage.class);
-    assertEquals(E1005, message.getErrorCode(), message::toJson);
-    assertEquals(
-        "FhirResourceMapping with id " + uid + " could not be found.", message.getMessage());
+    JsonWebMessage error = response.content(NOT_FOUND).as(JsonWebMessage.class);
+    assertEquals(E1005, error.getErrorCode(), error::toJson);
+    assertEquals("FhirResourceMapping with id " + uid + " could not be found.", error.getMessage());
   }
 
   private JsonObject assertStoredAsSent(String body) {
@@ -649,9 +679,8 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
         .collect(joining(","));
   }
 
-  private static String shared(String publicAccess) {
-    return "{\"sharing\": {\"public\": \"%s\"}, %s"
-        .formatted(publicAccess, STORED_PATIENT.substring(1));
+  private static String shared(String access) {
+    return "{\"sharing\": {\"public\": \"%s\"}, %s".formatted(access, STORED_PATIENT.substring(1));
   }
 
   private static String bad(FhirResourceType type, List<String> entries, String... references) {

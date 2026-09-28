@@ -66,7 +66,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 
-/** Tests {@link FhirEventResourceService} and the {@link FhirPatientService} operations on it. */
 @ExtendWith(MockitoExtension.class)
 class FhirEventResourceServiceTest {
   private static final Duration BUDGET = Duration.ofSeconds(10);
@@ -143,8 +142,7 @@ class FhirEventResourceServiceTest {
     verifyNoInteractions(enrollmentAdapter, teAdapter);
     forbid(P1);
     forbid(P2);
-    FhirApiException readForbidden = readError(ENCOUNTER, ENCOUNTER_ID);
-    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, readForbidden);
+    assertError(HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, readError(ENCOUNTER, ENCOUNTER_ID));
     verify(enrollmentAdapter).find(forProgram(P1), any());
     verify(enrollmentAdapter).find(forProgram(P2), any());
     FhirApiException searchForbidden =
@@ -220,7 +218,7 @@ class FhirEventResourceServiceTest {
   }
 
   @Test
-  void operationsResolveMappingsOnceAndBundleUrlsFollowTheRequestBase() throws Exception {
+  void operationsResolveMappingsOnceAndBundleUrlsIgnoreForwardedHeaders() throws Exception {
     ResolvedMapping otherType = encounterMapping("fhirTeType2", P3, S3);
     when(mappingService.resolveAll())
         .thenReturn(List.of(patientMapping(), m2, otherType, observationMapping(), m1));
@@ -232,14 +230,10 @@ class FhirEventResourceServiceTest {
     Enrollment other = enrollment(ENR2, TE, P2, completed(EVT3, S2));
     when(enrollmentAdapter.find(forProgram(P2), any())).thenAnswer(i -> recorded(page(other)));
     Bundle all = patientService.everything(TE, request());
-    String second = ENR + "-" + EVT2;
+    String enc = "Encounter/" + ENR + "-";
+    String obs = "Observation/" + ENR + "-" + EVT2 + "-" + DE_A;
     assertEntries(
-        all,
-        "Patient/" + TE,
-        "Encounter/" + ENCOUNTER_ID,
-        "Encounter/" + second,
-        "Observation/" + second + "-" + DE_A,
-        "Encounter/" + ENR2 + "-" + EVT3);
+        all, "Patient/" + TE, enc + EVT, enc + EVT2, obs, "Encounter/" + ENR2 + "-" + EVT3);
     assertEquals(1, all.getLink().size());
     String self = all.getLink(Bundle.LINK_SELF).getUrl();
     assertEquals("http://localhost/api/fhir/Patient/" + TE + "/$everything", self);
@@ -271,34 +265,33 @@ class FhirEventResourceServiceTest {
     verify(mappingService, never()).resolve(any());
     stubObservationSearch();
     when(mappingService.resolveAll()).thenReturn(List.of(patientMapping(), observationMapping()));
-    when(teAdapter.find(any(), any())).thenReturn(page(trackedEntity(TE, TET, UPDATED)));
-    for (boolean forwarded : List.of(false, true)) {
-      MockHttpServletRequest search = request("patient", TE, "_count", "1", "_page", "2");
-      MockHttpServletRequest everything = request();
-      for (MockHttpServletRequest sent : List.of(search, everything)) {
-        sent.addHeader("Host", "fhir.example.org:8080");
-        sent.setContextPath("/dhis");
-        if (forwarded) {
-          sent.addHeader("X-Forwarded-Proto", "https");
-          sent.addHeader("X-Forwarded-Host", "fhir.example.org");
-          sent.addHeader("X-Forwarded-Port", "443");
-        }
-      }
-      List<String> urls = new ArrayList<>();
-      for (Bundle bundle :
-          List.of(service.search(OBSERVATION, search), patientService.everything(TE, everything))) {
-        bundle.getEntry().forEach(entry -> urls.add(entry.getFullUrl()));
-        bundle.getLink().forEach(link -> urls.add(link.getUrl()));
-      }
-      assertEquals(12, urls.size(), urls::toString);
-      String base = forwarded ? "https://fhir.example.org" : "http://fhir.example.org:8080";
-      urls.forEach(url -> assertTrue(url.startsWith(base + "/dhis/api/fhir/"), url));
-    }
-  }
-
-  @Test
-  void idAndCodeSearchesSelectRequestedEntries() throws Exception {
     when(mappingService.resolve(PATIENT)).thenReturn(List.of(patientMapping()));
+    var one = List.of(trackedEntity(TE, TET, UPDATED));
+    var paged = Page.withPager("te", new org.hisp.dhis.tracker.Page<>(one, 2, 1, null, 1, 3), "/");
+    when(teAdapter.find(any(), any())).thenReturn(new FilteredPage<>(paged, page().fields()));
+    MockHttpServletRequest search = request("patient", TE, "_count", "1", "_page", "2");
+    MockHttpServletRequest patients = request("_count", "1", "_page", "2");
+    MockHttpServletRequest everything = request();
+    for (MockHttpServletRequest sent : List.of(search, patients, everything)) {
+      sent.addHeader("Host", "fhir.example.org:8080");
+      sent.setContextPath("/dhis");
+      sent.addHeader("X-Forwarded-Proto", "https");
+      sent.addHeader("X-Forwarded-Host", "evil.example/#");
+      sent.addHeader("X-Forwarded-Port", "443");
+    }
+    List<String> urls = new ArrayList<>();
+    Bundle patientAll = patientService.everything(TE, everything);
+    for (Bundle bundle :
+        List.of(service.search(OBSERVATION, search), patientService.search(patients), patientAll)) {
+      bundle.getEntry().forEach(entry -> urls.add(entry.getFullUrl()));
+      bundle.getLink().forEach(link -> urls.add(link.getUrl()));
+    }
+    assertEquals(16, urls.size(), urls::toString);
+    String base = "http://fhir.example.org:8080/dhis/api/fhir/";
+    urls.forEach(url -> assertTrue(url.startsWith(base) && !url.contains("evil"), url));
+    var expected = Stream.of("/" + TE, "", "?_page=3", "?_page=1").map(s -> base + "Patient" + s);
+    assertEquals(expected.toList(), urls.subList(4, 8), urls::toString);
+    clearInvocations(teAdapter, enrollmentAdapter, mappingService, encounterMapper);
     Bundle empty = patientService.search(request(FhirSearchParameters.GENDER, "unknown"));
     assertEquals(Bundle.BundleType.SEARCHSET, empty.getType());
     assertTrue(empty.getEntry().isEmpty());
@@ -314,8 +307,8 @@ class FhirEventResourceServiceTest {
     verify(teAdapter)
         .find(argThat(p -> p.getFilter() != null && p.getFilter().contains(GENDER_TEA)), any());
     when(mappingService.resolve(ENCOUNTER)).thenReturn(List.of(m2));
-    Event other = completed(EVT2, S2);
-    answer(P2, enrollment(ENR, TE, P2, other, completed(EVT, S2), completed(EVT3, S2)));
+    Event visit = completed(EVT2, S2);
+    answer(P2, enrollment(ENR, TE, P2, visit, completed(EVT, S2), completed(EVT3, S2)));
     Bundle bundle = service.search(ENCOUNTER, request("_id", ENCOUNTER_ID));
     assertEntries(bundle, "Encounter/" + ENCOUNTER_ID);
     verify(encounterMapper, times(1)).map(any(), any(), any());
@@ -328,10 +321,7 @@ class FhirEventResourceServiceTest {
     Event[] events = {last, completed(EVT3, S3), completed(EVT2, S2), completed(EVT, S1)};
     answer(P1, enrollment(ENR, TE, P1, events));
     assertEntries(
-        service.search(ENCOUNTER, searchRequest()),
-        "Encounter/" + ENCOUNTER_ID,
-        "Encounter/" + ENR + "-" + EVT3,
-        "Encounter/" + ENR + "-fhirEvent04");
+        service.search(ENCOUNTER, searchRequest()), enc + EVT, enc + EVT3, enc + "fhirEvent04");
     clearInvocations(enrollmentAdapter);
     stubObservationSearch();
     String height = LOINC_SYSTEM + "|" + LOINC_BODY_HEIGHT_CODE;
@@ -341,12 +331,8 @@ class FhirEventResourceServiceTest {
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", height)), heights);
     assertEntries(service.search(OBSERVATION, request("patient", TE, "code", unknown)));
     verify(enrollmentAdapter, times(2)).find(forProgram(P1), any());
-    List<String> expected = new ArrayList<>();
-    for (String event : List.of(ENR + "-" + EVT, ENR + "-" + EVT2, ENR2 + "-" + EVT3)) {
-      expected.add("Observation/" + event + "-" + DE_A);
-      expected.add("Observation/" + event + "-" + DE_B);
-    }
-    assertEntries(service.search(OBSERVATION, searchRequest()), expected.toArray(String[]::new));
+    var measured = Stream.of(heights).flatMap(h -> Stream.of(h, h.replace(DE_A, DE_B)));
+    assertEntries(service.search(OBSERVATION, searchRequest()), measured.toArray(String[]::new));
   }
 
   private FhirApiException readError(FhirResourceType type, String id, String... query) {
@@ -438,14 +424,8 @@ class FhirEventResourceServiceTest {
   }
 
   private MockHttpServletRequest expiringOnLinks(String... namesAndValues) {
-    MockHttpServletRequest request =
-        new MockHttpServletRequest() {
-          @Override
-          public String getQueryString() {
-            return spent(super.getQueryString());
-          }
-        };
-    request.setParameters(request(namesAndValues).getParameterMap());
+    MockHttpServletRequest request = spy(request(namesAndValues));
+    doAnswer(i -> spent(i.callRealMethod())).when(request).getQueryString();
     return request;
   }
 

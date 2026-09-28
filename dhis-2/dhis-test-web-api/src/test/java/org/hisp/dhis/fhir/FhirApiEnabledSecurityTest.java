@@ -53,7 +53,6 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
           "/api/fhir/metadata", "/api/fhir/Patient/dUE514NMOlo",
           "/api/44/fhir/metadata", "/api/fhir/Patient/loginConfig",
           "/api/44/fhir/Patient/loginConfig", "/api/fhir/Patient/account");
-
   @Autowired private DhisConfigurationProvider config;
 
   @BeforeEach
@@ -66,23 +65,22 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
   void anonymousRequestGetsExistingUnauthorizedResponse() throws Exception {
     String unknownUser = HttpHeaders.encodeBasicAuth("unknownuser", DEFAULT_ADMIN_PASSWORD, UTF_8);
     Map<String, String> failedBasic = Map.of(HttpHeaders.AUTHORIZATION, "Basic " + unknownUser);
-    Map<String, String> xmlHttpRequest = Map.of(X_REQUESTED_WITH, XML_HTTP_REQUEST);
+    Map<String, String> xmlHttpRequest = Map.of("X-Requested-With", "XMLHttpRequest");
     var authenticatedPaths = FHIR_PATHS.stream().filter(p -> !p.endsWith("/loginConfig")).toList();
     for (var headers : List.of(xmlHttpRequest, Map.<String, String>of(), failedBasic)) {
       boolean json = !headers.isEmpty();
-      MockHttpServletResponse expected = perform("/api/me", headers);
+      MockHttpServletResponse expected = get("/api/me", headers);
       for (String path : headers.equals(failedBasic) ? authenticatedPaths : FHIR_PATHS) {
-        String description = "GET " + path + " with " + headers.keySet();
-        MockHttpServletResponse response = perform(path, headers);
-        assertEquals(json ? 401 : 302, response.getStatus(), description);
-        assertEquals(json ? null : "/login/", response.getRedirectedUrl(), description);
-        assertEquals(json ? "application/json" : null, response.getContentType(), description);
-        assertEquals(expected.getStatus(), response.getStatus(), description);
-        assertEquals(expected.getRedirectedUrl(), response.getRedirectedUrl(), description);
-        assertEquals(expected.getContentType(), response.getContentType(), description);
-        assertArrayEquals(
-            expected.getContentAsByteArray(), response.getContentAsByteArray(), description);
-        assertNotFhirJson(response, description);
+        String what = "GET " + path + " with " + headers.keySet();
+        MockHttpServletResponse response = get(path, headers);
+        assertEquals(json ? 401 : 302, response.getStatus(), what);
+        assertEquals(json ? null : "/login/", response.getRedirectedUrl(), what);
+        assertEquals(json ? "application/json" : null, response.getContentType(), what);
+        assertEquals(expected.getStatus(), response.getStatus(), what);
+        assertEquals(expected.getRedirectedUrl(), response.getRedirectedUrl(), what);
+        assertEquals(expected.getContentType(), response.getContentType(), what);
+        assertArrayEquals(expected.getContentAsByteArray(), response.getContentAsByteArray(), what);
+        assertNotFhirJson(response, what);
       }
     }
   }
@@ -92,14 +90,13 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
     createUserWithAuth(BASIC_AUTH_USER_NAME, "ALL");
     Map<String, String> basic = Map.of(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER);
     for (String path : List.of("/api/fhir/metadata", "/api/44/fhir/metadata")) {
-      HttpResponse response = new HttpResponse(toResponse(perform(path, basic)));
+      HttpResponse response = new HttpResponse(toResponse(get(path, basic)));
       CapabilityStatement statement = parseOk(response, CapabilityStatement.class);
       assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion(), path);
     }
   }
 
-  private MockHttpServletResponse perform(String path, Map<String, String> headers)
-      throws Exception {
+  private MockHttpServletResponse get(String path, Map<String, String> headers) throws Exception {
     clearSecurityContext();
     MockHttpServletRequestBuilder request = MockMvcRequestBuilders.get(path);
     headers.forEach(request::header);

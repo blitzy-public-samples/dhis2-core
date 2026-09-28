@@ -51,14 +51,7 @@ import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.Encounter.EncounterStatus;
 import org.junit.jupiter.api.Test;
 
-/** Unit tests of {@link FhirEncounterMapper}. */
 class FhirEncounterMapperTest {
-  private static final String TE = "QS6w44flWAf";
-  private static final String TE_TYPE = "ja8NY4PW7Xm";
-  private static final String PROGRAM = "BFcipDERJnf";
-  private static final String STAGE = "NpsdDv6kKSO";
-  private static final String ENR = "nxP7UnKhomJ";
-  private static final String EVT = "pTzf9KYMk72";
   private static final String DE_TYPE = "DATAEL00005";
   private static final String DE_REASON = "DATAEL00002";
   private static final String REASON = "Fever";
@@ -71,9 +64,8 @@ class FhirEncounterMapperTest {
 
   @Test
   void statusTranslationForEveryEventStatus() {
-    Map<EventStatus, EncounterStatus> expected =
-        new HashMap<>(Map.of(ACTIVE, INPROGRESS, VISITED, INPROGRESS, COMPLETED, FINISHED));
-    expected.putAll(Map.of(SCHEDULE, PLANNED, OVERDUE, PLANNED, SKIPPED, CANCELLED));
+    var expected = new HashMap<>(Map.of(ACTIVE, INPROGRESS, SKIPPED, CANCELLED, OVERDUE, PLANNED));
+    expected.putAll(Map.of(VISITED, INPROGRESS, COMPLETED, FINISHED, SCHEDULE, PLANNED));
     expected.put(null, EncounterStatus.UNKNOWN);
     Map<EventStatus, EncounterStatus> actual = new HashMap<>();
     for (EventStatus s : Arrays.copyOf(EventStatus.values(), EventStatus.values().length + 1)) {

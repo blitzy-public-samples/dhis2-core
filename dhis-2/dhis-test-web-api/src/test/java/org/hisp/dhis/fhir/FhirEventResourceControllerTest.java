@@ -99,18 +99,9 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
 
   @Test
   void readAcceptsFormatAndRejectsOtherParameters() {
-    Map.of(
-            ENCOUNTER_A, Encounter.class,
-            IMMUNIZATION_A, Immunization.class,
-            OBSERVATION_A, Observation.class)
-        .forEach(
-            (id, type) -> {
-              String url = "/api/fhir/" + type.getSimpleName() + "/" + id;
-              read(type, id + "?_format=json");
-              assertEquals("no-store, private", GET(url).header("Cache-Control"), url);
-              assertInvalid(url + "?_format=xml", "_format");
-              assertInvalid(url + "?foo=1", "foo");
-            });
+    assertReadAcceptsOnlyFormat(Encounter.class, ENCOUNTER_A);
+    assertReadAcceptsOnlyFormat(Immunization.class, IMMUNIZATION_A);
+    assertReadAcceptsOnlyFormat(Observation.class, OBSERVATION_A);
   }
 
   @Test
@@ -118,8 +109,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     Map<String, String> expected =
         Map.of(ENCOUNTER, ENCOUNTER_A, IMMUNIZATION, IMMUNIZATION_A, OBSERVATION, OBSERVATION_A);
     for (String path : EVENT_RESOURCES) {
-      for (String name :
-          IMMUNIZATION.equals(path) ? List.of("patient") : List.of("patient", "subject")) {
+      for (String name : (IMMUNIZATION.equals(path) ? "patient" : "patient subject").split(" ")) {
         assertSearch(path, name + "=" + SUMMER, expected.get(path));
         assertSearch(path, name + "=Patient/" + SUMMER, expected.get(path));
       }
@@ -152,6 +142,7 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
       assertTrue(link != null && link.getUrl().contains(first ? "_page=2" : "_page=1"), page);
       assertNull(bundle.getLink(first ? Bundle.LINK_PREV : Bundle.LINK_NEXT), page);
     }
+    forwardedPages(query + "1", OBSERVATION);
   }
 
   @Test
@@ -162,10 +153,9 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
       assertInvalid(path + "?_id=bad", "_id");
       for (String query : List.of("_count=0", "_count=x", "_page=0", "_format=xml", "foo=1"))
         assertInvalid(path + "?patient=" + SUMMER + "&" + query, query.split("=")[0]);
+      String withPatient = path.equals(IMMUNIZATION) ? "?" : "?patient=" + SUMMER + "&";
+      assertInvalid(path + withPatient + "subject=" + SUMMER, "subject");
     }
-    assertInvalid(ENCOUNTER + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
-    assertInvalid(OBSERVATION + "?patient=" + SUMMER + "&subject=" + SUMMER, "subject");
-    assertInvalid(IMMUNIZATION + "?subject=" + SUMMER, "subject");
   }
 
   @Test
@@ -216,8 +206,6 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
     String unknownPatientEncounters = ENCOUNTER + "?patient=" + CodeGenerator.generateUid();
     String observations = OBSERVATION + "?patient=" + FRANK;
     String unknownCode = "&code=urn:x|nope";
-    assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
-    assertSearch(OBSERVATION, "patient=" + FRANK, OBSERVATION_B_INTEGER, OBSERVATION_B_NUMBER);
     asRestrictedUser(List.of(), () -> assertSearch(OBSERVATION, "patient=" + FRANK + unknownCode));
     List<String> codes =
         List.of(observations, observations + "&code=integer-value", observations + unknownCode);
@@ -231,21 +219,16 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
 
   @Test
   void searchWithMixedProgramAccessReturnsAccessibleResources() {
-    assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
     assertSearch(ENCOUNTER, "patient=" + FRANK, ENCOUNTER_B);
+    String bySummer = "patient=" + SUMMER;
+    String[] secondProgram = {"nxP8UnKhomJ", SECOND_PROGRAM};
     for (String denial : PROGRAM_DENIALS) {
       asRestrictedUser(
           denied(denial, SECOND_PROGRAM),
-          () -> {
-            String body = assertSearch(ENCOUNTER, "patient=" + SUMMER, ENCOUNTER_A);
-            assertFalse(body.contains("nxP8UnKhomJ") || body.contains(SECOND_PROGRAM), body);
-          });
+          () -> assertOmits(assertSearch(ENCOUNTER, bySummer, ENCOUNTER_A), secondProgram));
       asRestrictedUser(
           denied(denial, PROGRAM),
-          () -> {
-            String body = assertSearch(ENCOUNTER, "patient=" + FRANK);
-            assertFalse(body.contains(EVENT_B) || body.contains(ENROLLMENT_B), body);
-          });
+          () -> assertOmits(assertSearch(ENCOUNTER, "patient=" + FRANK), EVENT_B, ENROLLMENT_B));
     }
   }
 
@@ -253,31 +236,23 @@ class FhirEventResourceControllerTest extends FhirPostgresControllerTestBase {
   void hiddenDataElementProducesNoImmunizationOrObservation() {
     String byPatient = "patient=" + FRANK;
     asImportAndBaselineUser(
-        () -> {
-          assertSearch(OBSERVATION, byPatient, OBSERVATION_B_INTEGER, OBSERVATION_B_NUMBER);
-          read(Observation.class, OBSERVATION_B_NUMBER);
-          assertSearch(IMMUNIZATION, byPatient, IMMUNIZATION_B);
-          read(Immunization.class, IMMUNIZATION_B);
-        });
+        () -> assertSearch(OBSERVATION, byPatient, OBSERVATION_B_INTEGER, OBSERVATION_B_NUMBER),
+        () -> read(Observation.class, OBSERVATION_B_NUMBER),
+        () -> assertSearch(IMMUNIZATION, byPatient, IMMUNIZATION_B),
+        () -> read(Immunization.class, IMMUNIZATION_B));
     asRestrictedUser(
         List.of(new Restriction("dataElement", DE_NUMBER, NO_ACCESS)),
-        () -> {
-          assertSearch(OBSERVATION, byPatient, OBSERVATION_B_INTEGER);
-          assertNotFound(GET(OBSERVATION + "/" + OBSERVATION_B_NUMBER));
-        });
+        () -> assertSearch(OBSERVATION, byPatient, OBSERVATION_B_INTEGER),
+        () -> assertNotFound(GET(OBSERVATION + "/" + OBSERVATION_B_NUMBER)));
     asRestrictedUser(
         List.of(new Restriction("dataElement", DE_ADMINISTERED, NO_ACCESS)),
-        () -> {
-          assertSearch(IMMUNIZATION, byPatient);
-          assertNotFound(GET(IMMUNIZATION + "/" + IMMUNIZATION_B));
-        });
+        () -> assertSearch(IMMUNIZATION, byPatient),
+        () -> assertNotFound(GET(IMMUNIZATION + "/" + IMMUNIZATION_B)));
   }
 
   private String assertSearch(String path, String query, String... ids) {
     String url = path + "?" + query;
-    HttpResponse response = GET(url);
-    String body = fhirBody(response, HttpStatus.OK);
-    assertEquals("no-store, private", response.header("Cache-Control"), url);
+    String body = fhirBody(GET(url), HttpStatus.OK);
     Bundle bundle = searchset(url, body);
     assertEquals(List.of(ids), entryIds(bundle), url);
     assertTrue(bundle.hasTotal(), url);

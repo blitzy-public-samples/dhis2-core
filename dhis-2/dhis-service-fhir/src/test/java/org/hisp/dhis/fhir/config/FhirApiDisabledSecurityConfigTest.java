@@ -44,8 +44,6 @@ import org.hisp.dhis.fhir.*;
 import org.hisp.dhis.user.*;
 import org.hisp.dhis.webapi.security.Http401LoginUrlAuthenticationEntryPoint;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.*;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.web.*;
@@ -65,15 +63,6 @@ class FhirApiDisabledSecurityConfigTest {
   private final FhirResourceSerializer serializer = new FhirResourceSerializer();
   private final String notFound = serializer.error(FhirApiException.notFound()).getBody();
   private SecurityFilterChain chain;
-  private MappedInterceptor guard;
-
-  @BeforeEach
-  void setUp() {
-    when(config.isEnabled(ConfigurationKey.CSP_ENABLED)).thenReturn(true);
-    FhirApiDisabledSecurityConfig configuration = new FhirApiDisabledSecurityConfig();
-    chain = configuration.fhirApiDisabledFilterChain(config, serializer);
-    guard = configuration.fhirApiRequestGuard(config, serializer, entryPoint);
-  }
 
   @AfterEach
   void clearSecurityContext() {
@@ -81,33 +70,30 @@ class FhirApiDisabledSecurityConfigTest {
   }
 
   @Test
-  void defaultConfigurationValueIsFalse() {
+  void defaultConfigurationValueIsFalse() throws Exception {
+    when(config.isEnabled(ConfigurationKey.CSP_ENABLED)).thenReturn(true);
+    FhirApiDisabledSecurityConfig configuration = new FhirApiDisabledSecurityConfig();
+    chain = configuration.fhirApiDisabledFilterChain(config, serializer);
+    MappedInterceptor guard = configuration.fhirApiRequestGuard(config, serializer, entryPoint);
     assertEquals("fhir.api.enabled", FHIR_API_ENABLED.getKey());
     assertEquals("false", FHIR_API_ENABLED.getDefaultValue());
     assertFalse(FHIR_API_ENABLED.isConfidential());
     assertEquals(Optional.of(FHIR_API_ENABLED), ConfigurationKey.getByKey("fhir.api.enabled"));
     assertFalse(DhisConfigurationProvider.isOn(FHIR_API_ENABLED.getDefaultValue()));
-  }
-
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void chainMatchesFhirPathsOnlyWhileDisabled(boolean enabled) {
-    assertEach(FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), true);
-    assertEach(NON_FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), false);
-    assertEach(ENCODED_FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), false);
-    when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(enabled);
-    for (String context : List.of("", "/dhis")) {
-      assertEach(FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
-      assertEach(ENCODED_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
-      assertEach(NON_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), false);
+    for (boolean enabled : new boolean[] {true, false}) {
+      assertEach(FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), true);
+      assertEach(NON_FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), false);
+      assertEach(ENCODED_FHIR_PATHS, path -> FHIR_PATH.matcher(path).matches(), false);
+      when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(enabled);
+      for (String context : List.of("", "/dhis")) {
+        assertEach(FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
+        assertEach(ENCODED_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), !enabled);
+        assertEach(NON_FHIR_PATHS, p -> chain.matches(request("GET", context, p)), false);
+      }
+      assertEquals(!enabled, chain.matches(new MockHttpServletRequest("GET", "/api/fhir/%zz")));
+      assertFalse(chain.matches(request("GET", "", "/api/%66hirResourceMappings")));
+      assertFalse(chain.matches(new MockHttpServletRequest("GET", "/api/%zzhir/Patient")));
     }
-    assertEquals(!enabled, chain.matches(new MockHttpServletRequest("GET", "/api/fhir/%zz")));
-    assertFalse(chain.matches(request("GET", "", "/api/%66hirResourceMappings")));
-    assertFalse(chain.matches(new MockHttpServletRequest("GET", "/api/%zzhir/Patient")));
-  }
-
-  @Test
-  void chainAndGuardAnswerNotFoundWhileOffAndGuardUsesEntryPointWhileOn() throws Exception {
     for (String method : List.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")) {
       for (String path : List.of("/api/fhir/Patient", "/api/44/fhir/metadata", "/api/fhir")) {
         assertNotFound(notFound, filter(request(method, "", path)));
@@ -171,6 +157,7 @@ class FhirApiDisabledSecurityConfigTest {
   private static void assertNotFound(String body, MockHttpServletResponse actual) throws Exception {
     assertEquals(404, actual.getStatus());
     assertEquals(FHIR_JSON_CONTENT_TYPE, actual.getContentType());
+    assertEquals("no-store, private", actual.getHeader("Cache-Control"));
     assertTrue(actual.isCommitted());
     assertEquals(body, actual.getContentAsString(StandardCharsets.UTF_8));
   }

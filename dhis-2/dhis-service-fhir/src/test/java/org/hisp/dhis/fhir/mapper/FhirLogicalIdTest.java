@@ -29,6 +29,7 @@
  */
 package org.hisp.dhis.fhir.mapper;
 
+import static org.hisp.dhis.fhir.FhirTestFixtures.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -37,10 +38,7 @@ import java.util.regex.Pattern;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.junit.jupiter.api.Test;
 
-/** Tests composing and parsing the logical ids of event-derived FHIR resources. */
 class FhirLogicalIdTest {
-  private static final String ENR = "nxP7UnKhomJ";
-  private static final String EVT = "pTzf9KYMk72";
   private static final String DE = "DATAEL00006";
   private static final String ENCOUNTER_ID = "nxP7UnKhomJ-pTzf9KYMk72";
   private static final String PER_DATA_ELEMENT_ID = "nxP7UnKhomJ-pTzf9KYMk72-DATAEL00006";
@@ -71,33 +69,26 @@ class FhirLogicalIdTest {
     assertEquals(ENR, new FhirLogicalId(ENR, null, null).compose());
     for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
       assertTrue(FhirLogicalId.parse(type, null).isEmpty(), type::name);
-      for (String id : malformedIds(type)) {
-        assertTrue(FhirLogicalId.parse(type, id).isEmpty(), () -> type + " " + id);
+      List<String> segments = type == ENCOUNTER ? List.of(ENR, EVT) : List.of(ENR, EVT, DE);
+      String ok = String.join("-", segments);
+      List<String> ids = new ArrayList<>(List.of("", ENR, String.join("-", ENR, EVT, DE, ENR)));
+      ids.add(type == ENCOUNTER ? PER_DATA_ELEMENT_ID : ENCOUNTER_ID);
+      Collections.addAll(ids, ENR + "--" + EVT, "-" + ok, ok + "-", " " + ok, ok + " ");
+      Collections.addAll(ids, ok.replace('-', '_'), ok.replace('-', '.'), ok.replace("-", ""));
+      ids.add(ok.substring(0, 12) + "-" + ok.substring(13));
+      ids.add(ok.substring(0, 11) + ok.charAt(12) + "-" + ok.substring(13));
+      for (int position = 0; position < segments.size(); position++) {
+        for (String malformed : MALFORMED_SEGMENTS) {
+          List<String> corrupted = new ArrayList<>(segments);
+          corrupted.set(position, malformed);
+          ids.add(String.join("-", corrupted));
+        }
       }
+      ids.forEach(id -> assertTrue(FhirLogicalId.parse(type, id).isEmpty(), () -> type + " " + id));
     }
     for (FhirResourceType type : new FhirResourceType[] {PATIENT, null}) {
-      for (String id : List.of(ENR, ENCOUNTER_ID, PER_DATA_ELEMENT_ID)) {
-        assertTrue(FhirLogicalId.parse(type, id).isEmpty(), () -> type + " " + id);
-      }
+      List.of(ENR, ENCOUNTER_ID, PER_DATA_ELEMENT_ID)
+          .forEach(i -> assertTrue(FhirLogicalId.parse(type, i).isEmpty(), () -> type + " " + i));
     }
-  }
-
-  private static List<String> malformedIds(FhirResourceType type) {
-    List<String> segments = type == ENCOUNTER ? List.of(ENR, EVT) : List.of(ENR, EVT, DE);
-    String ok = String.join("-", segments);
-    List<String> ids = new ArrayList<>(List.of("", ENR, String.join("-", ENR, EVT, DE, ENR)));
-    ids.add(type == ENCOUNTER ? PER_DATA_ELEMENT_ID : ENCOUNTER_ID);
-    Collections.addAll(ids, ENR + "--" + EVT, "-" + ok, ok + "-", " " + ok, ok + " ");
-    Collections.addAll(ids, ok.replace('-', '_'), ok.replace('-', '.'), ok.replace("-", ""));
-    ids.add(ok.substring(0, 12) + "-" + ok.substring(13));
-    ids.add(ok.substring(0, 11) + ok.charAt(12) + "-" + ok.substring(13));
-    for (int position = 0; position < segments.size(); position++) {
-      for (String malformed : MALFORMED_SEGMENTS) {
-        List<String> corrupted = new ArrayList<>(segments);
-        corrupted.set(position, malformed);
-        ids.add(String.join("-", corrupted));
-      }
-    }
-    return ids;
   }
 }

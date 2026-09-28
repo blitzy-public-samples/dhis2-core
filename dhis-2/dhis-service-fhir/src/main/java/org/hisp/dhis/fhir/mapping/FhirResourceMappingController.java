@@ -170,11 +170,8 @@ public class FhirResourceMappingController
             .toList();
     List<ErrorReport> reports = validator.validate(mapping, others);
     if (!reports.isEmpty()) {
-      List<ErrorReport> all = new ArrayList<>(reports);
-      boolean unnamed = mapping.getName() == null || mapping.getName().isBlank();
-      if (unnamed) all.add(0, new ErrorReport(FhirResourceMapping.class, ErrorCode.E4000, "name"));
       throw new ConflictException(
-          all.stream().map(r -> r.getMessage().replaceAll("\\R", " ")).collect(joining("\n")));
+          reports.stream().map(r -> r.getMessage().replaceAll("\\R", " ")).collect(joining("\n")));
     }
   }
 }

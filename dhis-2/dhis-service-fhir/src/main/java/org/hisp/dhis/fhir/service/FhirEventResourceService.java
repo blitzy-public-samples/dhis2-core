@@ -29,6 +29,8 @@
  */
 package org.hisp.dhis.fhir.service;
 
+import static org.springframework.web.servlet.support.ServletUriComponentsBuilder.fromContextPath;
+
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.*;
@@ -45,7 +47,6 @@ import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
 import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
 import org.hisp.dhis.fhir.service.FhirTrackerReader.EnrollmentResult;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
-import org.hisp.dhis.webapi.utils.HttpServletRequestPaths;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -147,7 +148,7 @@ public class FhirEventResourceService {
   }
 
   static String fhirBase(HttpServletRequest request) {
-    return HttpServletRequestPaths.getContextPath(request) + FHIR_BASE_PATH;
+    return fromContextPath(request).path(FHIR_BASE_PATH).build().toUriString();
   }
 
   static Bundle searchset() {

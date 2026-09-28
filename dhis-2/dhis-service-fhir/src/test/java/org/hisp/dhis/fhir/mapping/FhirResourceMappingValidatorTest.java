@@ -51,7 +51,6 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.*;
 
-/** Positive cases expect no reports; negative ones break one rule and expect only its code. */
 class FhirResourceMappingValidatorTest {
   private static final String SYSTEM = "urn:test:id";
   private static final String LDAP = "ldap://directory.example.org/ids";
@@ -71,10 +70,21 @@ class FhirResourceMappingValidatorTest {
   private final List<IdentifiableObject> metadata = new ArrayList<>();
   private final FhirResourceMappingValidator validator = new FhirResourceMappingValidator(manager);
   private TrackedEntityType person;
-  private TrackedEntityAttribute textTea, text2Tea, addressTea, programTea, strayTea;
-  private Program program, withoutRegistrationProgram, otherTypeProgram;
-  private ProgramStage stage, otherStage;
-  private DataElement booleanDe, textDe, numberDe, number2De, strayDe;
+  private TrackedEntityAttribute textTea;
+  private TrackedEntityAttribute text2Tea;
+  private TrackedEntityAttribute addressTea;
+  private TrackedEntityAttribute programTea;
+  private TrackedEntityAttribute strayTea;
+  private Program program;
+  private Program withoutRegistrationProgram;
+  private Program otherTypeProgram;
+  private ProgramStage stage;
+  private ProgramStage otherStage;
+  private DataElement booleanDe;
+  private DataElement textDe;
+  private DataElement numberDe;
+  private DataElement number2De;
+  private DataElement strayDe;
 
   @BeforeEach
   void setUp() {
@@ -100,13 +110,24 @@ class FhirResourceMappingValidatorTest {
 
   @ParameterizedTest
   @EnumSource(FhirResourceType.class)
-  void validMappingOfEachTypeHasNoReports(FhirResourceType type) {
+  void validMappingOfEachTypeHasNoReportsUnlessItsKeyIsHeld(FhirResourceType type) {
     assertEquals(List.of(), validate(validMapping(type)));
     if (type == PATIENT) {
       var withProgram = withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_ADDRESS_TEXT, programTea));
       withProgram.setProgram(program);
       assertEquals(List.of(), validate(withProgram));
     }
+    FhirResourceMapping mapping = validMapping(type);
+    FhirResourceMapping sameUid = validMapping(type);
+    sameUid.setUid(mapping.getUid());
+    FhirResourceMapping other = validMapping(type);
+    List<ErrorReport> reports = validate(mapping, mapping, sameUid, other);
+    String administered = type == IMMUNIZATION ? ", " + IMMUNIZATION_ADMINISTERED : "";
+    String property = type == PATIENT ? "resourceType" : "programStage" + administered;
+    String value = uniquenessKey(mapping).replaceFirst("^[A-Z]+:", "").replace(":", ", ");
+    assertOnly(reports, E5003, property, value, describe(mapping), OTHER_MAPPING);
+    String message = reports.get(0).getMessage();
+    assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
   }
 
   @ParameterizedTest
@@ -126,14 +147,8 @@ class FhirResourceMappingValidatorTest {
     assertOnly(validate(mapping), E4000, at(mapping, target, property));
   }
 
-  @ParameterizedTest
-  @MethodSource("requiredTargets")
-  void missingRequiredTargetIsMissingRequiredProperty(FhirTargetField target) {
-    assertOnly(validate(withEntries(target)), E4000, target.name());
-  }
-
   @Test
-  void targetCatalogEnumNamesAndSourceReferencesFollowExpectedTables() {
+  void catalogSourceReferencesDuplicatesAndStructureOnlyRulesFollowExpectedTables() {
     FhirResourceMapping mapping = validMapping(PATIENT);
     mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_HEIGHT_CODE, null).build());
     assertOnly(validate(mapping), E4010, "OBSERVATION_VALUE", "PATIENT");
@@ -145,6 +160,9 @@ class FhirResourceMappingValidatorTest {
       assertEquals(parse(FhirSourceType.class, c[2]), target.allowedSources(), c[0]);
       assertEquals(c[3] + " " + c[4], target.cardinality() + " " + target.isRequired(), c[0]);
       assertEquals(parse(ValueType.class, c[5]), target.acceptedValueTypes(), c[0]);
+      if (c[4].equals("true")) {
+        assertOnly(validate(withEntries(target)), E4000, target.name());
+      }
     }
     assertEquals("[ATTRIBUTE, DATA_ELEMENT, CONSTANT]", Arrays.toString(FhirSourceType.values()));
     FhirResourceType[] types = FhirResourceType.values();
@@ -159,6 +177,51 @@ class FhirResourceMappingValidatorTest {
     }
     mapping = withValue(PATIENT_FAMILY_NAME, "source", "not-a-uid");
     assertOnly(validate(mapping), E4014, "not-a-uid", at(mapping, PATIENT_FAMILY_NAME, "source"));
+    mapping =
+        withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
+    int last = mapping.getFieldMappings().size() - 1;
+    assertOnly(validate(mapping), E5003, "system", SYSTEM, row(last), row(0));
+    mapping = validMapping(PATIENT);
+    entryOf(mapping, PATIENT_GIVEN_NAME).setSource(textTea.getUid());
+    assertOnly(validate(mapping), E5003, "source", textTea.getUid(), row(2), row(1));
+    mapping = validMapping(OBSERVATION);
+    mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_WEIGHT_CODE, null).build());
+    assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), row(2), row(0));
+    var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
+    assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
+    assertEquals("PATIENT", uniquenessKey(validMapping(PATIENT)));
+    assertEquals("ENCOUNTER:" + stage.getUid(), uniquenessKey(validMapping(ENCOUNTER)));
+    assertEquals("OBSERVATION:" + stage.getUid(), uniquenessKey(validMapping(OBSERVATION)));
+    assertEquals(
+        "IMMUNIZATION:" + stage.getUid() + ":" + booleanDe.getUid(),
+        uniquenessKey(validMapping(IMMUNIZATION)));
+    assertNull(uniquenessKey(null));
+    assertNull(uniquenessKey(withValue(PATIENT_FAMILY_NAME, "resourceType", null)));
+    assertNull(uniquenessKey(withValue(ENCOUNTER_CLASS, "programStage", null)));
+    assertNull(uniquenessKey(withEntries(IMMUNIZATION_ADMINISTERED)));
+    mapping = validMapping(PATIENT);
+    var gender = entryOf(mapping, PATIENT_GENDER);
+    gender.setValueMap(Map.of("ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
+    assertEquals(List.of(), validate(mapping));
+    gender.setValueMap(Map.of("A;B", "male"));
+    assertEquals(List.of(), validate(mapping));
+    assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
+    assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
+    assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
+    mapping = withEntries(ENCOUNTER_TYPE, entry(ENCOUNTER_TYPE, dataElement(uid(), BOOLEAN)));
+    mapping.setTrackedEntityType(trackedEntityType(uid()));
+    mapping.setProgram(withoutRegistrationProgram);
+    mapping.setProgramStage(otherStage);
+    assertEquals(List.of(), validator.validateStructure(mapping));
+    entryOf(mapping, ENCOUNTER_TYPE).setTarget(null);
+    assertOnly(validator.validateStructure(mapping), E4000, at(mapping, null, "target"));
+    verifyNoInteractions(manager);
+    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
+    when(manager.getNoAcl(any(), anyString()))
+        .thenAnswer(call -> lookup.apply(call.getArgument(0), call.getArgument(1)));
+    assertEquals(List.of(), validator.validate(validMapping(ENCOUNTER), null));
+    verify(manager).getNoAcl(Program.class, program.getUid());
+    verify(manager).getNoAcl(ProgramStage.class, stage.getUid());
   }
 
   @ParameterizedTest
@@ -196,10 +259,6 @@ class FhirResourceMappingValidatorTest {
         .flatMap(target -> Stream.of(ValueType.values()).map(type -> Arguments.of(target, type)));
   }
 
-  static Stream<String> requiredTargets() {
-    return catalog().filter(c -> c[4].equals("true")).map(c -> c[0]);
-  }
-
   static Stream<Arguments> sourceTypes() {
     return catalog()
         .flatMap(
@@ -223,19 +282,36 @@ class FhirResourceMappingValidatorTest {
   }
 
   @ParameterizedTest
-  @EnumSource(FhirResourceType.class)
-  void uniquenessKeyAlreadyHeldIsDuplicate(FhirResourceType type) {
-    FhirResourceMapping mapping = validMapping(type);
-    FhirResourceMapping sameUid = validMapping(type);
+  @CsvSource({"name, FHIR shared name", "code, FHIR-shared", "code, ' '"})
+  void nameOrCodeAlreadyHeldIsDuplicateWithoutNamingTheHolder(String property, String value) {
+    FhirResourceMapping mapping = validMapping(ENCOUNTER);
+    FhirResourceMapping sameUid = validMapping(OBSERVATION);
     sameUid.setUid(mapping.getUid());
-    FhirResourceMapping other = validMapping(type);
-    List<ErrorReport> reports = validate(mapping, mapping, sameUid, other);
-    String administered = type == IMMUNIZATION ? ", " + IMMUNIZATION_ADMINISTERED : "";
-    String property = type == PATIENT ? "resourceType" : "programStage" + administered;
-    String value = uniquenessKey(mapping).replaceFirst("^[A-Z]+:", "").replace(":", ", ");
+    FhirResourceMapping other = validMapping(IMMUNIZATION);
+    List.of(mapping, sameUid, other)
+        .forEach(property.equals("name") ? m -> m.setName(value) : m -> m.setCode(value));
+    assertEquals(List.of(), validate(mapping, mapping, sameUid));
+    List<ErrorReport> reports = validate(mapping, sameUid, other);
     assertOnly(reports, E5003, property, value, describe(mapping), OTHER_MAPPING);
     String message = reports.get(0).getMessage();
-    assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
+    boolean holderNamed = !property.equals("name") && message.contains(other.getName());
+    assertFalse(message.contains(other.getUid()) || holderNamed, message);
+  }
+
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = {"", "   ", "\u00a0\u3000", "\uFEFF"})
+  void blankNameIsMissingRequiredNameAndNotComparedWithOthers(String name) {
+    FhirResourceMapping mapping = validMapping(PATIENT);
+    FhirResourceMapping other = validMapping(ENCOUNTER);
+    mapping.setName(name);
+    other.setName(name);
+    assertOnly(validate(mapping, other), E4000, "name");
+    assertOnly(validator.validateStructure(mapping), E4000, "name");
+    mapping.getFieldMappings().get(0).setDisplay("d".repeat(1025));
+    var reports = validator.validateStructure(mapping).stream();
+    var expected = List.of("E4000 [name]", "E4027 [length 1025 > 1024, " + row(0) + ".display]");
+    assertEquals(expected, reports.map(r -> r.getErrorCode() + " " + r.getArgs()).toList());
   }
 
   @ParameterizedTest
@@ -257,41 +333,6 @@ class FhirResourceMappingValidatorTest {
     } else {
       assertEquals(List.of(), validate(mapping));
     }
-  }
-
-  @Test
-  void duplicateSystemSourceAndDataElementAreDuplicateButFoldedGenderKeysAreNot() {
-    FhirResourceMapping mapping =
-        withEntries(PATIENT_ADDRESS_TEXT, entry(PATIENT_IDENTIFIER, addressTea).system(SYSTEM));
-    int last = mapping.getFieldMappings().size() - 1;
-    assertOnly(validate(mapping), E5003, "system", SYSTEM, row(last), row(0));
-    mapping = validMapping(PATIENT);
-    entryOf(mapping, PATIENT_GIVEN_NAME).setSource(textTea.getUid());
-    assertOnly(validate(mapping), E5003, "source", textTea.getUid(), row(2), row(1));
-    mapping = validMapping(OBSERVATION);
-    mapping.getFieldMappings().add(observation(numberDe, LOINC_BODY_WEIGHT_CODE, null).build());
-    assertOnly(validate(mapping), E5003, "source", numberDe.getUid(), row(2), row(0));
-    var other = withEntries(IMMUNIZATION_ADMINISTERED, entry(IMMUNIZATION_ADMINISTERED, textDe));
-    assertEquals(List.of(), validate(validMapping(IMMUNIZATION), other));
-    assertEquals("PATIENT", uniquenessKey(validMapping(PATIENT)));
-    assertEquals("ENCOUNTER:" + stage.getUid(), uniquenessKey(validMapping(ENCOUNTER)));
-    assertEquals("OBSERVATION:" + stage.getUid(), uniquenessKey(validMapping(OBSERVATION)));
-    assertEquals(
-        "IMMUNIZATION:" + stage.getUid() + ":" + booleanDe.getUid(),
-        uniquenessKey(validMapping(IMMUNIZATION)));
-    assertNull(uniquenessKey(null));
-    assertNull(uniquenessKey(withValue(PATIENT_FAMILY_NAME, "resourceType", null)));
-    assertNull(uniquenessKey(withValue(ENCOUNTER_CLASS, "programStage", null)));
-    assertNull(uniquenessKey(withEntries(IMMUNIZATION_ADMINISTERED)));
-    mapping = validMapping(PATIENT);
-    var gender = entryOf(mapping, PATIENT_GENDER);
-    gender.setValueMap(Map.of("ΟΔΟΣ", "other", "οδος", "other", "I", "unknown", "ı", "female"));
-    assertEquals(List.of(), validate(mapping));
-    gender.setValueMap(Map.of("A;B", "male"));
-    assertEquals(List.of(), validate(mapping));
-    assertTrue(genderKeyMatches("I", "i") && genderKeyMatches("İ", "i"));
-    assertTrue(genderKeyMatches("ΟΔΟΣ", "οδοσ") && genderKeyMatches("A;B", "a;b"));
-    assertFalse(genderKeyMatches("I", "ı") || genderKeyMatches("ΟΔΟΣ", "οδος"));
   }
 
   @ParameterizedTest
@@ -336,24 +377,6 @@ class FhirResourceMappingValidatorTest {
     verifyNoInteractions(manager);
   }
 
-  @Test
-  void validateStructureSkipsEveryRuleThatResolvesMetadata() {
-    var mapping = withEntries(ENCOUNTER_TYPE, entry(ENCOUNTER_TYPE, dataElement(uid(), BOOLEAN)));
-    mapping.setTrackedEntityType(trackedEntityType(uid()));
-    mapping.setProgram(withoutRegistrationProgram);
-    mapping.setProgramStage(otherStage);
-    assertEquals(List.of(), validator.validateStructure(mapping));
-    entryOf(mapping, ENCOUNTER_TYPE).setTarget(null);
-    assertOnly(validator.validateStructure(mapping), E4000, at(mapping, null, "target"));
-    verifyNoInteractions(manager);
-    var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
-    when(manager.getNoAcl(any(), anyString()))
-        .thenAnswer(call -> lookup.apply(call.getArgument(0), call.getArgument(1)));
-    assertEquals(List.of(), validator.validate(validMapping(ENCOUNTER), null));
-    verify(manager).getNoAcl(Program.class, program.getUid());
-    verify(manager).getNoAcl(ProgramStage.class, stage.getUid());
-  }
-
   private <T extends IdentifiableObject> T register(T object) {
     metadata.add(object);
     return object;
@@ -373,8 +396,7 @@ class FhirResourceMappingValidatorTest {
 
   private FhirResourceMapping validMapping(FhirResourceType type) {
     boolean patient = type == PATIENT;
-    FhirResourceMapping mapping =
-        mapping(uid(), type, person, patient ? null : program, patient ? null : stage);
+    var mapping = mapping(uid(), type, person, patient ? null : program, patient ? null : stage);
     mapping.setFieldMappings(
         switch (type) {
           case PATIENT ->
@@ -456,7 +478,6 @@ class FhirResourceMappingValidatorTest {
     return mapping;
   }
 
-  /** Returns a mapping property as is, else the path of the null entry or of the target's entry. */
   private static String at(FhirResourceMapping mapping, FhirTargetField target, String property) {
     if (property.matches("resourceType|trackedEntityType|program|programStage")) return property;
     List<FhirFieldMapping> entries = mapping.getFieldMappings();
@@ -487,7 +508,6 @@ class FhirResourceMappingValidatorTest {
     return entry.system(SYSTEM).code(LOINC_BODY_HEIGHT_CODE).valueMap(GENDER_MAP);
   }
 
-  /** Target, resource type, sources, cardinality, required, value types; {@code !} negates. */
   static Stream<String[]> catalog() {
     return """
         PATIENT_IDENTIFIER PATIENT ATTRIBUTE MANY false TEXT,LONG_TEXT,LETTER,USERNAME,EMAIL,\

@@ -48,7 +48,8 @@ import org.springframework.http.*;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 class FhirResourceSerializerTest {
-  private static final int THREADS = 8, ITERATIONS = 200;
+  private static final int THREADS = 8;
+  private static final int ITERATIONS = 200;
   private final FhirResourceSerializer serializer = new FhirResourceSerializer();
 
   @Test
@@ -74,7 +75,28 @@ class FhirResourceSerializerTest {
 
   @Test
   void concurrentSerialisationProducesIdenticalOutput() throws Exception {
-    List<Resource> inputs = resources();
+    Reference subject = new Reference("Patient/patient-1");
+    Patient first = patient("patient-1", "Nakamura", "Aiko");
+    first.getMeta().setLastUpdated(Date.from(UPDATED));
+    Patient second = patient("patient-2", "Okafor", "Chidi");
+    second.setGender(Enumerations.AdministrativeGender.FEMALE).setBirthDate(Date.from(OCCURRED));
+    Patient third = patient("patient-3", "Haugen", "Ingrid");
+    third.addIdentifier().setSystem(IDENTIFIER_SYSTEM).setValue("12345678");
+    Encounter encounter = new Encounter().setStatus(Encounter.EncounterStatus.FINISHED);
+    encounter.setClass_(new Coding(ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null));
+    encounter.setSubject(subject).setId("enrollment1-event1");
+    Observation weight = observation("weight", LOINC_BODY_WEIGHT_CODE, 72.5, BODY_WEIGHT_UNIT);
+    weight.setSubject(subject).setEffective(new DateTimeType(Date.from(OCCURRED)));
+    Immunization immunization = new Immunization().setPatient(subject).setLotNumber("LOT-2024");
+    immunization.setStatus(Immunization.ImmunizationStatus.COMPLETED).setId("vaccine");
+    immunization.setVaccineCode(new CodeableConcept(new Coding(CVX_SYSTEM, CVX_CODE, CVX_DISPLAY)));
+    immunization.setOccurrence(new DateTimeType(Date.from(OCCURRED)));
+    Bundle bundle = new Bundle().setType(Bundle.BundleType.SEARCHSET).setTotal(1);
+    var entry = bundle.addEntry().setFullUrl("http://localhost/api/fhir/Patient/patient-4");
+    entry.setResource(patient("patient-4", "Silva", "Ana")).getSearch().setMode(MATCH);
+    Observation height = observation("height", LOINC_BODY_HEIGHT_CODE, 172.0, BODY_HEIGHT_UNIT);
+    height.setSubject(new Reference("#p1")).addContained(patient("p1", "Mensah", "Kofi"));
+    var inputs = List.of(first, second, third, encounter, weight, immunization, bundle, height);
     List<String> baselines = inputs.stream().map(r -> serializer.ok(r).getBody()).toList();
     assertEquals(List.of(THREADS, THREADS), List.of(inputs.size(), Set.copyOf(baselines).size()));
     CyclicBarrier start = new CyclicBarrier(THREADS);
@@ -106,6 +128,7 @@ class FhirResourceSerializerTest {
     ResponseEntity<String> response = serializer.error(e);
     assertEquals(status, response.getStatusCode().value());
     assertEquals(FHIR_JSON_CONTENT_TYPE, response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
+    assertEquals("no-store, private", response.getHeaders().getCacheControl());
     var outcome = FhirR4Validation.parseStrict(response.getBody(), OperationOutcome.class);
     assertEquals(1, outcome.getIssue().size());
     OperationOutcomeIssueComponent issue = outcome.getIssueFirstRep();
@@ -117,32 +140,8 @@ class FhirResourceSerializerTest {
     serializer.writeError(servletResponse, e);
     assertEquals(status, servletResponse.getStatus());
     assertEquals(FHIR_JSON_CONTENT_TYPE, servletResponse.getContentType());
+    assertEquals("no-store, private", servletResponse.getHeader(HttpHeaders.CACHE_CONTROL));
     assertEquals(response.getBody(), servletResponse.getContentAsString());
-  }
-
-  private static List<Resource> resources() {
-    Reference subject = new Reference("Patient/patient-1");
-    Patient first = patient("patient-1", "Nakamura", "Aiko");
-    first.getMeta().setLastUpdated(Date.from(UPDATED));
-    Patient second = patient("patient-2", "Okafor", "Chidi");
-    second.setGender(Enumerations.AdministrativeGender.FEMALE).setBirthDate(Date.from(OCCURRED));
-    Patient third = patient("patient-3", "Haugen", "Ingrid");
-    third.addIdentifier().setSystem(IDENTIFIER_SYSTEM).setValue("12345678");
-    Encounter encounter = new Encounter().setStatus(Encounter.EncounterStatus.FINISHED);
-    encounter.setClass_(new Coding(ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null));
-    encounter.setSubject(subject).setId("enrollment1-event1");
-    Observation weight = observation("weight", LOINC_BODY_WEIGHT_CODE, 72.5, BODY_WEIGHT_UNIT);
-    weight.setSubject(subject).setEffective(new DateTimeType(Date.from(OCCURRED)));
-    Immunization immunization = new Immunization().setPatient(subject).setLotNumber("LOT-2024");
-    immunization.setStatus(Immunization.ImmunizationStatus.COMPLETED).setId("vaccine");
-    immunization.setVaccineCode(new CodeableConcept(new Coding(CVX_SYSTEM, CVX_CODE, CVX_DISPLAY)));
-    immunization.setOccurrence(new DateTimeType(Date.from(OCCURRED)));
-    Bundle bundle = new Bundle().setType(Bundle.BundleType.SEARCHSET).setTotal(1);
-    var entry = bundle.addEntry().setFullUrl("http://localhost/api/fhir/Patient/patient-4");
-    entry.setResource(patient("patient-4", "Silva", "Ana")).getSearch().setMode(MATCH);
-    Observation height = observation("height", LOINC_BODY_HEIGHT_CODE, 172.0, BODY_HEIGHT_UNIT);
-    height.setSubject(new Reference("#p1")).addContained(patient("p1", "Mensah", "Kofi"));
-    return List.of(first, second, third, encounter, weight, immunization, bundle, height);
   }
 
   private static Observation observation(String id, String code, double value, String unit) {

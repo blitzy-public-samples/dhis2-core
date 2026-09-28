@@ -46,7 +46,6 @@ import java.beans.*;
 import java.io.*;
 import java.lang.reflect.*;
 import java.net.URLDecoder;
-import java.sql.Types;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,7 +59,6 @@ import org.hisp.dhis.jsontree.*;
 import org.hisp.dhis.organisationunit.OrganisationUnit;
 import org.hisp.dhis.test.config.PostgresDhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.PostgresControllerIntegrationTestBase;
-import org.hisp.dhis.test.webapi.json.domain.*;
 import org.hisp.dhis.user.User;
 import org.hisp.dhis.webapi.controller.tracker.TestSetup;
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -89,9 +87,14 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   private static final String SCRATCH_TABLE = "fhir_index_scratch";
   private static final String MAPPING_HBM =
       "org/hisp/dhis/fhir/mapping/hibernate/FhirResourceMapping.hbm.xml";
-  private static final String IDENTIFIABLE_PROPERTIES_HBM =
-      "org/hisp/dhis/common/identifiableProperties.hbm";
-  private static final String PROGRAM_STAGE_UID = "NpsdDv6kKSO";
+  private static final String IDENTIFIABLE_HBM = "org/hisp/dhis/common/identifiableProperties.hbm";
+  private static final String INSERT_SQL =
+      "insert into fhirresourcemapping (fhirresourcemappingid, uid, name, created, lastupdated,"
+          + " translations, resourcetype, trackedentitytypeid, programid, programstageid,"
+          + " fieldmappings) values (nextval('hibernate_sequence'), ?, 'FHIR store test ' || ?,"
+          + " now(), now(), '[]'::jsonb, ?, ?, ?, ?, ?::jsonb)";
+  private static final String ADMINISTERED =
+      "[{\"target\":\"IMMUNIZATION_ADMINISTERED\",\"sourceType\":\"DATA_ELEMENT\",\"source\":\"%s\"}]";
   private static final String COUNTS_BY_TYPE =
       "select resourcetype, count(*)::text from " + TABLE + " group by resourcetype";
   private static final String COLUMNS_SQL =
@@ -109,11 +112,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
           "p", "primary key (%s)",
           "u", "unique (%s)",
           "f", "foreign key (%s) references %2$s(%2$sid)");
-
-  /**
-   * Schema contract, one row per persisted property: property | HBM element | column | udt | length
-   * | nullable | default | constraint type (p primary key, u unique, f foreign key) | name | table.
-   */
+  // property | element | column | udt | length | nullable | default | CONSTRAINTS | name | table
   private static final String CONTRACT =
       """
       id                | id          | fhirresourcemappingid | int8      |     | NO  |             | p | fhirresourcemapping_pkey                   |
@@ -133,18 +132,15 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       programStage      | many-to-one | programstageid        | int8      |     | YES |             | f | fk_fhirresourcemapping_programstageid      | programstage
       fieldMappings     | property    | fieldmappings         | jsonb     |     | NO  | '[]'::jsonb |   |                                            |
       """;
-
-  /** Partial unique indexes: name | validator uniqueness key | SQL key expressions | predicate. */
-  private static final List<IndexContract> PARTIAL_INDEXES =
+  // Partial unique indexes: name | validator uniqueness key | SQL key expressions | predicate
+  private static final String INDEX_TABLE =
       """
       ux_fhirresourcemapping_patient      | PATIENT                                | resourcetype                 | resourcetype = 'PATIENT'
       ux_fhirresourcemapping_stage        | ENCOUNTER:{stage}, OBSERVATION:{stage} | resourcetype, programstageid | resourcetype in ('ENCOUNTER', 'OBSERVATION')
       ux_fhirresourcemapping_immunization | IMMUNIZATION:{stage}:{administered DE} | programstageid, (jsonb_path_query_first(fieldmappings, '$[*] ? (@.target == "IMMUNIZATION_ADMINISTERED").source') #>> '{}') | resourcetype = 'IMMUNIZATION'
-      """
-          .lines()
-          .map(IndexContract::parse)
-          .toList();
-
+      """;
+  private static final List<IndexContract> PARTIAL_INDEXES =
+      INDEX_TABLE.lines().map(IndexContract::parse).toList();
   @Autowired private FhirResourceMappingStore store;
   @Autowired private TestSetup testSetup;
   @Autowired private JdbcTemplate jdbcTemplate;
@@ -160,9 +156,9 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     testSetup.importMetadata();
     manager.flush();
     manager.clear();
-    trackedEntityTypeId = idOf("trackedentitytype", PERSON_TYPE);
+    trackedEntityTypeId = idOf("trackedentitytype", PERSON);
     programId = idOf("program", PROGRAM);
-    programStageId = idOf("programstage", PROGRAM_STAGE_UID);
+    programStageId = idOf("programstage", STAGE);
   }
 
   @Test
@@ -173,7 +169,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     setPublicSharing(visible, "rw------");
     manager.clear();
     switchToNewUser("fhir-plain");
-    List<String> sharedWithUser = inTransaction(() -> uids(store.getAll()));
+    List<String> sharedWithUser = uidsInTransaction(store::getAll);
     assertAll(
         () -> assertFalse(sharedWithUser.contains(hidden), "hidden mapping visible"),
         () -> assertTrue(sharedWithUser.contains(visible), "public mapping not visible"),
@@ -203,36 +199,31 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     List<String> unmodelled = new ArrayList<>(hbm.keySet());
     for (var d : Introspector.getBeanInfo(FhirResourceMapping.class).getPropertyDescriptors())
       if (d.getReadMethod() != null) unmodelled.remove(d.getName());
-    Set<String> modelOwned = new TreeSet<>(hbm.keySet());
+    Set<String> owned = new TreeSet<>(hbm.keySet());
     Class<?> type = FhirResourceMapping.class;
-    while ((type = type.getSuperclass()) != Object.class)
-      modelOwned.removeAll(instanceFields(type));
-    IndexContract patient = PARTIAL_INDEXES.get(0);
-    IndexContract stage = PARTIAL_INDEXES.get(1);
-    String predicate = patient.predicate() + " or resourcetype = 'OBSERVATION'";
-    String keys = stage.keys() + ", name";
-    List<IndexContract> mutated =
-        List.of(
-            new IndexContract(patient.name(), patient.uniquenessKey(), patient.keys(), predicate),
-            new IndexContract(stage.name(), stage.uniquenessKey(), keys, stage.predicate()),
-            PARTIAL_INDEXES.get(2));
+    while ((type = type.getSuperclass()) != Object.class) owned.removeAll(instanceFields(type));
+    String mutatedTable =
+        INDEX_TABLE
+            .replace("= 'PATIENT'", "= 'PATIENT' or resourcetype = 'OBSERVATION'")
+            .replace("programstageid |", "programstageid, name |");
+    List<IndexContract> mutated = mutatedTable.lines().map(IndexContract::parse).toList();
     Map<String, String> mismatches = partialIndexMismatches(scratchIndexes(mutated));
+    var mutatedNames = Set.of(PARTIAL_INDEXES.get(0).name(), PARTIAL_INDEXES.get(1).name());
     assertAll(
         () -> assertEquals(List.of(), unmodelled, "properties missing from the model"),
-        () -> assertEquals(modelOwned, instanceFields(FhirResourceMapping.class), "model fields"),
+        () -> assertEquals(owned, instanceFields(FhirResourceMapping.class), "model fields"),
         () -> assertEquals(hbm, parseHbmElements()),
         () -> assertEquals(columns, queryPairs(COLUMNS_SQL, TABLE)),
         () -> assertEquals(constraints, queryPairs(CONSTRAINTS_SQL)),
         () -> assertEquals(constraintIndexes, otherIndexes),
         () -> assertEquals(Map.of(), partialIndexMismatches(indexes), "partial unique indexes"),
-        () ->
-            assertEquals(
-                Set.of(patient.name(), stage.name()), mismatches.keySet(), mismatches::toString));
+        () -> assertEquals(mutatedNames, mismatches.keySet(), mismatches::toString));
   }
 
   @Test
   void uniqueIndexesRejectDuplicates() {
-    String first = administered("DATAEL00001");
+    String first = ADMINISTERED.formatted("DATAEL00001");
+    String second = ADMINISTERED.formatted("DATAEL00002");
     insertCommitted("PATIENT", null, null, "[]");
     insertCommitted("ENCOUNTER", programId, programStageId, "[]");
     insertCommitted("OBSERVATION", programId, programStageId, "[]");
@@ -242,10 +233,9 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
         () -> assertRejected("ux_fhirresourcemapping_stage", "ENCOUNTER", "[]"),
         () -> assertRejected("ux_fhirresourcemapping_stage", "OBSERVATION", "[]"),
         () -> assertRejected("ux_fhirresourcemapping_immunization", "IMMUNIZATION", first));
-    insertCommitted("IMMUNIZATION", programId, programStageId, administered("DATAEL00002"));
-    assertEquals(
-        Map.of("ENCOUNTER", "1", "IMMUNIZATION", "2", "OBSERVATION", "1", "PATIENT", "1"),
-        queryPairs(COUNTS_BY_TYPE));
+    insertCommitted("IMMUNIZATION", programId, programStageId, second);
+    var counts = Map.of("ENCOUNTER", "1", "IMMUNIZATION", "2", "OBSERVATION", "1", "PATIENT", "1");
+    assertEquals(counts, queryPairs(COUNTS_BY_TYPE));
   }
 
   @Test
@@ -275,18 +265,16 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   @Test
   void metadataImportBypassIsContainedAtResolution() {
     String uid = nextUid();
-    String mapping =
+    String bundle =
         """
-        {"id": "%s", "name": "FHIR store test %s", "resourceType": "PATIENT", "trackedEntityType":
-          {"id": "%s"}, "fieldMappings": [{"target": "PATIENT_IDENTIFIER", "sourceType": "ATTRIBUTE",
-          "source": "integerAttr"}]}
+        {"fhirResourceMappings": [{"id": "%s", "name": "FHIR store test %s", "resourceType": "PATIENT",
+          "trackedEntityType": {"id": "%s"}, "fieldMappings": [{"target": "PATIENT_IDENTIFIER",
+          "sourceType": "ATTRIBUTE", "source": "integerAttr"}]}]}
         """
-            .formatted(uid, uid, PERSON_TYPE);
-    String bundle = "{\"fhirResourceMappings\": [%s]}".formatted(mapping);
+            .formatted(uid, uid, PERSON);
     JsonMixed imported = POST("/metadata?skipValidation=true", bundle).content(HttpStatus.OK);
     manager.clear();
-    JsonImportSummary report = imported.get("response", JsonImportSummary.class);
-    assertEquals("OK", report.getStatus(), imported::toJson);
+    assertEquals("OK", imported.getString("response.status").string(), imported::toJson);
     assertEquals(List.of(uid), noAclUids(PATIENT));
     HttpResponse read = GET("/fhir/Patient/{id}", FRANK);
     assertOutcome(
@@ -335,14 +323,13 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
     factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
     factory.setExpandEntityReferences(false);
-    DocumentBuilder builder = factory.newDocumentBuilder();
-    builder.setEntityResolver((publicId, systemId) -> new InputSource(new StringReader("")));
+    DocumentBuilder dom = factory.newDocumentBuilder();
+    dom.setEntityResolver((publicId, systemId) -> new InputSource(new StringReader("")));
     Map<String, String> elements = new TreeMap<>();
-    for (String path : List.of(MAPPING_HBM, IDENTIFIABLE_PROPERTIES_HBM)) {
+    for (String path : List.of(MAPPING_HBM, IDENTIFIABLE_HBM)) {
       String hbm = new ClassPathResource(path).getContentAsString(UTF_8);
       String xml = path.equals(MAPPING_HBM) ? hbm : "<root>" + hbm + "</root>";
-      NodeList nodes =
-          builder.parse(new InputSource(new StringReader(xml))).getElementsByTagName("*");
+      NodeList nodes = dom.parse(new InputSource(new StringReader(xml))).getElementsByTagName("*");
       for (int i = 0; i < nodes.getLength(); i++) {
         Element element = (Element) nodes.item(i);
         if (Set.of("id", "property", "many-to-one").contains(element.getTagName())) {
@@ -357,36 +344,21 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   private static String hbmElement(Element element) {
     Element child = (Element) element.getElementsByTagName("column").item(0);
     Element column = child == null ? element : child;
-    String name = child == null ? element.getAttribute("column") : child.getAttribute("name");
-    boolean nullable =
-        !"id".equals(element.getTagName()) && !"true".equals(column.getAttribute("not-null"));
-    return String.join(
-        " ",
-        element.getTagName(),
-        (name.isEmpty() ? element.getAttribute("name") : name).toLowerCase(Locale.ROOT),
-        column.getAttribute("length"),
-        nullable ? "YES" : "NO",
-        String.valueOf("true".equals(column.getAttribute("unique"))),
-        element.getAttribute("foreign-key"));
+    String tag = element.getTagName();
+    String named = child == null ? element.getAttribute("column") : child.getAttribute("name");
+    String name = (named.isEmpty() ? element.getAttribute("name") : named).toLowerCase(Locale.ROOT);
+    boolean nullable = !"id".equals(tag) && !"true".equals(column.getAttribute("not-null"));
+    String unique = String.valueOf("true".equals(column.getAttribute("unique")));
+    String length = column.getAttribute("length");
+    String foreignKey = element.getAttribute("foreign-key");
+    return String.join(" ", tag, name, length, nullable ? "YES" : "NO", unique, foreignKey);
   }
 
-  private String insertCommitted(String resourceType, Long program, Long stage, String fields) {
+  private String insertCommitted(String type, Long program, Long stage, String fields) {
     String uid = nextUid();
-    newTransaction()
-        .executeWithoutResult(status -> insertRow(uid, resourceType, program, stage, fields));
+    Object[] row = {uid, uid, type, trackedEntityTypeId, program, stage, fields};
+    newTransaction().executeWithoutResult(status -> jdbcTemplate.update(INSERT_SQL, row));
     return uid;
-  }
-
-  private void insertRow(String uid, String resourceType, Long program, Long stage, String fields) {
-    int text = Types.VARCHAR;
-    int id = Types.BIGINT;
-    jdbcTemplate.update(
-        "insert into fhirresourcemapping (fhirresourcemappingid, uid, name, created, lastupdated,"
-            + " translations, resourcetype, trackedentitytypeid, programid, programstageid,"
-            + " fieldmappings) values (nextval('hibernate_sequence'), ?, 'FHIR store test ' || ?,"
-            + " now(), now(), '[]'::jsonb, ?, ?, ?, ?, ?::jsonb)",
-        new Object[] {uid, uid, resourceType, trackedEntityTypeId, program, stage, fields},
-        new int[] {text, text, text, id, id, id, text});
   }
 
   private void setPublicSharing(String uid, String publicAccess) {
@@ -415,28 +387,20 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   }
 
   private List<String> noAclUids(FhirResourceType type) {
-    return inTransaction(() -> uids(store.getByResourceTypeNoAcl(type)));
+    return uidsInTransaction(() -> store.getByResourceTypeNoAcl(type));
   }
 
-  private <T> T inTransaction(Supplier<T> operation) {
+  private List<String> uidsInTransaction(Supplier<List<FhirResourceMapping>> query) {
     TransactionTemplate template = newTransaction();
     template.setReadOnly(true);
-    return template.execute(status -> operation.get());
+    return template.execute(
+        status -> query.get().stream().map(FhirResourceMapping::getUid).sorted().toList());
   }
 
   private TransactionTemplate newTransaction() {
     var template = new TransactionTemplate(transactionTemplate.getTransactionManager());
     template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     return template;
-  }
-
-  private static List<String> uids(List<FhirResourceMapping> mappings) {
-    return mappings.stream().map(FhirResourceMapping::getUid).sorted().toList();
-  }
-
-  private static String administered(String dataElementUid) {
-    return "[{\"target\":\"IMMUNIZATION_ADMINISTERED\",\"sourceType\":\"DATA_ELEMENT\",\"source\":\"%s\"}]"
-        .formatted(dataElementUid);
   }
 
   private String nextUid() {
@@ -450,7 +414,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     } catch (Exception ex) {
       throw new IllegalStateException("Concurrent insertions did not start together", ex);
     }
-    insertRow(uid, "PATIENT", null, null, "[]");
+    jdbcTemplate.update(INSERT_SQL, uid, uid, "PATIENT", trackedEntityTypeId, null, null, "[]");
     return uid;
   }
 
@@ -480,6 +444,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   }
 
   interface FhirResponses {
+    String SERVER_ORIGIN = "http://localhost";
     String ORIGIN = "https://fhir.example.org";
     Object[] FORWARDED = {
       Header("X-Forwarded-Proto", "https"),
@@ -489,20 +454,20 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
 
     /** Parses FHIR JSON strictly: unknown elements and invalid values fail the parse. */
     static <T extends IBaseResource> T parse(String body, Class<T> type) {
-      return FhirContext.forR4Cached()
-          .newJsonParser()
-          .setParserErrorHandler(new StrictErrorHandler())
-          .parseResource(type, body);
+      var parser = FhirContext.forR4Cached().newJsonParser();
+      return parser.setParserErrorHandler(new StrictErrorHandler()).parseResource(type, body);
     }
 
     static <T extends IBaseResource> T parseOk(HttpResponse response, Class<T> type) {
       return parse(fhirBody(response, HttpStatus.OK), type);
     }
 
+    /** Asserts the status, FHIR JSON and Cache-Control no-store, private; returns the body. */
     static String fhirBody(HttpResponse response, HttpStatus status) {
       assertEquals(status, response.status(), () -> response.contentUnchecked().toString());
       String body = response.content("application/fhir+json");
       assertEquals(FHIR_JSON_MEDIA_TYPE, MediaType.parseMediaType(response.getContentType()));
+      assertEquals("no-store, private", response.header("Cache-Control"), body);
       return body;
     }
 
@@ -520,8 +485,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       List<String> self =
           bundle.getLink().stream()
               .filter(link -> Bundle.LINK_SELF.equals(link.getRelation()))
-              .map(link -> link.getUrl().replaceFirst("^.*?/api/", "/api/"))
-              .map(link -> URLDecoder.decode(link, UTF_8))
+              .map(l -> URLDecoder.decode(l.getUrl().replaceFirst("^.*?/api/", "/api/"), UTF_8))
               .toList();
       assertEquals(List.of(URLDecoder.decode(url, UTF_8)), self, body);
       String type = url.split("\\?")[0].replaceAll(".*/", "");
@@ -548,18 +512,17 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       return body;
     }
 
+    static void assertOmits(String body, String... values) {
+      Stream.of(values).forEach(value -> assertFalse(body.contains(value), body));
+    }
+
     static String assertNotFound(HttpResponse response) {
       String diagnostics = FhirApiException.notFound().getDiagnostics();
       return assertOutcome(response, HttpStatus.NOT_FOUND, IssueType.NOTFOUND, diagnostics::equals);
     }
   }
 
-  /**
-   * Base of the FHIR controller tests on PostgreSQL with {@code fhir.api.enabled=true}. Once per
-   * class it deletes every mapping, imports the Tracker fixtures and {@value #MAPPINGS_FILE}, and
-   * deletes every mapping afterwards. Each test starts with public access {@value #DATA_READ} on
-   * the person type and both programs and {@value #METADATA_ONLY} on the given-name attribute.
-   */
+  /** Base of the PostgreSQL FHIR controller tests: per-class fixtures, per-test sharing. */
   @TestInstance(TestInstance.Lifecycle.PER_CLASS)
   @ContextConfiguration(classes = FhirPostgresControllerTestBase.FhirApiEnabledConfig.class)
   abstract static class FhirPostgresControllerTestBase
@@ -568,14 +531,15 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     static final String DATA_READ = "rwrw----";
     static final String METADATA_ONLY = "rw------";
     static final String ROOT_ORG_UNIT = "h4w96yEMlzO";
-    static final String PERSON_TYPE = "ja8NY4PW7Xm";
+    static final String PERSON = "ja8NY4PW7Xm";
     static final String PROGRAM = "BFcipDERJnf";
+    static final String STAGE = "NpsdDv6kKSO";
     static final String SECOND_PROGRAM = "shPjYNifvMK";
     static final String GIVEN_ATTRIBUTE = "dIVt4l5vIOa";
+    static final String FAMILY_ATTRIBUTE = "toUpdate000";
+    static final String IDENTIFIER_SYSTEM = "urn:dhis2:fhir-test:integer-attr";
     static final String FRANK = "dUE514NMOlo";
     static final String SUMMER = "QS6w44flWAf";
-    private static final String MAPPINGS_FILE = "fhir/fhir_resource_mappings.json";
-
     private final AtomicInteger userCounter = new AtomicInteger();
     @Autowired private TestSetup testSetup;
     User importUser;
@@ -601,7 +565,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       testSetup.importTrackerData();
       manager.flush();
       manager.clear();
-      testSetup.importMetadata(MAPPINGS_FILE);
+      testSetup.importMetadata("fhir/fhir_resource_mappings.json");
       manager.flush();
       manager.clear();
     }
@@ -616,7 +580,7 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     @BeforeEach
     void switchToImportUserWithBaselineSharing() {
       switchContextToUser(importUser);
-      setPublicSharing("trackedEntityType", PERSON_TYPE, DATA_READ);
+      setPublicSharing("trackedEntityType", PERSON, DATA_READ);
       setPublicSharing("program", PROGRAM, DATA_READ);
       setPublicSharing("program", SECOND_PROGRAM, DATA_READ);
       setPublicSharing("trackedEntityAttribute", GIVEN_ATTRIBUTE, METADATA_ONLY);
@@ -630,12 +594,18 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       return resource;
     }
 
+    <T extends IBaseResource> T assertReadAcceptsOnlyFormat(Class<T> type, String id) {
+      String url = "/api/fhir/" + type.getSimpleName() + "/" + id;
+      read(type, id);
+      assertInvalid(url + "?_format=xml", "_format");
+      assertInvalid(url + "?foo=1", "foo");
+      return read(type, id + "?_format=json");
+    }
+
     /** Asserts {@code 400 invalid} naming {@code parameter} and no other query parameter. */
     void assertInvalid(String url, String parameter) {
-      String query = url.contains("?") ? url.substring(url.indexOf('?') + 1) : "";
       List<String> others =
-          Stream.of(query.split("&"))
-              .map(pair -> pair.split("=", 2)[0])
+          Stream.of(url.replaceFirst("^[^?]*\\??", "").replaceAll("=[^&]*", "").split("&"))
               .filter(name -> !name.isEmpty() && !name.equals(parameter))
               .toList();
       String prefix = "Invalid parameter '" + parameter + "':";
@@ -644,65 +614,63 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       assertOutcome(GET(url), HttpStatus.BAD_REQUEST, IssueType.INVALID, namesOnlyParameter);
     }
 
-    /** GETs {@code url} and its next page behind a proxy: every link starts with the origin. */
+    /** GETs url and its next page with FORWARDED: every URL starts with SERVER_ORIGIN + path. */
     List<Bundle> forwardedPages(String url, String path) {
+      Predicate<String> server = u -> u.startsWith(SERVER_ORIGIN + path) && !u.contains(ORIGIN);
       Bundle first = searchset(url, fhirBody(GET(url, FORWARDED), HttpStatus.OK));
-      String self = first.getLink(Bundle.LINK_SELF).getUrl();
-      String next = first.getLink(Bundle.LINK_NEXT).getUrl();
-      for (String link : List.of(first.getEntryFirstRep().getFullUrl(), self, next))
-        assertTrue(link.startsWith(ORIGIN + path), link);
-      String nextPath = next.substring(ORIGIN.length());
+      String nextPath = first.getLink(Bundle.LINK_NEXT).getUrl().substring(SERVER_ORIGIN.length());
       Bundle second = searchset(nextPath, fhirBody(GET(nextPath, FORWARDED), HttpStatus.OK));
-      assertTrue(second.getEntryFirstRep().getFullUrl().startsWith(ORIGIN + path), nextPath);
+      for (Bundle page : List.of(first, second)) {
+        page.getEntry().forEach(e -> assertTrue(server.test(e.getFullUrl()), e.getFullUrl()));
+        page.getLink().forEach(l -> assertTrue(server.test(l.getUrl()), l.getUrl()));
+      }
       return List.of(first, second);
     }
 
     String assertForbidden(String url) {
-      String diagnostics = FhirApiException.forbidden().getDiagnostics();
-      return assertOutcome(
-          GET(url), HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, diagnostics::equals);
+      Predicate<String> fixed = FhirApiException.forbidden().getDiagnostics()::equals;
+      return assertOutcome(GET(url), HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, fixed);
     }
 
     /** Asserts one {@code 403} body for all {@code urls} that contains none of {@code hidden}. */
     String assertSameForbidden(List<String> urls, String... hidden) {
       String body = assertForbidden(urls.get(0));
       urls.stream().skip(1).forEach(url -> assertEquals(body, assertForbidden(url), url));
-      Stream.of(hidden).forEach(value -> assertFalse(body.contains(value), body));
+      assertOmits(body, hidden);
       return body;
     }
 
-    /** Runs {@code test} as a new user under the restrictions, then restores public access. */
-    void asRestrictedUser(List<Restriction> restrictions, Runnable test) {
+    /** Runs {@code tests} in order as a new user under the restrictions, then restores access. */
+    void asRestrictedUser(List<Restriction> restrictions, Runnable... tests) {
       Map<Restriction, String> previous = new LinkedHashMap<>();
       try {
         restrictions.forEach(r -> previous.put(r, setPublicSharing(r.type(), r.uid(), r.access())));
-        asUser(userWithScope(ROOT_ORG_UNIT, ROOT_ORG_UNIT), test);
+        asUser(userWithScope(ROOT_ORG_UNIT, ROOT_ORG_UNIT), tests);
       } finally {
         previous.forEach((r, access) -> setPublicSharing(r.type(), r.uid(), access));
       }
     }
 
-    /** Runs {@code check} as the import user, then as a new user with the baseline sharing. */
-    void asImportAndBaselineUser(Runnable check) {
-      check.run();
-      asRestrictedUser(List.of(), check);
+    /** Runs {@code checks} as the import user, then as a new user with the baseline sharing. */
+    void asImportAndBaselineUser(Runnable... checks) {
+      Stream.of(checks).forEach(Runnable::run);
+      asRestrictedUser(List.of(), checks);
     }
 
-    void asUser(User user, Runnable test) {
+    void asUser(User user, Runnable... tests) {
       switchContextToUser(user);
       try {
-        test.run();
+        Stream.of(tests).forEach(Runnable::run);
       } finally {
         switchContextToUser(importUser);
       }
     }
 
     /** Creates a user without authorities, user groups or user sharing. */
-    User userWithScope(String captureOrgUnit, String searchOrgUnit) {
+    User userWithScope(String captureUnit, String searchUnit) {
       User user = createUserWithAuth("fhiruser" + userCounter.incrementAndGet());
-      user.addOrganisationUnit(manager.get(OrganisationUnit.class, captureOrgUnit));
-      user.setTeiSearchOrganisationUnits(
-          Set.of(manager.get(OrganisationUnit.class, searchOrgUnit)));
+      user.addOrganisationUnit(manager.get(OrganisationUnit.class, captureUnit));
+      user.setTeiSearchOrganisationUnits(Set.of(manager.get(OrganisationUnit.class, searchUnit)));
       userService.updateUser(user);
       manager.clear();
       return user;

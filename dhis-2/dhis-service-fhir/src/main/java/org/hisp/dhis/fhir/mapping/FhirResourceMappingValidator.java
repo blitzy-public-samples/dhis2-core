@@ -54,6 +54,12 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class FhirResourceMappingValidator {
   public static final String OTHER_MAPPING = "another " + FhirResourceMapping.class.getSimpleName();
+
+  /** Properties besides the UID with unique non-null values, in reporting order, with getters. */
+  public static final Map<String, Function<FhirResourceMapping, String>> UNIQUE_PROPERTIES =
+      uniqueProperties();
+
+  private static final Pattern BLANK_NAME = Pattern.compile("[\\p{IsWhite_Space}\\x{FEFF}]*");
   private static final int MAX_ENTRIES = 500;
   private static final int MAX_PAIRS = 100;
   private static final int MAX_TEXT = 1024;
@@ -77,12 +83,15 @@ public class FhirResourceMappingValidator {
     return validate(mapping, others, (klass, uid) -> manager.getNoAcl(klass, uid));
   }
 
-  /** Validates a mapping by the rules that need no referenced metadata and no other mappings. */
+  /** Validates by the rules needing no metadata or other mappings: name, size bounds, structure. */
   public List<ErrorReport> validateStructure(FhirResourceMapping mapping) {
     return validate(mapping, null, null);
   }
 
-  /** Validates a mapping with metadata from {@code lookup} and the keys of {@code others}. */
+  /**
+   * Validates with {@code lookup} metadata and the keys, names and codes of {@code others}. A blank
+   * name is reported first; a mapping over a size bound gets only that and the name report.
+   */
   @Transactional(readOnly = true)
   public List<ErrorReport> validate(
       FhirResourceMapping mapping,
@@ -90,6 +99,7 @@ public class FhirResourceMappingValidator {
       @CheckForNull
           BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup) {
     Check check = new Check(mapping, lookup);
+    check.validateName();
     if (check.exceedsBounds()) {
       return check.reports;
     }
@@ -156,6 +166,17 @@ public class FhirResourceMappingValidator {
     return folded.toString();
   }
 
+  private static boolean isBlankName(@CheckForNull String name) {
+    return name == null || BLANK_NAME.matcher(name).matches();
+  }
+
+  private static Map<String, Function<FhirResourceMapping, String>> uniqueProperties() {
+    Map<String, Function<FhirResourceMapping, String>> properties = new LinkedHashMap<>();
+    properties.put("name", FhirResourceMapping::getName);
+    properties.put("code", FhirResourceMapping::getCode);
+    return Collections.unmodifiableMap(properties);
+  }
+
   private static List<FhirFieldMapping> fieldMappings(FhirResourceMapping mapping) {
     return mapping.getFieldMappings() == null ? List.of() : mapping.getFieldMappings();
   }
@@ -215,7 +236,14 @@ public class FhirResourceMappingValidator {
       reports.add(new ErrorReport(FhirResourceMapping.class, code, args));
     }
 
+    void validateName() {
+      if (isBlankName(mapping.getName())) {
+        add(ErrorCode.E4000, "name");
+      }
+    }
+
     boolean exceedsBounds() {
+      int before = reports.size();
       List<FhirFieldMapping> entries = fieldMappings(mapping);
       long total = 0;
       if (measure("fieldMappings", "size ", entries.size(), MAX_ENTRIES) <= MAX_ENTRIES) {
@@ -224,7 +252,7 @@ public class FhirResourceMappingValidator {
         }
       }
       measure("fieldMappings", "length ", total, MAX_TOTAL);
-      return !reports.isEmpty();
+      return reports.size() > before;
     }
 
     private long textLength(int i, FhirFieldMapping entry) {
@@ -477,18 +505,31 @@ public class FhirResourceMappingValidator {
     }
 
     void validateUniqueness(@CheckForNull Collection<FhirResourceMapping> others) {
-      String key = uniquenessKey(mapping);
+      if (others == null) {
+        return;
+      }
       String self = mapping.getUid();
-      if (key != null
-          && others != null
-          && others.stream()
-              .filter(other -> other != mapping && (self == null || !self.equals(uid(other))))
-              .anyMatch(other -> key.equals(uniquenessKey(other)))) {
+      List<FhirResourceMapping> distinct =
+          others.stream()
+              .filter(other -> other != null && other != mapping)
+              .filter(other -> self == null || !self.equals(uid(other)))
+              .toList();
+      String key = uniquenessKey(mapping);
+      if (key != null && distinct.stream().anyMatch(other -> key.equals(uniquenessKey(other)))) {
         String part = type == FhirResourceType.IMMUNIZATION ? ", " + IMMUNIZATION_ADMINISTERED : "";
         String property = type == FhirResourceType.PATIENT ? "resourceType" : "programStage" + part;
         String value = key.substring(key.indexOf(':') + 1).replace(":", ", ");
         add(ErrorCode.E5003, property, value, id, OTHER_MAPPING);
       }
+      UNIQUE_PROPERTIES.forEach(
+          (property, valueOf) -> {
+            String value = valueOf.apply(mapping);
+            boolean compared = value != null && !(property.equals("name") && isBlankName(value));
+            if (compared
+                && distinct.stream().anyMatch(other -> value.equals(valueOf.apply(other)))) {
+              add(ErrorCode.E5003, property, value, id, OTHER_MAPPING);
+            }
+          });
     }
   }
 }

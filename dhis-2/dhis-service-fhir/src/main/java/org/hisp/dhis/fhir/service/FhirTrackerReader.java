@@ -33,6 +33,7 @@ import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.springframework.transaction.support.TransactionOperations.withoutTransaction;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 import java.lang.reflect.UndeclaredThrowableException;
 import java.net.SocketTimeoutException;
 import java.sql.*;
@@ -77,6 +78,10 @@ public class FhirTrackerReader {
   static final String NO_ATTRIBUTE_PARAMETERS =
       " and none is configured, so " + FhirSearchParameters.ID + " is required";
   static final String SELECTOR_NOT_FOUND = "is specified but does not exist";
+  static final String MAX_COUNT_REACHED = "maxteicountreached";
+  static final String ABOVE_MAX_COUNT =
+      "The search matches more tracked entities than can be returned outside the capture scope";
+  static final String SCOPE_REJECTED = "The search is not accepted for the user's search scope";
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
   private static final List<Class<? extends Exception>> QUERY_TIMEOUTS =
       List.of(
@@ -177,7 +182,7 @@ public class FhirTrackerReader {
     }
   }
 
-  /** Finds tracked entities after a checkpoint, translating export-path errors to FHIR errors. */
+  /** Finds tracked entities after a checkpoint; the export path sees no forwarding headers. */
   @SneakyThrows(WebMessageException.class)
   public Page<TrackedEntity> findTrackedEntities(
       @Nonnull TrackedEntityRequestParams params,
@@ -186,7 +191,7 @@ public class FhirTrackerReader {
     Objects.requireNonNull(origin, "origin");
     checkpoint();
     try {
-      return trackedEntityAdapter.find(params, request).page();
+      return trackedEntityAdapter.find(params, new WithoutForwardingHeaders(request)).page();
     } catch (ForbiddenException e) {
       log.debug("Tracked entity export denied access ({})", exceptionName(e));
       throw FhirApiException.forbidden();
@@ -208,7 +213,7 @@ public class FhirTrackerReader {
     }
   }
 
-  /** Finds enrollments with their events after a checkpoint; a denial yields a forbidden result. */
+  /** Finds enrollments after a checkpoint, forbidden on denial, without forwarding headers. */
   public EnrollmentResult findEnrollments(
       @Nonnull EnrollmentRequestParams params,
       @Nonnull HttpServletRequest request,
@@ -216,7 +221,8 @@ public class FhirTrackerReader {
     Objects.requireNonNull(type, "type");
     checkpoint();
     try {
-      return EnrollmentResult.of(enrollmentAdapter.find(params, request).page().getItems());
+      HttpServletRequest exported = new WithoutForwardingHeaders(request);
+      return EnrollmentResult.of(enrollmentAdapter.find(params, exported).page().getItems());
     } catch (ForbiddenException e) {
       log.debug("Enrollment export for {} denied access ({})", type.fhirType(), exceptionName(e));
       return EnrollmentResult.ofForbidden();
@@ -399,7 +405,22 @@ public class FhirTrackerReader {
       return FhirApiException.invalidParameter(
           named, names.isEmpty() ? required + NO_ATTRIBUTE_PARAMETERS : required);
     }
-    return unusableMapping(PATIENT, exception, params.getProgram(), params.getTrackedEntityType());
+    List<String> names = new ArrayList<>(origin.suppliedAttributeParameters());
+    if (params.getTrackedEntities() != null && !params.getTrackedEntities().isEmpty()) {
+      names.add(0, FhirSearchParameters.ID);
+    }
+    if (names.isEmpty()) {
+      names.addAll(origin.configuredAttributeParameters());
+    }
+    String named =
+        names.isEmpty() ? FhirSearchParameters.ID : String.join(PARAMETER_SEPARATOR, names);
+    log.debug(
+        "Tracked entity export rejected the search scope, naming {} ({})",
+        named,
+        exceptionName(exception));
+    return FhirApiException.invalidParameter(
+        named,
+        message != null && message.contains(MAX_COUNT_REACHED) ? ABOVE_MAX_COUNT : SCOPE_REJECTED);
   }
 
   private static FhirApiException unusableMapping(
@@ -474,10 +495,49 @@ public class FhirTrackerReader {
       }
     }
 
-    /** Restores the previous network timeout after commit or rollback. */
     @Override
     public void afterCompletion(int status) {
       restore();
+    }
+  }
+
+  private static final class WithoutForwardingHeaders extends HttpServletRequestWrapper {
+    WithoutForwardingHeaders(HttpServletRequest request) {
+      super(request);
+    }
+
+    private static boolean isForwarding(@CheckForNull String name) {
+      String lower = name == null ? "" : name.toLowerCase(Locale.ROOT);
+      return lower.equals("forwarded") || lower.startsWith("x-forwarded-");
+    }
+
+    @Override
+    public String getHeader(String name) {
+      return isForwarding(name) ? null : super.getHeader(name);
+    }
+
+    @Override
+    public Enumeration<String> getHeaders(String name) {
+      return isForwarding(name) ? Collections.emptyEnumeration() : super.getHeaders(name);
+    }
+
+    @Override
+    public Enumeration<String> getHeaderNames() {
+      Enumeration<String> names = super.getHeaderNames();
+      return names == null
+          ? null
+          : Collections.enumeration(
+              Collections.list(names).stream().filter(name -> !isForwarding(name)).toList());
+    }
+
+    @Override
+    public int getIntHeader(String name) {
+      return isForwarding(name) ? -1 : super.getIntHeader(name);
+    }
+
+    @Override
+    public long getDateHeader(String name) {
+      return isForwarding(name) ? -1 : super.getDateHeader(name);
     }
   }
 

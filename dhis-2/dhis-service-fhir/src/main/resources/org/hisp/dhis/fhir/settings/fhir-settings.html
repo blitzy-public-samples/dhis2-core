@@ -168,10 +168,10 @@
         }
       }
       const succeeded = (result) => result.ok && isObject(result.json) && result.json.status === 'OK';
-      function errorText(result) {
+      function errorText(result, retry = 'try again') {
         const json = isObject(result.json) ? result.json : {};
         const reports = isObject(json.response) ? json.response.errorReports : undefined;
-        if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again and reload this page.'];
+        if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again in another browser tab, then return to this tab and ' + retry + '. Reloading this page discards unsaved changes in the editor.'];
         if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
         if (json.message) return text(json.message).split('\n');
         if (result.timedOut) return ['The server did not respond within ' + READ_TIMEOUT_MS / 1000 + ' seconds. Try again.'];
@@ -523,7 +523,7 @@
             resetForm();
           } else {
             const reports = result.status !== 401 && isObject(result.json) && isObject(result.json.response) ? result.json.response.errorReports : undefined;
-            const problems = errorText(result).map((message, index) => serverProblem(message, Array.isArray(reports) && isObject(reports[index]) ? text(reports[index].errorProperty) : ''));
+            const problems = errorText(result, 'select Save again').map((message, index) => serverProblem(message, Array.isArray(reports) && isObject(reports[index]) ? text(reports[index].errorProperty) : ''));
             const gone = result.status === 404 && state.editing !== null;
             if (gone) problems.push('The mapping no longer exists, so the form has left edit mode. Saving again creates a new mapping with these values.');
             if (gone) [state.editing, byId('fhir-editing').textContent, cancelButton.hidden] = [null, 'New mapping', true];

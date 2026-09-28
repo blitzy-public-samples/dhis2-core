@@ -41,7 +41,6 @@ import org.hl7.fhir.common.hapi.validation.support.*;
 import org.hl7.fhir.common.hapi.validation.validator.FhirInstanceValidator;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 
-/** Validates R4 resources against the base specification and parses and encodes FHIR JSON. */
 public final class FhirR4Validation {
   private static final FhirContext CONTEXT = FhirContext.forR4Cached();
   private static final ValidationSupportChain SUPPORT =
@@ -54,7 +53,6 @@ public final class FhirR4Validation {
 
   private FhirR4Validation() {}
 
-  /** Fails the test, listing each message, when validation reports an ERROR or FATAL message. */
   public static void assertValid(IBaseResource resource) {
     var messages = VALIDATOR.validateWithResult(resource).getMessages().stream();
     var bad = messages.filter(m -> m.getSeverity() == ERROR || m.getSeverity() == FATAL);
@@ -62,13 +60,11 @@ public final class FhirR4Validation {
     assertEquals(List.of(), text.toList(), "FHIR R4 validation errors in " + resource.fhirType());
   }
 
-  /** Parses FHIR JSON with a new parser that rejects unknown elements and invalid values. */
   public static <T extends IBaseResource> T parseStrict(String json, Class<T> type) {
     var parser = CONTEXT.newJsonParser().setParserErrorHandler(new StrictErrorHandler());
     return parser.parseResource(type, json);
   }
 
-  /** Encodes the resource as compact FHIR JSON with a new parser. */
   public static String encode(IBaseResource resource) {
     return CONTEXT.newJsonParser().encodeResourceToString(resource);
   }

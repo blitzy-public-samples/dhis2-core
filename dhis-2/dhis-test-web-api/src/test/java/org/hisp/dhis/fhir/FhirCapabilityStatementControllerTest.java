@@ -30,14 +30,13 @@
 package org.hisp.dhis.fhir;
 
 import static org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses.*;
-import static org.hisp.dhis.http.HttpClientAdapter.Body;
+import static org.hisp.dhis.http.HttpClientAdapter.*;
 import static org.hisp.dhis.http.HttpMethod.*;
 import static org.hisp.dhis.http.HttpStatus.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.*;
-import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirResponses;
 import org.hisp.dhis.fhir.mapping.FhirResourceMapping;
 import org.hisp.dhis.http.*;
 import org.hisp.dhis.jsontree.*;
@@ -59,11 +58,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 @ContextConfiguration(classes = FhirResourceMappingControllerTest.FhirApiEnabledConfig.class)
 class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestBase {
-  private static final String FHIR_BASE = "/api/fhir";
-  private static final String METADATA_PATH = FHIR_BASE + "/metadata";
-  private static final String FHIR_JSON = "application/fhir+json";
+  private static final String BASE = "/api/fhir";
+  private static final String METADATA = BASE + "/metadata";
   private static final String OBSERVATION_READ = "/Observation/TvctPPhpD8z-D9PbzJY8bJM-GieVkTxp4HH";
-
+  private static final String OPENAPI_PATHS =
+      "fhir/openapi.json fhir/openapi.yaml fhir/openapi.html 44/fhir/openapi.html";
   private static final String BRIDGED_TYPE_REQUESTS =
       """
       /Patient/dUE514NMOlo /Patient/bad /Patient/bad?foo=1 /Patient /Patient?family=rain&unknown=1 /Patient/dUE514NMOlo/$everything
@@ -71,7 +70,6 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
       /Immunization/TvctPPhpD8z-D9PbzJY8bJM-DATAEL00001 /Immunization/x-y /Immunization?patient=dUE514NMOlo
       /Observation/TvctPPhpD8z-D9PbzJY8bJM-GieVkTxp4HH /Observation/bad /Observation?patient=dUE514NMOlo
       """;
-
   @Autowired private TestSetup testSetup;
 
   @Test
@@ -79,25 +77,24 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     deleteAllMappings();
     testSetup.importMetadata();
     testSetup.importMetadata("fhir/fhir_resource_mappings.json");
-    manager.flush();
-    manager.clear();
-    CapabilityStatement statement = readCapabilityStatement("");
-    String url = statement.getImplementation().getUrl();
-    assertTrue(url != null && url.endsWith(FHIR_BASE), "implementation.url " + url);
-    List<String> expected =
-        List.of(
-            "Patient read search-type _id:token identifier:token family:string given:string"
-                + " | everything=http://hl7.org/fhir/OperationDefinition/Patient-everything",
-            "Encounter read search-type _id:token patient:reference subject:reference |",
-            "Immunization read search-type _id:token patient:reference |",
-            "Observation read search-type _id:token patient:reference subject:reference"
-                + " code:token |");
+    dbmsManager.clearSession();
+    CapabilityStatement statement = capabilities("");
+    assertEquals(SERVER_ORIGIN + BASE, statement.getImplementation().getUrl());
+    var proxied = parseOk(GET(METADATA, FORWARDED), CapabilityStatement.class);
+    assertEquals(SERVER_ORIGIN + BASE, proxied.getImplementation().getUrl());
+    String resources =
+        """
+        Patient read search-type _id:token identifier:token family:string given:string | everything=http://hl7.org/fhir/OperationDefinition/Patient-everything
+        Encounter read search-type _id:token patient:reference subject:reference |
+        Immunization read search-type _id:token patient:reference |
+        Observation read search-type _id:token patient:reference subject:reference code:token |
+        """;
+    List<String> expected = resources.lines().toList();
     assertEquals(expected, describeResources(statement));
     manager.delete(manager.get(FhirResourceMapping.class, "FhirMapObs1"));
-    manager.flush();
-    manager.clear();
-    assertEquals(expected.subList(0, 3), describeResources(readCapabilityStatement("")));
-    assertOutcome(GET, FHIR_BASE + OBSERVATION_READ, NOT_IMPLEMENTED, "Observation");
+    dbmsManager.clearSession();
+    assertEquals(expected.subList(0, 3), describeResources(capabilities("")));
+    assertIssue(GET, BASE + OBSERVATION_READ, NOT_IMPLEMENTED, "Observation");
     String openApi =
         "/openapi/openapi.json?failOnNameClash=true&failOnInconsistency=true"
             + " Patient Encounter Immunization Observation CapabilityStatement"
@@ -121,8 +118,8 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     for (String path : doc.$paths().names().stream().sorted().toList()) {
       OperationObject get = doc.$paths().get(path).get();
       JsonMap<MediaTypeObject> content = get.responses().get("200").content();
-      assertEquals(List.of(FHIR_JSON), content.names(), path);
-      SchemaObject schema = content.get(FHIR_JSON).schema();
+      assertEquals(List.of("application/fhir+json"), content.names(), path);
+      SchemaObject schema = content.get("application/fhir+json").schema();
       assertTrue(!schema.isRef() && schema.isObjectType(), path + " " + schema);
       StringJoiner line = new StringJoiner(" ").add(path);
       line.add(String.valueOf(get.description()).replaceAll(hl7, "$1"));
@@ -137,67 +134,48 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
 
   @Test
   void metadataAcceptsFormatAndRejectsOtherParameters() {
-    for (String format :
-        List.of("json", "application/json", "application/fhir+json", "application/fhir json"))
-      assertEquals(
-          FHIRVersion._4_0_1, readCapabilityStatement("?_format=" + format).getFhirVersion());
-    assertOutcome(GET, METADATA_PATH + "?_format=xml", BAD_REQUEST, "Invalid parameter '_format'");
-    assertOutcome(GET, METADATA_PATH + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
-    assertOutcome(
-        GET, METADATA_PATH + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
+    for (String f : "json,application/json,application/fhir+json,application/fhir json".split(","))
+      assertEquals(FHIRVersion._4_0_1, capabilities("?_format=" + f).getFhirVersion());
+    assertIssue(GET, METADATA + "?_format=xml", BAD_REQUEST, "Invalid parameter '_format'");
+    assertIssue(GET, METADATA + "?foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
+    assertIssue(GET, METADATA + "?_format=json&foo=1", BAD_REQUEST, "Invalid parameter 'foo'");
   }
 
   @Test
   void unmappedResourceTypesReturnNotSupported() {
     deleteAllMappings();
     for (String request : BRIDGED_TYPE_REQUESTS.strip().split("\\s+"))
-      assertOutcome(GET, FHIR_BASE + request, NOT_IMPLEMENTED, request.split("[/?]")[1]);
+      assertIssue(GET, BASE + request, NOT_IMPLEMENTED, request.split("[/?]")[1]);
   }
 
   @Test
   void unbridgedTypeAndWriteMethodsReturnNotSupported() {
     for (String path : List.of("/Condition", "/Condition/x", "/Condition?patient=dUE514NMOlo"))
-      assertOutcome(
-          GET, FHIR_BASE + path, NOT_IMPLEMENTED, "Resource type Condition is not supported");
+      assertIssue(GET, BASE + path, NOT_IMPLEMENTED, "Resource type Condition is not supported");
     for (HttpMethod method : List.of(POST, PUT, PATCH, DELETE))
       for (String path : List.of("", "/Patient", "/Patient/dUE514NMOlo", "/metadata"))
-        assertOutcome(
-            method, FHIR_BASE + path, NOT_IMPLEMENTED, "Write interactions are not supported");
+        assertIssue(method, BASE + path, NOT_IMPLEMENTED, "Write interactions are not supported");
   }
 
   @Test
   void unknownPathReturnsNotFound() {
-    for (String path :
-        List.of("", "/NotAResource", "/NotAResource/abc", "/Patient/dUE514NMOlo/extra/segment"))
-      assertOutcome(GET, FHIR_BASE + path, NOT_FOUND, "The requested resource was not found");
-  }
-
-  @Test
-  void openApiPathsUnderFhirReturnNotFoundForEveryAcceptHeader() {
-    List<String> paths =
-        List.of(
-            FHIR_BASE + "/openapi.json",
-            FHIR_BASE + "/openapi.yaml",
-            FHIR_BASE + "/openapi.html",
-            "/api/44/fhir/openapi.html");
+    for (var p : ",/NotAResource,/NotAResource/abc,/Patient/dUE514NMOlo/extra/segment".split(","))
+      assertIssue(GET, BASE + p, NOT_FOUND, "The requested resource was not found");
     List<String> accepts = List.of("text/html", "application/x-yaml", "application/json", "*/*");
-    for (String path : paths) {
-      assertAll(path, () -> FhirResponses.assertNotFound(GET(path)));
+    for (String path : OPENAPI_PATHS.split(" ")) {
+      assertAll(path, () -> assertNotFound(GET(path)));
       for (String accept : accepts)
-        assertAll(
-            path + " Accept " + accept,
-            () -> FhirResponses.assertNotFound(GET(path, HttpClientAdapter.Accept(accept))));
+        assertAll(path + " Accept " + accept, () -> assertNotFound(GET(path, Accept(accept))));
     }
   }
 
   private void deleteAllMappings() {
     manager.getAllNoAcl(FhirResourceMapping.class).forEach(manager::delete);
-    manager.flush();
-    manager.clear();
+    dbmsManager.clearSession();
   }
 
-  private CapabilityStatement readCapabilityStatement(String query) {
-    return parseOk(GET(METADATA_PATH + query), CapabilityStatement.class);
+  private CapabilityStatement capabilities(String query) {
+    return parseOk(GET(METADATA + query), CapabilityStatement.class);
   }
 
   private static List<String> describeResources(CapabilityStatement statement) {
@@ -213,16 +191,12 @@ class FhirCapabilityStatementControllerTest extends H2ControllerIntegrationTestB
     return resources;
   }
 
-  private void assertOutcome(HttpMethod method, String path, HttpStatus status, String text) {
+  private void assertIssue(HttpMethod method, String path, HttpStatus status, String text) {
     IssueType code =
         Map.of(BAD_REQUEST, IssueType.INVALID, NOT_FOUND, IssueType.NOTFOUND)
             .getOrDefault(status, IssueType.NOTSUPPORTED);
-    HttpResponse response =
-        method == GET || method == DELETE
-            ? perform(method, path)
-            : perform(method, path, Body("{'resourceType':'Patient'}"));
-    assertAll(
-        method + " " + path,
-        () -> FhirResponses.assertOutcome(response, status, code, d -> d.contains(text)));
+    String body = method == GET || method == DELETE ? "" : "{'resourceType':'Patient'}";
+    HttpResponse reply = perform(method, path, Body(body));
+    assertAll(method + " " + path, () -> assertOutcome(reply, status, code, d -> d.contains(text)));
   }
 }

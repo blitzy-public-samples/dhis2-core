@@ -52,13 +52,34 @@ public class FhirResourceMappingObjectBundleHook
   private final FhirResourceMappingValidator validator;
   @Resource private AclService aclService;
 
-  /** For a user who may write the mapping, reports its violations against mappings and metadata. */
+  /** Removes other holders of its name and code from the preheat, then validates it if writable. */
   @Override
   public void validate(
       FhirResourceMapping mapping, ObjectBundle bundle, Consumer<ErrorReport> addReports) {
+    forgetOtherHolders(mapping, bundle);
     if (mayWrite(mapping, bundle)) {
       validator.validate(mapping, others(mapping, bundle), lookup(bundle)).forEach(addReports);
     }
+  }
+
+  private static void forgetOtherHolders(FhirResourceMapping mapping, ObjectBundle bundle) {
+    Preheat preheat = bundle.getPreheat();
+    var byClass = preheat == null ? null : preheat.getUniquenessMap();
+    Map<String, Map<Object, String>> byProperty =
+        byClass == null ? null : byClass.get(FhirResourceMapping.class);
+    if (byProperty == null) {
+      return;
+    }
+    String own = bundle.getPreheatIdentifier().getIdentifier(mapping);
+    FhirResourceMappingValidator.UNIQUE_PROPERTIES.forEach(
+        (property, valueOf) -> {
+          Map<Object, String> holders = byProperty.get(property);
+          String value = valueOf.apply(mapping);
+          String holder = holders == null || value == null ? null : holders.get(value);
+          if (holder != null && !holder.equals(own)) {
+            holders.remove(value);
+          }
+        });
   }
 
   private boolean mayWrite(FhirResourceMapping mapping, ObjectBundle bundle) {
@@ -71,13 +92,28 @@ public class FhirResourceMappingObjectBundleHook
   }
 
   private List<FhirResourceMapping> others(FhirResourceMapping mapping, ObjectBundle bundle) {
-    String key = FhirResourceMappingValidator.uniquenessKey(mapping);
+    UniquenessView view = view(mapping, bundle);
+    Stream<FhirResourceMapping> byKey =
+        holders(view.byKey(), FhirResourceMappingValidator.uniquenessKey(mapping));
+    Stream<FhirResourceMapping> byProperty =
+        FhirResourceMappingValidator.UNIQUE_PROPERTIES.entrySet().stream()
+            .flatMap(
+                unique ->
+                    holders(
+                        view.byProperty().get(unique.getKey()), unique.getValue().apply(mapping)));
     String uid = mapping.getUid();
-    return key == null
-        ? List.of()
-        : view(mapping, bundle).byKey().getOrDefault(key, List.of()).stream()
-            .filter(other -> other != mapping && (uid == null || !uid.equals(other.getUid())))
-            .toList();
+    Set<FhirResourceMapping> listed = Collections.newSetFromMap(new IdentityHashMap<>());
+    return Stream.concat(byKey, byProperty)
+        .filter(other -> other != mapping && (uid == null || !uid.equals(other.getUid())))
+        .filter(listed::add)
+        .toList();
+  }
+
+  private static Stream<FhirResourceMapping> holders(
+      Map<String, List<FhirResourceMapping>> byValue, String value) {
+    return value == null || byValue == null
+        ? Stream.empty()
+        : byValue.getOrDefault(value, List.of()).stream();
   }
 
   private UniquenessView view(FhirResourceMapping mapping, ObjectBundle bundle) {
@@ -85,18 +121,30 @@ public class FhirResourceMappingObjectBundleHook
       return kept;
     }
     Iterable<FhirResourceMapping> imported = bundle.getObjects(FhirResourceMapping.class);
+    List<FhirResourceMapping> all =
+        Stream.concat(
+                store.getAllNoAcl().stream(), StreamSupport.stream(imported.spliterator(), false))
+            .filter(Objects::nonNull)
+            .toList();
+    Map<String, Map<String, List<FhirResourceMapping>>> byProperty = new HashMap<>();
+    FhirResourceMappingValidator.UNIQUE_PROPERTIES.forEach(
+        (property, valueOf) -> byProperty.put(property, groupBy(all, valueOf)));
     UniquenessView view =
-        new UniquenessView(
-            Stream.concat(
-                    store.getAllNoAcl().stream(),
-                    StreamSupport.stream(imported.spliterator(), false))
-                .filter(each -> FhirResourceMappingValidator.uniquenessKey(each) != null)
-                .collect(Collectors.groupingBy(FhirResourceMappingValidator::uniquenessKey)));
+        new UniquenessView(groupBy(all, FhirResourceMappingValidator::uniquenessKey), byProperty);
     imported.forEach(candidate -> bundle.putExtras(candidate, UNIQUENESS_VIEW, view));
     return view;
   }
 
-  private record UniquenessView(Map<String, List<FhirResourceMapping>> byKey) {}
+  private static Map<String, List<FhirResourceMapping>> groupBy(
+      List<FhirResourceMapping> mappings, Function<FhirResourceMapping, String> valueOf) {
+    return mappings.stream()
+        .filter(each -> valueOf.apply(each) != null)
+        .collect(Collectors.groupingBy(valueOf));
+  }
+
+  private record UniquenessView(
+      Map<String, List<FhirResourceMapping>> byKey,
+      Map<String, Map<String, List<FhirResourceMapping>>> byProperty) {}
 
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup(
       ObjectBundle bundle) {

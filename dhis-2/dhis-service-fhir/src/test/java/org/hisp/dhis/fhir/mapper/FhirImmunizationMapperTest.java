@@ -48,14 +48,7 @@ import org.hisp.dhis.webapi.controller.tracker.view.*;
 import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.Test;
 
-/** Unit tests of {@link FhirImmunizationMapper}. */
 class FhirImmunizationMapperTest {
-  private static final String TE_TYPE = uid();
-  private static final String PROGRAM = uid();
-  private static final String STAGE = uid();
-  private static final String TE = uid();
-  private static final String ENR = uid();
-  private static final String EVT = uid();
   private static final String DE_ADMINISTERED = uid();
   private static final String DE_TEXT = uid();
   private static final String DE_LOT = uid();
@@ -88,9 +81,8 @@ class FhirImmunizationMapperTest {
             Entry.field(IMMUNIZATION_LOT_NUMBER, DATA_ELEMENT, DE_LOT),
             Entry.field(IMMUNIZATION_DOSE_NUMBER, DATA_ELEMENT, DE_DOSE)));
     Event given = completed(administered("true"));
-    Event noUid =
-        FhirTestFixtures.event(
-            null, STAGE, EventStatus.COMPLETED, OCCURRED, null, UPDATED_AT, administered("true"));
+    Event noUid = completed(administered("true"));
+    noUid.setEvent(null);
     Enrollment enr = enrollment(ENR, TE, PROGRAM);
     Enrollment noEnr = enrollment(null, TE, PROGRAM);
     Enrollment noTe = enrollment(ENR, null, PROGRAM);
@@ -140,10 +132,9 @@ class FhirImmunizationMapperTest {
 
   @Test
   void lotAndDoseNumber() {
-    Immunization immunization =
-        mapFull(administered("true"), dataValue(DE_LOT, LOT), dataValue(DE_DOSE, "2"));
-    assertEquals(LOT, immunization.getLotNumber());
-    assertEquals(1, immunization.getProtocolApplied().size());
+    var lotted = mapFull(administered("true"), dataValue(DE_LOT, LOT), dataValue(DE_DOSE, "2"));
+    assertEquals(LOT, lotted.getLotNumber());
+    assertEquals(1, lotted.getProtocolApplied().size());
     for (var e :
         Map.of("2147483647", 2147483647, " 7 ", 7, "00000000002", 2, "001", 1).entrySet()) {
       Type value = doseNumber(mapFull(administered("true"), dataValue(DE_DOSE, e.getKey())));
@@ -178,9 +169,8 @@ class FhirImmunizationMapperTest {
     var names = populated.map(Property::getName).collect(toSet());
     assertEquals(Set.of("id", "meta", "occurrence[x]", "patient", "status"), names);
     String json = FhirR4Validation.encode(immunization);
-    for (String absent : List.of("UNMAPPED", OTHER_VALUE, DE_LOT, DE_DOSE, DE_OTHER, CVX_SYSTEM)) {
-      assertFalse(json.contains(absent), absent);
-    }
+    List.of("UNMAPPED", OTHER_VALUE, DE_LOT, DE_DOSE, DE_OTHER, CVX_SYSTEM)
+        .forEach(absent -> assertFalse(json.contains(absent), absent));
   }
 
   @Test

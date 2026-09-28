@@ -36,29 +36,21 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
-import java.util.stream.Stream;
+import java.util.stream.*;
 import org.hisp.dhis.common.ValueType;
 import org.hl7.fhir.r4.model.*;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 
-/** Every row of the value-typing table, birth dates, structural timestamps and unusable input. */
 class FhirValueConverterTest {
   private static final Map<ValueType, String> NUMERIC =
-      Map.of(
-          NUMBER, "12.5",
-          INTEGER, "42",
-          INTEGER_POSITIVE, "7",
-          INTEGER_NEGATIVE, "-3",
-          INTEGER_ZERO_OR_POSITIVE, "0",
-          PERCENTAGE, "0.25",
-          UNIT_INTERVAL, "0.25");
+      rows("NUMBER=12.5; INTEGER=42; INTEGER_POSITIVE=7; INTEGER_NEGATIVE=-3; PERCENTAGE=0.25;"
+              + " INTEGER_ZERO_OR_POSITIVE=0; UNIT_INTERVAL=0.25")
+          .collect(Collectors.toMap(row -> ValueType.valueOf(row[0]), row -> row[1]));
   private static final Set<ValueType> BOOLEANS = EnumSet.of(BOOLEAN, TRUE_ONLY);
   private final FhirValueConverter converter = new FhirValueConverter();
 
   @Test
-  void nonTemporalTypesFollowTheTypingTableAndUnusableInputIsEmpty() {
+  void everyValueTypeFollowsTheTypingTableAndUnusableInputIsEmpty() {
     for (ValueType type : NUMERIC.keySet()) {
       String value = NUMERIC.get(type);
       for (String unit : Arrays.asList("mmHg", null, "  ")) {
@@ -102,10 +94,6 @@ class FhirValueConverterTest {
         DATETIME=2024-06-01T10:30:00.; AGE=0000-01-01; BOOLEAN=0; BOOLEAN=T\
         """;
     rows(rejected).forEach(row -> assertNotConverted(ValueType.valueOf(row[0]), row[1]));
-  }
-
-  @Test
-  void dateTypesBecomeDateTime() {
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, " 2024-03-01 ", null));
     assertDayPrecisionDateTime("2019-05-17", convert(AGE, "2019-05-17", null));
     assertDayPrecisionDateTime("2024-03-01", convert(DATE, "2024-03-01T10:15:30.000", null));
@@ -141,16 +129,12 @@ class FhirValueConverterTest {
     }
     var milli = new DateTimeType(Date.from(fractional), MILLI, TimeZone.getDefault());
     assertEquals(milli.getValueAsString(), converter.dateTime(fractional).getValueAsString());
-  }
-
-  @ParameterizedTest
-  @CsvSource({
-    "08:30, 08:30:00", "08:30:15, 08:30:15", "08:30:15.250, 08:30:15",
-    "08:30:15.123456789, 08:30:15", "08:30:15., 08:30:15", "' 08:30 ', 08:30:00",
-    "8:30, 08:30:00"
-  })
-  void timeBecomesTime(String value, String time) {
-    assertEquals(time, assertInstanceOf(TimeType.class, convert(TIME, value, null)).getValue());
+    String times =
+        " 08:30 =08:30:00; 08:30=08:30:00; 08:30:15=08:30:15; 08:30:15.250=08:30:15;"
+            + " 08:30:15.123456789=08:30:15; 08:30:15.=08:30:15; 8:30=08:30:00";
+    for (String[] r : rows(times).toList()) {
+      assertEquals(r[1], assertInstanceOf(TimeType.class, convert(TIME, r[0], null)).getValue());
+    }
   }
 
   private Type convert(ValueType type, String value, String unit) {

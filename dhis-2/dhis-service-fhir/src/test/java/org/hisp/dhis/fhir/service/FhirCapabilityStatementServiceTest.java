@@ -54,23 +54,17 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockHttpServletRequest;
 
-/** Tests the CapabilityStatement {@link FhirCapabilityStatementService} derives from mappings. */
 @ExtendWith(MockitoExtension.class)
 class FhirCapabilityStatementServiceTest {
   private static final String BASE = "https://fhir.example.org:8443/dhis";
   private static final Instant T1 = Instant.parse("2024-05-01T08:00:00Z");
   private static final Instant T2 = Instant.parse("2024-06-01T12:30:00Z");
-  private static final String TRACKED_ENTITY = uid();
-  private static final String PROGRAM = uid();
-  private static final String STAGE = uid();
-  private static final String TEA_IDENTIFIER = uid();
-  private static final String TEA_FAMILY = uid();
   private static final String TEA_GIVEN = uid();
   private static final String TEA_BIRTH_DATE = uid();
   private static final String TEA_GENDER = uid();
   private static final Entry[] PATIENT_ENTRIES = {
-    Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENTIFIER).system(IDENTIFIER_SYSTEM),
-    Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY),
+    Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, uid()).system(IDENTIFIER_SYSTEM),
+    Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, uid()),
     Entry.field(PATIENT_GIVEN_NAME, ATTRIBUTE, TEA_GIVEN),
     Entry.field(PATIENT_BIRTH_DATE, ATTRIBUTE, TEA_BIRTH_DATE),
     Entry.field(PATIENT_GENDER, ATTRIBUTE, TEA_GENDER).valueMap(Map.of("M", "male"))
@@ -79,15 +73,11 @@ class FhirCapabilityStatementServiceTest {
   @Mock private SystemSettingsProvider settingsProvider;
   private FhirCapabilityStatementService service;
 
-  @BeforeEach
-  void setUp() {
+  @Test
+  void listsMappedTypesWithInteractionsAndSearchParametersFollowingConfiguredTargets() {
     lenient().when(settingsProvider.getCurrentSettings()).thenReturn(SystemSettings.of(Map.of()));
     var parameters = new FhirSearchParameters(settingsProvider);
     service = new FhirCapabilityStatementService(mappingService, parameters);
-  }
-
-  @Test
-  void listsMappedTypesWithInteractionsAndSearchParametersFollowingConfiguredTargets() {
     var listed = rest(statementFor(List.of(observation(T1), patient(T1)))).getResource();
     assertEquals(List.of("Patient", "Observation"), listed.stream().map(r -> r.getType()).toList());
     for (CapabilityStatementRestResourceComponent resource : listed) {
@@ -100,7 +90,7 @@ class FhirCapabilityStatementServiceTest {
     assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion());
     assertEquals(List.of("json"), statement.getFormat().stream().map(CodeType::getValue).toList());
     assertEquals("DHIS2 FHIR R4 read-only API", statement.getImplementation().getDescription());
-    assertEquals(BASE + "/api/fhir", statement.getImplementation().getUrl());
+    assertEquals(BASE + "/api/fhir", statement.getImplementation().getUrl(), "X-Forwarded-*");
     assertEquals(1, statement.getRest().size());
     assertEquals(RestfulCapabilityMode.SERVER, rest(statement).getMode());
     List<ResolvedMapping> mappings = List.of(patient(T2), encounter(null), observation(T1));
@@ -111,38 +101,38 @@ class FhirCapabilityStatementServiceTest {
     Instant date = unmapped.getDate().toInstant();
     assertFalse(date.isBefore(before) || date.isAfter(after), date + " outside the request");
     assertTrue(rest(unmapped).getResource().isEmpty());
-    var full = statementFor(List.of(patient(T1), encounter(T1), immunization(T1), observation(T1)));
-    assertEquals(
-        List.of("_id:token", "identifier:token", "family:string"), params(full, "Patient"));
-    assertEquals(
-        List.of("_id:token", "patient:reference", "subject:reference"), params(full, "Encounter"));
-    assertEquals(List.of("_id:token", "patient:reference"), params(full, "Immunization"));
-    assertEquals(
-        List.of("_id:token", "patient:reference", "subject:reference", "code:token"),
-        params(full, "Observation"));
-    List<String> text = List.of("_id:token", "identifier:token", "family:string", "given:string");
-    List<String> all = new ArrayList<>(text);
-    all.addAll(List.of("birthdate:date", "gender:token"));
-    assertEquals(all, params(statementFor(List.of(configuredPatient(Map.of()))), "Patient"));
+    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, uid());
+    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, null);
+    var immunization = mapping(IMMUNIZATION, T1, Map.of(), administered, vaccine);
+    var full = statementFor(List.of(patient(T1), encounter(T1), immunization, observation(T1)));
+    assertEquals("_id:token identifier:token family:string", params(full, "Patient"));
+    assertEquals("_id:token patient:reference subject:reference", params(full, "Encounter"));
+    assertEquals("_id:token patient:reference", params(full, "Immunization"));
+    String observationParams = "_id:token patient:reference subject:reference code:token";
+    assertEquals(observationParams, params(full, "Observation"));
+    String text = "_id:token identifier:token family:string given:string";
+    String all = text + " birthdate:date gender:token";
+    var configured = mapping(PATIENT, T1, Map.of(), PATIENT_ENTRIES);
+    assertEquals(all, params(statementFor(List.of(configured)), "Patient"));
     Set<QueryOperator> eq = Set.of(QueryOperator.EQ);
-    ResolvedMapping blocked = configuredPatient(Map.of(TEA_BIRTH_DATE, eq, TEA_GENDER, eq));
+    var blocked = mapping(PATIENT, T1, Map.of(TEA_BIRTH_DATE, eq, TEA_GENDER, eq), PATIENT_ENTRIES);
     assertEquals(text, params(statementFor(List.of(blocked)), "Patient"));
     var operations = resource(full, "Patient").getOperation().stream();
     assertEquals(
         List.of("everything http://hl7.org/fhir/OperationDefinition/Patient-everything"),
         operations.map(o -> o.getName() + " " + o.getDefinition()).toList());
-    for (String type : List.of("Encounter", "Immunization", "Observation")) {
-      assertTrue(resource(full, type).getOperation().isEmpty(), type);
-    }
+    List.of("Encounter", "Immunization", "Observation")
+        .forEach(type -> assertTrue(resource(full, type).getOperation().isEmpty(), type));
   }
 
   private CapabilityStatement statementFor(List<ResolvedMapping> mappings) {
     when(mappingService.resolveAll()).thenReturn(mappings);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/dhis/api/fhir/metadata");
     request.setScheme("https");
-    request.setServerName("fhir.example.org");
-    request.setServerPort(8443);
+    request.addHeader("Host", "fhir.example.org:8443");
     request.setContextPath("/dhis");
+    request.addHeader("X-Forwarded-Host", "evil.example/#");
+    request.addHeader("X-Forwarded-Proto", "http");
     CapabilityStatement statement = service.capabilities(request);
     FhirR4Validation.assertValid(statement);
     return statement;
@@ -160,9 +150,10 @@ class FhirCapabilityStatementServiceTest {
     return matching.get(0);
   }
 
-  private static List<String> params(CapabilityStatement statement, String type) {
+  private static String params(CapabilityStatement statement, String type) {
     var search = resource(statement, type).getSearchParam().stream();
-    return search.map(p -> p.getName() + ":" + p.getTypeElement().getValueAsString()).toList();
+    var names = search.map(p -> p.getName() + ":" + p.getTypeElement().getValueAsString());
+    return String.join(" ", names.toList());
   }
 
   private static ResolvedMapping patient(Instant lastUpdated) {
@@ -170,19 +161,9 @@ class FhirCapabilityStatementServiceTest {
     return mapping(PATIENT, lastUpdated, blocked, Arrays.copyOf(PATIENT_ENTRIES, 3));
   }
 
-  private static ResolvedMapping configuredPatient(Map<String, Set<QueryOperator>> blocked) {
-    return mapping(PATIENT, T1, blocked, PATIENT_ENTRIES);
-  }
-
   private static ResolvedMapping encounter(Instant lastUpdated) {
     var amb = Entry.constant(ENCOUNTER_CLASS, ENCOUNTER_CLASS_SYSTEM, ENCOUNTER_CLASS_CODE, null);
     return mapping(ENCOUNTER, lastUpdated, Map.of(), amb);
-  }
-
-  private static ResolvedMapping immunization(Instant lastUpdated) {
-    Entry administered = Entry.field(IMMUNIZATION_ADMINISTERED, DATA_ELEMENT, uid());
-    Entry vaccine = Entry.constant(IMMUNIZATION_VACCINE_CODE, CVX_SYSTEM, CVX_CODE, null);
-    return mapping(IMMUNIZATION, lastUpdated, Map.of(), administered, vaccine);
   }
 
   private static ResolvedMapping observation(Instant lastUpdated) {
@@ -194,8 +175,7 @@ class FhirCapabilityStatementServiceTest {
       FhirResourceType type, Instant updated, Map<String, Set<QueryOperator>> blocked, Entry... e) {
     String program = type.isEventDerived() ? PROGRAM : null;
     String stage = type.isEventDerived() ? STAGE : null;
-    var fields = entries(e);
     return new ResolvedMapping(
-        uid(), type, TRACKED_ENTITY, program, stage, fields, Map.of(), blocked, Map.of(), updated);
+        uid(), type, TE_TYPE, program, stage, entries(e), Map.of(), blocked, Map.of(), updated);
   }
 }

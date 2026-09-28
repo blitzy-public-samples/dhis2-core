@@ -58,10 +58,11 @@ public class FhirResourceSerializer {
     return ResponseEntity.ok().cacheControl(NO_STORE).contentType(FHIR_JSON_MEDIA_TYPE).body(body);
   }
 
-  /** Creates the response with the exception's status and one-issue {@code OperationOutcome}. */
+  /** Creates the no-store, private response of the exception's status and one-issue outcome. */
   public ResponseEntity<String> error(FhirApiException exception) {
     Objects.requireNonNull(exception, "exception");
     return ResponseEntity.status(exception.getStatus())
+        .cacheControl(NO_STORE)
         .contentType(FHIR_JSON_MEDIA_TYPE)
         .body(encode(outcome(exception)));
   }
@@ -72,6 +73,7 @@ public class FhirResourceSerializer {
     Objects.requireNonNull(exception, "exception");
     byte[] body = encode(outcome(exception)).getBytes(StandardCharsets.UTF_8);
     Objects.requireNonNull(response, "response").setStatus(exception.getStatus().value());
+    response.setHeader(HttpHeaders.CACHE_CONTROL, NO_STORE.getHeaderValue());
     response.setContentType(FHIR_JSON_CONTENT_TYPE);
     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
     response.getOutputStream().write(body);

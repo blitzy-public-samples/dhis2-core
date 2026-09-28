@@ -44,13 +44,13 @@ import org.hisp.dhis.trackedentity.*;
 import org.hisp.dhis.tracker.export.fieldfiltering.Fields;
 import org.hisp.dhis.webapi.controller.tracker.view.*;
 
-/**
- * Enrollment, metadata and {@code resolved} builders use timestamps {@link #UPDATED}; tracked
- * entity and event keep the given ones. {@link #uid()} and {@code resolved} use a new random UID.
- * Builders other than {@code resolved} store new mutable collections and {@code null} scalars as
- * given, and reject a {@code null} varargs array.
- */
 public final class FhirTestFixtures {
+  public static final String TE = "QS6w44flWAf";
+  public static final String TE_TYPE = "ja8NY4PW7Xm";
+  public static final String PROGRAM = "BFcipDERJnf";
+  public static final String STAGE = "NpsdDv6kKSO";
+  public static final String ENR = "nxP7UnKhomJ";
+  public static final String EVT = "pTzf9KYMk72";
   public static final Instant UPDATED = Instant.parse("2024-03-15T10:15:30Z");
   public static final Instant OCCURRED = Instant.parse("2024-03-10T09:00:00Z");
   public static final Instant SCHEDULED = Instant.parse("2024-04-10T09:00:00Z");
@@ -75,7 +75,6 @@ public final class FhirTestFixtures {
 
   private FhirTestFixtures() {}
 
-  /** Returns a new random UID. */
   public static String uid() {
     return CodeGenerator.generateUid();
   }
@@ -90,10 +89,9 @@ public final class FhirTestFixtures {
     return Attribute.builder().attribute(uid).valueType(valueType).value(value).build();
   }
 
-  public static Enrollment enrollment(
-      String enrollment, String trackedEntity, String program, Event... events) {
-    var builder = Enrollment.builder().enrollment(UID.ofNullable(enrollment)).program(program);
-    builder.trackedEntity(UID.ofNullable(trackedEntity)).updatedAt(UPDATED);
+  public static Enrollment enrollment(String uid, String te, String program, Event... events) {
+    var builder = Enrollment.builder().enrollment(UID.ofNullable(uid)).program(program);
+    builder.trackedEntity(UID.ofNullable(te)).updatedAt(UPDATED);
     return builder.events(new ArrayList<>(Arrays.asList(events))).build();
   }
 
@@ -114,18 +112,15 @@ public final class FhirTestFixtures {
     return DataValue.builder().dataElement(dataElement).value(value).build();
   }
 
-  /** Returns one unpaged page of the items with all fields. */
   @SafeVarargs
   public static <T> FilteredPage<T> page(T... items) {
     return new FilteredPage<>(Page.withoutPager("items", List.of(items)), Fields.all());
   }
 
-  /** Builds each entry into a new mutable list, in order. */
   public static List<FhirFieldMapping> entries(Entry... entries) {
     return new ArrayList<>(Arrays.stream(entries).map(Entry::build).toList());
   }
 
-  /** Builds a resolved mapping with a new UID and no search constraints. */
   public static ResolvedMapping resolved(
       FhirResourceType type,
       String entityType,
@@ -137,7 +132,6 @@ public final class FhirTestFixtures {
         uid(), type, entityType, program, stage, entries, valueTypes, Map.of(), Map.of(), UPDATED);
   }
 
-  /** Builds a stored mapping with the entries, {@code null} ones included, in a mutable list. */
   public static FhirResourceMapping mapping(
       String uid,
       FhirResourceType type,
@@ -161,7 +155,6 @@ public final class FhirTestFixtures {
     return attribute;
   }
 
-  /** Builds a tracked entity type with the attributes as a mutable type-attribute list. */
   public static TrackedEntityType trackedEntityType(String uid, TrackedEntityAttribute... attrs) {
     TrackedEntityType type = identified(new TrackedEntityType(), uid, "Type ");
     type.setShortName(type.getName());
@@ -177,7 +170,6 @@ public final class FhirTestFixtures {
     return dataElement;
   }
 
-  /** Builds a program with a mutable program-attribute list and an empty mutable stage set. */
   public static Program program(
       String uid, ProgramType kind, TrackedEntityType type, TrackedEntityAttribute... attributes) {
     Program program = identified(new Program(), uid, "Program ");
@@ -189,7 +181,6 @@ public final class FhirTestFixtures {
     return program;
   }
 
-  /** Builds a program stage and adds it to the stages of {@code program} unless it is null. */
   public static ProgramStage programStage(String uid, Program program, DataElement... elements) {
     ProgramStage stage = identified(new ProgramStage(), uid, "Stage ");
     stage.setShortName(stage.getName());
@@ -210,7 +201,6 @@ public final class FhirTestFixtures {
     return object;
   }
 
-  /** Finds the first instance of the class with the given UID, else {@code null}. */
   public static BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> lookup(
       IdentifiableObject... objects) {
     List<IdentifiableObject> registered = new ArrayList<>(Arrays.asList(objects));
@@ -228,7 +218,6 @@ public final class FhirTestFixtures {
     }
   }
 
-  /** Fluent builder of a {@link FhirFieldMapping}; {@link #build()} returns a new copy per call. */
   public static final class Entry {
     private final FhirFieldMapping entry = new FhirFieldMapping();
 
@@ -242,7 +231,6 @@ public final class FhirTestFixtures {
       return builder;
     }
 
-    /** Starts a {@link FhirSourceType#CONSTANT} entry with the coding and no source. */
     public static Entry constant(FhirTargetField t, String system, String code, String display) {
       return field(t, FhirSourceType.CONSTANT, null).system(system).code(code).display(display);
     }
@@ -267,7 +255,6 @@ public final class FhirTestFixtures {
       return this;
     }
 
-    /** Sets a copy of the value map in its iteration order, or {@code null}. */
     public Entry valueMap(Map<String, String> valueMap) {
       entry.setValueMap(valueMap == null ? null : new LinkedHashMap<>(valueMap));
       return this;

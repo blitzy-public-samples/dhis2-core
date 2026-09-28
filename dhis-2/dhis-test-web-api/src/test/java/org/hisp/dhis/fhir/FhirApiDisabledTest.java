@@ -57,8 +57,6 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   static final String BASIC_AUTH_USER_NAME = "usera";
   static final String BASIC_AUTH_HEADER =
       "Basic " + HttpHeaders.encodeBasicAuth(BASIC_AUTH_USER_NAME, DEFAULT_ADMIN_PASSWORD, UTF_8);
-  static final String X_REQUESTED_WITH = "X-Requested-With";
-  static final String XML_HTTP_REQUEST = "XMLHttpRequest";
   private static final String PATIENT_ID = "dUE514NMOlo";
   private static final String PATIENT_BODY = "{\"resourceType\":\"Patient\"}";
   private static final String LOGIN_CONFIG = "/loginConfig";
@@ -77,7 +75,6 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
           new FhirRoute(GET, "/api/44/fhir/Patient" + LOGIN_CONFIG, null, false),
           new FhirRoute(POST, "/api/fhir/Patient" + LOGIN_CONFIG, PATIENT_BODY, false),
           new FhirRoute(OPTIONS, "/api/fhir/Patient" + LOGIN_CONFIG, null, false));
-
   @Autowired private DhisConfigurationProvider config;
 
   @BeforeEach
@@ -115,22 +112,21 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
     }
     if (caller == Caller.SESSION_AUTHENTICATED) request.session(session);
     else clearSecurityContext();
-    if (caller == Caller.BASIC_AUTHENTICATED)
-      request.header(HttpHeaders.AUTHORIZATION, BASIC_AUTH_HEADER);
+    if (caller == Caller.BASIC_AUTHENTICATED) request.header("Authorization", BASIC_AUTH_HEADER);
     return mvc.perform(request).andReturn().getResponse();
   }
 
   static void assertNotFoundOutcome(MockHttpServletResponse response, boolean head) {
+    assertEquals("no-store, private", response.getHeader(HttpHeaders.CACHE_CONTROL));
     HttpResponse fhir = new HttpResponse(toResponse(response));
     if (!head || response.getContentAsByteArray().length > 0) FhirResponses.assertNotFound(fhir);
     else FhirResponses.fhirBody(fhir, HttpStatus.NOT_FOUND);
   }
 
-  static void assertNotFhirJson(MockHttpServletResponse response, String description) {
+  static void assertNotFhirJson(MockHttpServletResponse response, String what) {
     String type = response.getContentType();
     String fhirJson = FhirResourceSerializer.FHIR_JSON_MEDIA_TYPE.getSubtype();
-    if (type != null)
-      assertNotEquals(fhirJson, MediaType.parseMediaType(type).getSubtype(), description);
+    if (type != null) assertNotEquals(fhirJson, MediaType.parseMediaType(type).getSubtype(), what);
   }
 
   private enum Caller {

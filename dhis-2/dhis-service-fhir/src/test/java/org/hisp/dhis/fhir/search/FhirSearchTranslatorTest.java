@@ -30,7 +30,6 @@
 package org.hisp.dhis.fhir.search;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Map.entry;
 import static org.hisp.dhis.common.QueryOperator.*;
 import static org.hisp.dhis.common.ValueType.*;
 import static org.hisp.dhis.fhir.FhirTestFixtures.*;
@@ -38,6 +37,7 @@ import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.*;
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirSourceType.*;
 import static org.hisp.dhis.fhir.mapping.FhirTargetField.*;
+import static org.hisp.dhis.fhir.search.FhirSearchParameters.Operation.*;
 import static org.hisp.dhis.fhir.search.FhirSearchTranslator.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -72,11 +72,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.web.firewall.*;
 
-/** Tests {@link FhirSearchParameters} validation and {@link FhirSearchTranslator} translation. */
 @ExtendWith(MockitoExtension.class)
 class FhirSearchTranslatorTest {
   private static final String TYPE = "TeType00001";
-  private static final String PROGRAM = "Program0001";
   private static final String TE_1 = "TrackedEnt1";
   private static final String TEA_IDENT = "TeaIdent001";
   private static final String TEA_IDENT_2 = "TeaIdent002";
@@ -94,15 +92,14 @@ class FhirSearchTranslatorTest {
   private static final String NUL = "\u0000";
   private static final String ENCOUNTER_ID = ENR + "-" + EVT;
   private static final String PER_DE_ID = ENCOUNTER_ID + "-" + DE_1;
-  private static final String LOINC = "http://loinc.org";
   private static final String HEIGHT = "8302-2";
   private static final String WEIGHT = "29463-7";
   private static final IllegalStateException UNDECODABLE =
       new IllegalStateException("Character decoding failed");
   private static final List<FhirFieldMapping> OBSERVATION_VALUES =
       entries(
-          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_1).system(LOINC).code(HEIGHT),
-          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_2).system(LOINC).code(WEIGHT));
+          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_1).system(LOINC_SYSTEM).code(HEIGHT),
+          Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_2).system(LOINC_SYSTEM).code(WEIGHT));
   private static final Map<String, ValueType> VALUE_TYPES =
       Map.of(TEA_IDENT, TEXT, TEA_FAMILY, TEXT, TEA_GIVEN, TEXT, TEA_BIRTH, DATE, TEA_GENDER, TEXT);
   private static final ResolvedMapping FULL_MAPPING = patientMapping(null, Map.of(), Map.of());
@@ -166,19 +163,14 @@ class FhirSearchTranslatorTest {
   }
 
   private static MockHttpServletRequest undecodable(String rawQuery) {
-    MockHttpServletRequest request =
-        new MockHttpServletRequest("GET", "/api/fhir") {
-          @Override
-          public Map<String, String[]> getParameterMap() {
-            throw UNDECODABLE;
-          }
-        };
+    MockHttpServletRequest request = spy(new MockHttpServletRequest("GET", "/api/fhir"));
+    lenient().doThrow(UNDECODABLE).when(request).getParameterMap();
     request.setQueryString(rawQuery);
     return request;
   }
 
   private void parsePatient(HttpServletRequest request) {
-    parameters.parse(Operation.PATIENT_SEARCH, request, FULL_MAPPING);
+    parameters.parse(PATIENT_SEARCH, request, FULL_MAPPING);
   }
 
   private TranslatedSearch translatePatient(ResolvedMapping mapping, String query) {
@@ -240,7 +232,215 @@ class FhirSearchTranslatorTest {
   }
 
   @Test
-  void filtersEscapeSeparatorsAndParseInTurkishAndAzerbaijaniLocales() throws BadRequestException {
+  void multiParameterRequestNamesOnlyOffendingParameter() throws Exception {
+    Consumer<String> patient = query -> translatePatient(FULL_MAPPING, query);
+    assertOnlyNamed("birthdate", "family=rain&given=Fra&birthdate=2000-01", patient);
+    assertOnlyNamed("_page", "_id=" + TE_1 + "&family=rain&_page=0", patient);
+    assertOnlyNamed("_page", "_count=50&_page=42949674", patient);
+    Consumer<String> encounter = q -> translateEvents(ENCOUNTER, q);
+    Consumer<String> observation = q -> translateEvents(OBSERVATION, q);
+    assertOnlyNamed("_id", "patient=" + TE_1 + "&_count=5&_id=bad", encounter);
+    assertOnlyNamed("_format", "patient=" + TE_1 + "&_page=2&_format=xml", observation);
+    String query = "identifier=urn:test:ident|X&family=rain&given=Fra&_count=5";
+    TranslatedSearch search = translatePatient(FULL_MAPPING, query);
+    FhirSearchOrigin origin = search.origin();
+    var attributes = origin.attributeToParameter();
+    assertEquals(List.of(TEA_IDENT, TEA_FAMILY, TEA_GIVEN), List.copyOf(attributes.keySet()));
+    assertEquals(List.of("identifier", "family", "given"), List.copyOf(attributes.values()));
+    assertEquals(List.of("identifier", "family", "given"), origin.suppliedAttributeParameters());
+    List<String> configured = List.of("identifier", "family", "given", "birthdate", "gender");
+    assertEquals(configured, origin.configuredAttributeParameters());
+    assertEquals(configured, parameters.configuredAttributeParameters(FULL_MAPPING));
+    ResolvedMapping blockedFamily = patientMapping(null, Map.of(TEA_FAMILY, Set.of(SW)), Map.of());
+    var unblocked = parameters.configuredAttributeParameters(blockedFamily);
+    assertEquals(List.of("identifier", "given", "birthdate", "gender"), unblocked);
+    var params = search.trackedEntityParams();
+    var request = new MockHttpServletRequest();
+    var message = "Non-searchable attribute(s) can not be used during global search:  [%s, %s]";
+    when(trackedEntityAdapter.find(eq(params), any()))
+        .thenThrow(new IllegalQueryException(message.formatted(TEA_GIVEN, TEA_FAMILY)));
+    var reader = new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout);
+    assertInvalid("family, given", () -> reader.findTrackedEntities(params, request, origin));
+    assertAllInvalid(
+        patient,
+        """
+        foo=1 family:exact=x patient=TrackedEnt1 _sort=family _include=Patient:organization
+        _revinclude=Encounter:subject _summary=true _elements=name _total=accurate _type=Patient
+        family=a&family=b family= family=a,b _id=bad _id=TrackedEnt1, identifier=urn:other|1
+        identifier=|ABC123 identifier=urn:test:ident| identifier=urn:test:ident|X|Y
+        birthdate=0000-01-01 birthdate=ge0000-12-31 birthdate=2000-01 birthdate=2000
+        birthdate=ne2000-01-01 birthdate=sa2000-01-01 birthdate=ge2000-13-45 gender=bogus
+        gender=male, _count=0 _count=abc _count=101 _page=0 _page=abc _format=xml
+        """);
+    var urnA = Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT).system("urn:a");
+    var urnB = Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT_2).system("urn:b");
+    var twoIdentifiers = patientWith(Map.of(TEA_IDENT, TEXT, TEA_IDENT_2, TEXT), urnA, urnB);
+    assertAllInvalid(q -> translatePatient(twoIdentifiers, q), "identifier=1");
+    assertFilter(patientFilters(twoIdentifiers, "identifier=urn:b|1"), TEA_IDENT_2, EQ, "1");
+    var familyName = Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY);
+    var familyOnly = patientWith(Map.of(TEA_FAMILY, TEXT), familyName);
+    String unmapped = "given=Fra identifier=x birthdate=2000-01-01 gender=male";
+    assertAllInvalid(q -> translatePatient(familyOnly, q), unmapped);
+    Executable noMapping = () -> parameters.parse(PATIENT_SEARCH, request("family=rain"), null);
+    assertThrows(IllegalArgumentException.class, noMapping);
+    Consumer<String> metadata = q -> parameters.checkFormatOnly(METADATA, request(q));
+    String detail = assertInvalid("family", () -> patient.accept("family=" + NUL));
+    assertTrue(detail.endsWith("must not contain NUL characters"), detail);
+    assertAll(
+        () -> assertOnlyNamed("family", "given=Fra&family=rainy day" + NUL + "x", patient),
+        () -> assertOnlyNamed("given", "given=Fr" + NUL, patient),
+        () -> assertOnlyNamed("identifier", "identifier=urn:test:ident|x" + NUL, patient),
+        () -> assertOnlyNamed("identifier", "identifier=" + NUL + "&family=rain", patient),
+        () -> assertOnlyNamed("_id", "_id=" + TE_1 + NUL, patient),
+        () -> assertOnlyNamed("_format", "family=rain&_format=json" + NUL, patient),
+        () -> assertOnlyNamed("patient", "patient=" + TE_1 + NUL, observation),
+        () -> assertOnlyNamed("code", "patient=" + TE_1 + "&code=" + HEIGHT + NUL, observation),
+        () -> assertOnlyNamed("_format", "_format=" + NUL + "json", metadata));
+    HttpServletRequest lineFeed = firewalled("fam%0Aily=rain");
+    assertThrows(RequestRejectedException.class, lineFeed::getParameterMap);
+    String unsupported = assertInvalid("fam%0Aily", () -> parsePatient(lineFeed));
+    assertTrue(unsupported.endsWith("is not a supported search parameter"), unsupported);
+    Consumer<String> firewall = q -> parameters.checkFormatOnly(METADATA, firewalled(q));
+    String format = assertInvalid("a%09b", () -> firewall.accept("a%09b=1"));
+    assertTrue(format.endsWith("is not a supported parameter"), format);
+    assertInvalid("a%0D%0AX-Injected: yes", () -> firewall.accept("a%0D%0AX-Injected:%20yes=1"));
+    HttpServletRequest carriageReturn = firewalled("patient=" + TE_1 + "&x%0D=1");
+    assertInvalid("x%0D", () -> parameters.parse(ENCOUNTER_SEARCH, carriageReturn, null));
+    assertInvalid("fam%0Aily", () -> translatePatient(FULL_MAPPING, "fam\nily=rain"));
+    assertInvalid("a%C2%85b", () -> translatePatient(FULL_MAPPING, "a\u0085b=1"));
+    for (String value : List.of("%ZZ", "%C3%28", "%FF", "ab%4", "%")) {
+      String bad = assertInvalid("family", () -> parsePatient(undecodable("family=" + value)));
+      assertTrue(bad.endsWith("value is not valid percent-encoded UTF-8"), bad);
+    }
+    String name = assertInvalid("%ZZ", () -> parsePatient(undecodable("%ZZ=1")));
+    assertTrue(name.endsWith("name is not valid percent-encoded UTF-8"), name);
+    assertInvalid("_format", () -> parameters.checkFormatOnly(READ, undecodable("_format=%ZZ")));
+    assertInvalid("x", () -> parameters.checkFormatOnly(EVERYTHING, undecodable("x=%C3%28")));
+    assertInvalid("foo", () -> parsePatient(undecodable("foo=1&family=%ZZ")), "family");
+    String repeated = assertInvalid("family", () -> parsePatient(undecodable("family=a&family=b")));
+    assertTrue(repeated.endsWith("must not be repeated"), repeated);
+    for (String valid : Arrays.asList("family=rain&&_count=5&given=Fr%C3%A9+d", null)) {
+      MockHttpServletRequest req = undecodable(valid);
+      assertSame(UNDECODABLE, assertThrows(IllegalStateException.class, () -> parsePatient(req)));
+    }
+  }
+
+  @Test
+  void patientSelectorIsProgramOrTypeNeverBoth() {
+    var references = List.of("patient=", "patient=Patient/", "subject=", "subject=Patient/");
+    List<EnrollmentRequestParams> all = new ArrayList<>();
+    String withTe = "&patient=" + TE_1;
+    for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
+      for (String reference : references.subList(0, type == IMMUNIZATION ? 2 : 4)) {
+        TranslatedSearch search = translateEvents(type, reference + TE_1);
+        EnrollmentRequestParams params = search.enrollmentParams();
+        assertEquals(UID.of(TE_1), params.getTrackedEntity());
+        assertEquals(Set.of(), params.getEnrollments());
+        assertEquals(FhirSearchOrigin.empty(), search.origin());
+        assertFalse(search.empty());
+        all.add(params);
+      }
+      String id = type == ENCOUNTER ? ENCOUNTER_ID : PER_DE_ID;
+      TranslatedSearch byId = translateEvents(type, "_id=" + id);
+      assertEquals(Set.of(UID.of(ENR)), byId.enrollmentParams().getEnrollments());
+      assertNull(byId.enrollmentParams().getTrackedEntity());
+      assertEquals(Set.of(id), byId.logicalIds());
+      assertTrue(byId.matchesId(id));
+      assertFalse(byId.matchesId(id.replaceFirst("1$", "2")));
+      assertAllInvalid(
+          query -> translateEvents(type, query),
+          "patient=Patient/bad patient=Group/TrackedEnt1 subject=Patient/bad");
+      assertAllInvalid(
+          query -> translateEvents(type, query + withTe),
+          "_id=bad foo=1 family=rain _count=abc _count=0 _page=0 _format=xml"
+              + " _page=2147483647&_count=50");
+      String missing = assertInvalid("patient", () -> translateEvents(type, ""));
+      String required = type == IMMUNIZATION ? "patient or _id" : "patient, subject or _id";
+      assertTrue(missing.endsWith("': " + required + " is required"), missing);
+      assertInvalid("patient", () -> translateEvents(type, "_count=5"), "_count");
+      assertInvalid("subject", () -> translateEvents(type, "subject=" + TE_2 + withTe));
+    }
+    EnrollmentRequestParams eventRead = translator.eventReadParams(ENR, PROGRAM);
+    assertEquals(Set.of(UID.of(ENR)), eventRead.getEnrollments());
+    assertNull(eventRead.getTrackedEntity());
+    EnrollmentRequestParams everything = translator.everythingParams(TE_1, PROGRAM);
+    assertEquals(UID.of(TE_1), everything.getTrackedEntity());
+    assertEquals(Set.of(), everything.getEnrollments());
+    Collections.addAll(all, eventRead, everything);
+    for (EnrollmentRequestParams params : all) {
+      assertEquals(UID.of(PROGRAM), params.getProgram());
+      assertFalse(params.isPaging());
+      assertFalse(params.isTotalPages());
+      assertEquals(EXPECTED_EVENT_FIELDS, params.getFields());
+    }
+    var eventPaged = translateEvents(ENCOUNTER, "patient=" + TE_1 + "&_count=2&_page=3");
+    assertEquals(List.of(2, 3), List.of(eventPaged.count(), eventPaged.page()));
+    assertNull(eventPaged.enrollmentParams().getPageSize());
+    assertNull(eventPaged.enrollmentParams().getPage());
+    TranslatedSearch eventDefaults = translateEvents(OBSERVATION, "patient=" + TE_1);
+    assertEquals(List.of(50, 1), List.of(eventDefaults.count(), eventDefaults.page()));
+    String second = ENR_2 + "-" + EVT;
+    TranslatedSearch two = translateEvents(ENCOUNTER, "_id=" + ENCOUNTER_ID + "," + second);
+    assertEquals(UID.of(ENR, ENR_2), two.enrollmentParams().getEnrollments());
+    assertEquals(Set.of(ENCOUNTER_ID, second), two.logicalIds());
+    assertAllInvalid(q -> translateEvents(ENCOUNTER, q + withTe), "_id=" + PER_DE_ID + " code=x");
+    assertAllInvalid(
+        query -> translateEvents(IMMUNIZATION, query), "_id=" + ENCOUNTER_ID + " subject=" + TE_1);
+    assertAllInvalid(
+        query -> translateEvents(OBSERVATION, query + withTe),
+        """
+        _id=Enrollment1-EventUid001 code=http://loinc.org| code=8302-2,,
+        code=http://loinc.org|8302-2|x code=29463-7,http://loinc.org|8302-2|x
+        """);
+    assertInvalid("patient", () -> translateEvents(OBSERVATION, "code=" + HEIGHT), "code");
+    for (Operation operation : List.of(READ, EVERYTHING, METADATA)) {
+      Consumer<String> check = query -> parameters.checkFormatOnly(operation, request(query));
+      List.of("json", "application/json", "application/fhir+json", "application/fhir json")
+          .forEach(format -> assertDoesNotThrow(() -> check.accept("_format=" + format)));
+      assertAllInvalid(check, "foo=1 _format=xml _format=json&_format=json _format= family=rain");
+      assertInvalid("_format", () -> check.accept("_format=application/fhir xml"));
+    }
+    Executable patient = () -> parameters.checkFormatOnly(PATIENT_SEARCH, request(""));
+    assertThrows(IllegalArgumentException.class, patient);
+    for (String program : Arrays.asList(null, PROGRAM)) {
+      ResolvedMapping mapping = patientMapping(program, Map.of(), Map.of());
+      var search = translatePatient(mapping, "family=rain").trackedEntityParams();
+      for (var params : List.of(search, translator.patientReadParams(TE_1, mapping))) {
+        assertEquals(program == null ? UID.of(TYPE) : null, params.getTrackedEntityType(), program);
+        assertEquals(program == null ? null : UID.of(program), params.getProgram(), program);
+      }
+    }
+    var read = translator.patientReadParams(TE_1, patientMapping(PROGRAM, Map.of(), Map.of()));
+    assertEquals(Set.of(UID.of(TE_1)), read.getTrackedEntities());
+    assertEquals(List.of(1, false), List.of(read.getPageSize(), read.isTotalPages()));
+    assertEquals(EXPECTED_PATIENT_FIELDS, read.getFields());
+    assertNull(read.getFilter());
+    TranslatedSearch paged = translatePatient(FULL_MAPPING, "_count=10&_page=3");
+    TrackedEntityRequestParams params = paged.trackedEntityParams();
+    assertEquals(List.of(10, 3), List.of(params.getPageSize(), params.getPage()));
+    assertEquals(List.of(10, 3), List.of(paged.count(), paged.page()));
+    assertFalse(params.isTotalPages());
+    assertEquals(EXPECTED_PATIENT_FIELDS, params.getFields());
+    var defaults = translatePatient(FULL_MAPPING, "family=rain").trackedEntityParams();
+    assertEquals(List.of(50, 1), List.of(defaults.getPageSize(), defaults.getPage()));
+    assertEquals(42949673, translatePatient(FULL_MAPPING, "_count=50&_page=42949673").page());
+    assertDoesNotThrow(() -> translatePatient(FULL_MAPPING, "family=rain&_format=json"));
+    TranslatedSearch min = translatePatient(FULL_MAPPING, "_count=1");
+    assertEquals(List.of(1, 1), List.of(min.count(), min.trackedEntityParams().getPageSize()));
+    assertEquals(100, translatePatient(FULL_MAPPING, "_count=100").count());
+    when(settings.getTrackedEntityMaxLimit()).thenReturn(10);
+    assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "family=rain"), "family");
+    for (int limit : new int[] {0, -1, Integer.MAX_VALUE}) {
+      when(settings.getTrackedEntityMaxLimit()).thenReturn(limit);
+      assertEquals(5000, translatePatient(FULL_MAPPING, "_count=5000").count());
+      var max = translatePatient(FULL_MAPPING, "_count=2147483647&_page=2");
+      var size = max.trackedEntityParams().getPageSize();
+      assertEquals(List.of(2147483646, 2147483646, 2), List.of(max.count(), size, max.page()));
+    }
+  }
+
+  @Test
+  void attributeConstraintsNameOnlyOffendingParameter() throws BadRequestException {
     for (String identifier : List.of("urn:test:ident|ABC123", "ABC123")) {
       var filters = patientFilters(FULL_MAPPING, "identifier=" + identifier);
       assertEquals(Set.of(UID.of(TEA_IDENT)), filters.keySet());
@@ -292,8 +492,7 @@ class FhirSearchTranslatorTest {
     try {
       for (String tag : List.of("tr", "az")) {
         Locale.setDefault(Locale.forLanguageTag(tag));
-        var genders = patientFilters(FULL_MAPPING, "gender=male,female");
-        assertFilter(genders, TEA_GENDER, IN, "m", "f");
+        assertFilter(patientFilters(FULL_MAPPING, "gender=male,female"), TEA_GENDER, IN, "m", "f");
         assertFilter(patientFilters(FULL_MAPPING, "gender=other"), TEA_GENDER, IN, "o", "x");
         assertFilter(patientFilters(FULL_MAPPING, "family=rain"), TEA_FAMILY, SW, "rain");
         assertFilter(
@@ -324,167 +523,17 @@ class FhirSearchTranslatorTest {
         family=a,b family=a\\\\,b _id=TrackedEnt1\\,TrackedEnt2 gender=male\\,female
         identifier=urn:test:ident|A|B identifier=urn:test:ident\\|A|B|C birthdate=2000-01-01\\,
         """);
-    String patient = "patient=" + TE_1 + "&code=";
-    assertCodes(patient + LOINC + "\\|" + HEIGHT, false, false);
-    assertCodes(patient + HEIGHT + "\\," + WEIGHT, false, false);
-    assertCodes(patient + "8302\\-2," + LOINC + "|" + WEIGHT, false, true);
-    assertInvalid("code", () -> translateEvents(OBSERVATION, patient + LOINC + "|8302-2|\\"));
-  }
-
-  @Test
-  void multiParameterRequestNamesOnlyOffendingParameter() throws Exception {
-    Consumer<String> patient = query -> translatePatient(FULL_MAPPING, query);
-    assertOnlyNamed("birthdate", "family=rain&given=Fra&birthdate=2000-01", patient);
-    assertOnlyNamed("_page", "_id=" + TE_1 + "&family=rain&_page=0", patient);
-    assertOnlyNamed("_page", "_count=50&_page=42949674", patient);
-    Consumer<String> encounter = q -> translateEvents(ENCOUNTER, q);
-    Consumer<String> observation = q -> translateEvents(OBSERVATION, q);
-    assertOnlyNamed("_id", "patient=" + TE_1 + "&_count=5&_id=bad", encounter);
-    assertOnlyNamed("_format", "patient=" + TE_1 + "&_page=2&_format=xml", observation);
-    String query = "identifier=urn:test:ident|X&family=rain&given=Fra&_count=5";
-    TranslatedSearch search = translatePatient(FULL_MAPPING, query);
-    FhirSearchOrigin origin = search.origin();
-    assertEquals(
-        List.of(
-            entry(TEA_IDENT, "identifier"), entry(TEA_FAMILY, "family"), entry(TEA_GIVEN, "given")),
-        List.copyOf(origin.attributeToParameter().entrySet()));
-    assertEquals(List.of("identifier", "family", "given"), origin.suppliedAttributeParameters());
-    List<String> configured = List.of("identifier", "family", "given", "birthdate", "gender");
-    assertEquals(configured, origin.configuredAttributeParameters());
-    assertEquals(configured, parameters.configuredAttributeParameters(FULL_MAPPING));
-    ResolvedMapping blockedFamily = patientMapping(null, Map.of(TEA_FAMILY, Set.of(SW)), Map.of());
-    assertEquals(
-        List.of("identifier", "given", "birthdate", "gender"),
-        parameters.configuredAttributeParameters(blockedFamily));
-    var params = search.trackedEntityParams();
-    var request = new MockHttpServletRequest();
-    var message = "Non-searchable attribute(s) can not be used during global search:  [%s, %s]";
-    when(trackedEntityAdapter.find(params, request))
-        .thenThrow(new IllegalQueryException(message.formatted(TEA_GIVEN, TEA_FAMILY)));
-    var reader = new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout);
-    assertInvalid("family, given", () -> reader.findTrackedEntities(params, request, origin));
-    assertAllInvalid(
-        patient,
-        """
-        foo=1 family:exact=x patient=TrackedEnt1 _sort=family _include=Patient:organization
-        _revinclude=Encounter:subject _summary=true _elements=name _total=accurate _type=Patient
-        family=a&family=b family= family=a,b _id=bad _id=TrackedEnt1, identifier=urn:other|1
-        identifier=|ABC123 identifier=urn:test:ident| identifier=urn:test:ident|X|Y
-        birthdate=0000-01-01 birthdate=ge0000-12-31 birthdate=2000-01 birthdate=2000
-        birthdate=ne2000-01-01 birthdate=sa2000-01-01 birthdate=ge2000-13-45 gender=bogus
-        gender=male, _count=0 _count=abc _count=101 _page=0 _page=abc _format=xml
-        """);
-    var urnA = Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT).system("urn:a");
-    var urnB = Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_IDENT_2).system("urn:b");
-    var twoIdentifiers = patientWith(Map.of(TEA_IDENT, TEXT, TEA_IDENT_2, TEXT), urnA, urnB);
-    assertAllInvalid(q -> translatePatient(twoIdentifiers, q), "identifier=1");
-    assertFilter(patientFilters(twoIdentifiers, "identifier=urn:b|1"), TEA_IDENT_2, EQ, "1");
-    var familyName = Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY);
-    var familyOnly = patientWith(Map.of(TEA_FAMILY, TEXT), familyName);
-    assertAllInvalid(
-        q -> translatePatient(familyOnly, q),
-        "given=Fra identifier=x birthdate=2000-01-01 gender=male");
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> parameters.parse(Operation.PATIENT_SEARCH, request("family=rain"), null));
-  }
-
-  @Test
-  void patientSelectorIsProgramOrTypeNeverBoth() {
-    for (String program : Arrays.asList(null, PROGRAM)) {
-      ResolvedMapping mapping = patientMapping(program, Map.of(), Map.of());
-      var search = translatePatient(mapping, "family=rain").trackedEntityParams();
-      for (var params : List.of(search, translator.patientReadParams(TE_1, mapping))) {
-        assertEquals(program == null ? UID.of(TYPE) : null, params.getTrackedEntityType(), program);
-        assertEquals(program == null ? null : UID.of(program), params.getProgram(), program);
-      }
-    }
-    var read = translator.patientReadParams(TE_1, patientMapping(PROGRAM, Map.of(), Map.of()));
-    assertEquals(Set.of(UID.of(TE_1)), read.getTrackedEntities());
-    assertEquals(List.of(1, false), List.of(read.getPageSize(), read.isTotalPages()));
-    assertEquals(EXPECTED_PATIENT_FIELDS, read.getFields());
-    assertNull(read.getFilter());
-    TranslatedSearch paged = translatePatient(FULL_MAPPING, "_count=10&_page=3");
-    TrackedEntityRequestParams params = paged.trackedEntityParams();
-    assertEquals(List.of(10, 3), List.of(params.getPageSize(), params.getPage()));
-    assertEquals(List.of(10, 3), List.of(paged.count(), paged.page()));
-    assertFalse(params.isTotalPages());
-    assertEquals(EXPECTED_PATIENT_FIELDS, params.getFields());
-    var defaults = translatePatient(FULL_MAPPING, "family=rain").trackedEntityParams();
-    assertEquals(List.of(50, 1), List.of(defaults.getPageSize(), defaults.getPage()));
-    assertEquals(42949673, translatePatient(FULL_MAPPING, "_count=50&_page=42949673").page());
-    assertDoesNotThrow(() -> translatePatient(FULL_MAPPING, "family=rain&_format=json"));
-    TranslatedSearch min = translatePatient(FULL_MAPPING, "_count=1");
-    assertEquals(List.of(1, 1), List.of(min.count(), min.trackedEntityParams().getPageSize()));
-    assertEquals(100, translatePatient(FULL_MAPPING, "_count=100").count());
-    when(settings.getTrackedEntityMaxLimit()).thenReturn(10);
-    assertInvalid("_count", () -> translatePatient(FULL_MAPPING, "family=rain"), "family");
-    for (int limit : new int[] {0, -1, Integer.MAX_VALUE}) {
-      when(settings.getTrackedEntityMaxLimit()).thenReturn(limit);
-      assertEquals(5000, translatePatient(FULL_MAPPING, "_count=5000").count());
-      var max = translatePatient(FULL_MAPPING, "_count=2147483647&_page=2");
-      var size = max.trackedEntityParams().getPageSize();
-      assertEquals(List.of(2147483646, 2147483646, 2), List.of(max.count(), size, max.page()));
-    }
-  }
-
-  @Test
-  void nulFirewalledAndUndecodableInputIsInvalidNamingTheOffendingParameter() {
-    Consumer<String> patient = q -> translatePatient(FULL_MAPPING, q);
-    Consumer<String> observation = q -> translateEvents(OBSERVATION, q);
-    Consumer<String> metadata = q -> parameters.checkFormatOnly(Operation.METADATA, request(q));
-    String detail = assertInvalid("family", () -> patient.accept("family=" + NUL));
-    assertTrue(detail.endsWith("must not contain NUL characters"), detail);
-    assertAll(
-        () -> assertOnlyNamed("family", "given=Fra&family=rainy day" + NUL + "x", patient),
-        () -> assertOnlyNamed("given", "given=Fr" + NUL, patient),
-        () -> assertOnlyNamed("identifier", "identifier=urn:test:ident|x" + NUL, patient),
-        () -> assertOnlyNamed("identifier", "identifier=" + NUL + "&family=rain", patient),
-        () -> assertOnlyNamed("_id", "_id=" + TE_1 + NUL, patient),
-        () -> assertOnlyNamed("_format", "family=rain&_format=json" + NUL, patient),
-        () -> assertOnlyNamed("patient", "patient=" + TE_1 + NUL, observation),
-        () -> assertOnlyNamed("code", "patient=" + TE_1 + "&code=" + HEIGHT + NUL, observation),
-        () -> assertOnlyNamed("_format", "_format=" + NUL + "json", metadata));
-    HttpServletRequest lineFeed = firewalled("fam%0Aily=rain");
-    assertThrows(RequestRejectedException.class, lineFeed::getParameterMap);
-    String search = assertInvalid("fam%0Aily", () -> parsePatient(lineFeed));
-    assertTrue(search.endsWith("is not a supported search parameter"), search);
-    Consumer<String> firewall = q -> parameters.checkFormatOnly(Operation.METADATA, firewalled(q));
-    String format = assertInvalid("a%09b", () -> firewall.accept("a%09b=1"));
-    assertTrue(format.endsWith("is not a supported parameter"), format);
-    assertInvalid("a%0D%0AX-Injected: yes", () -> firewall.accept("a%0D%0AX-Injected:%20yes=1"));
-    HttpServletRequest encounter = firewalled("patient=" + TE_1 + "&x%0D=1");
-    assertInvalid("x%0D", () -> parameters.parse(Operation.ENCOUNTER_SEARCH, encounter, null));
-    assertInvalid("fam%0Aily", () -> translatePatient(FULL_MAPPING, "fam\nily=rain"));
-    assertInvalid("a%C2%85b", () -> translatePatient(FULL_MAPPING, "a\u0085b=1"));
-    for (String value : List.of("%ZZ", "%C3%28", "%FF", "ab%4", "%")) {
-      String bad = assertInvalid("family", () -> parsePatient(undecodable("family=" + value)));
-      assertTrue(bad.endsWith("value is not valid percent-encoded UTF-8"), bad);
-    }
-    String name = assertInvalid("%ZZ", () -> parsePatient(undecodable("%ZZ=1")));
-    assertTrue(name.endsWith("name is not valid percent-encoded UTF-8"), name);
-    assertInvalid(
-        "_format", () -> parameters.checkFormatOnly(Operation.READ, undecodable("_format=%ZZ")));
-    assertInvalid(
-        "x", () -> parameters.checkFormatOnly(Operation.EVERYTHING, undecodable("x=%C3%28")));
-    assertInvalid("foo", () -> parsePatient(undecodable("foo=1&family=%ZZ")), "family");
-    String repeated = assertInvalid("family", () -> parsePatient(undecodable("family=a&family=b")));
-    assertTrue(repeated.endsWith("must not be repeated"), repeated);
-    for (String valid : Arrays.asList("family=rain&&_count=5&given=Fr%C3%A9+d", null)) {
-      MockHttpServletRequest req = undecodable(valid);
-      assertSame(UNDECODABLE, assertThrows(IllegalStateException.class, () -> parsePatient(req)));
-    }
-  }
-
-  @Test
-  void attributeConstraintsNameOnlyOffendingParameter() throws BadRequestException {
+    String code = "patient=" + TE_1 + "&code=";
+    assertCodes(code + LOINC_SYSTEM + "\\|" + HEIGHT, false, false);
+    assertCodes(code + HEIGHT + "\\," + WEIGHT, false, false);
+    assertCodes(code + "8302\\-2," + LOINC_SYSTEM + "|" + WEIGHT, false, true);
+    assertInvalid("code", () -> translateEvents(OBSERVATION, code + LOINC_SYSTEM + "|8302-2|\\"));
     TranslatedSearch search = translatePatient(FULL_MAPPING, "_id=" + TE_1 + "," + TE_2);
     assertNull(search.trackedEntityParams().getFilter());
     assertEquals(Map.of(), search.origin().attributeToParameter());
     assertEquals(List.of(), search.origin().suppliedAttributeParameters());
     assertFalse(search.empty());
-    String code = "patient=" + TE_1 + "&code=";
-    assertCodes(code + LOINC + "|" + HEIGHT, true, false);
+    assertCodes(code + LOINC_SYSTEM + "|" + HEIGHT, true, false);
     assertCodes(code + HEIGHT, true, false);
     assertCodes(code + HEIGHT + "," + WEIGHT, true, true);
     assertCodes(code + "http://other|" + HEIGHT, false, false);
@@ -516,88 +565,5 @@ class FhirSearchTranslatorTest {
     ResolvedMapping shortGender = patientMapping(null, Map.of(), Map.of(TEA_GENDER, 2));
     assertOnlyNamed("gender", "gender=male&family=rain", q -> translatePatient(shortGender, q));
     assertFilter(patientFilters(shortGender, "gender=other"), TEA_GENDER, IN, "o", "x");
-  }
-
-  @Test
-  void eventPatientAndSubjectTranslateToTrackedEntityOfOneProgram() {
-    var references = List.of("patient=", "patient=Patient/", "subject=", "subject=Patient/");
-    List<EnrollmentRequestParams> all = new ArrayList<>();
-    for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
-      for (String reference : references.subList(0, type == IMMUNIZATION ? 2 : 4)) {
-        TranslatedSearch search = translateEvents(type, reference + TE_1);
-        EnrollmentRequestParams params = search.enrollmentParams();
-        assertEquals(UID.of(TE_1), params.getTrackedEntity());
-        assertEquals(Set.of(), params.getEnrollments());
-        assertEquals(FhirSearchOrigin.empty(), search.origin());
-        assertFalse(search.empty());
-        all.add(params);
-      }
-    }
-    EnrollmentRequestParams read = translator.eventReadParams(ENR, PROGRAM);
-    assertEquals(Set.of(UID.of(ENR)), read.getEnrollments());
-    assertNull(read.getTrackedEntity());
-    EnrollmentRequestParams everything = translator.everythingParams(TE_1, PROGRAM);
-    assertEquals(UID.of(TE_1), everything.getTrackedEntity());
-    assertEquals(Set.of(), everything.getEnrollments());
-    Collections.addAll(all, read, everything);
-    for (EnrollmentRequestParams params : all) {
-      assertEquals(UID.of(PROGRAM), params.getProgram());
-      assertFalse(params.isPaging());
-      assertFalse(params.isTotalPages());
-      assertEquals(EXPECTED_EVENT_FIELDS, params.getFields());
-    }
-    TranslatedSearch paged = translateEvents(ENCOUNTER, "patient=" + TE_1 + "&_count=2&_page=3");
-    assertEquals(List.of(2, 3), List.of(paged.count(), paged.page()));
-    assertNull(paged.enrollmentParams().getPageSize());
-    assertNull(paged.enrollmentParams().getPage());
-    TranslatedSearch defaults = translateEvents(OBSERVATION, "patient=" + TE_1);
-    assertEquals(List.of(50, 1), List.of(defaults.count(), defaults.page()));
-    for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
-      String id = type == ENCOUNTER ? ENCOUNTER_ID : PER_DE_ID;
-      TranslatedSearch search = translateEvents(type, "_id=" + id);
-      assertEquals(Set.of(UID.of(ENR)), search.enrollmentParams().getEnrollments());
-      assertNull(search.enrollmentParams().getTrackedEntity());
-      assertEquals(Set.of(id), search.logicalIds());
-      assertTrue(search.matchesId(id));
-      assertFalse(search.matchesId(id.replaceFirst("1$", "2")));
-    }
-    String second = ENR_2 + "-" + EVT;
-    TranslatedSearch two = translateEvents(ENCOUNTER, "_id=" + ENCOUNTER_ID + "," + second);
-    assertEquals(UID.of(ENR, ENR_2), two.enrollmentParams().getEnrollments());
-    assertEquals(Set.of(ENCOUNTER_ID, second), two.logicalIds());
-    String withTe = "&patient=" + TE_1;
-    for (FhirResourceType type : List.of(ENCOUNTER, IMMUNIZATION, OBSERVATION)) {
-      assertAllInvalid(
-          query -> translateEvents(type, query),
-          "patient=Patient/bad patient=Group/TrackedEnt1 subject=Patient/bad");
-      assertAllInvalid(
-          query -> translateEvents(type, query + withTe),
-          "_id=bad foo=1 family=rain _count=abc _count=0 _page=0 _format=xml"
-              + " _page=2147483647&_count=50");
-      String missing = assertInvalid("patient", () -> translateEvents(type, ""));
-      String required = type == IMMUNIZATION ? "patient or _id" : "patient, subject or _id";
-      assertTrue(missing.endsWith("': " + required + " is required"), missing);
-      assertInvalid("patient", () -> translateEvents(type, "_count=5"), "_count");
-      assertInvalid("subject", () -> translateEvents(type, "subject=" + TE_2 + withTe));
-    }
-    assertAllInvalid(q -> translateEvents(ENCOUNTER, q + withTe), "_id=" + PER_DE_ID + " code=x");
-    assertAllInvalid(
-        query -> translateEvents(IMMUNIZATION, query), "_id=" + ENCOUNTER_ID + " subject=" + TE_1);
-    assertAllInvalid(
-        query -> translateEvents(OBSERVATION, query + withTe),
-        """
-        _id=Enrollment1-EventUid001 code=http://loinc.org| code=8302-2,,
-        code=http://loinc.org|8302-2|x code=29463-7,http://loinc.org|8302-2|x
-        """);
-    assertInvalid("patient", () -> translateEvents(OBSERVATION, "code=" + HEIGHT), "code");
-    for (Operation operation : List.of(Operation.READ, Operation.EVERYTHING, Operation.METADATA)) {
-      Consumer<String> check = query -> parameters.checkFormatOnly(operation, request(query));
-      List.of("json", "application/json", "application/fhir+json", "application/fhir json")
-          .forEach(format -> assertDoesNotThrow(() -> check.accept("_format=" + format)));
-      assertAllInvalid(check, "foo=1 _format=xml _format=json&_format=json _format= family=rain");
-      assertInvalid("_format", () -> check.accept("_format=application/fhir xml"));
-    }
-    Executable patient = () -> parameters.checkFormatOnly(Operation.PATIENT_SEARCH, request(""));
-    assertThrows(IllegalArgumentException.class, patient);
   }
 }
