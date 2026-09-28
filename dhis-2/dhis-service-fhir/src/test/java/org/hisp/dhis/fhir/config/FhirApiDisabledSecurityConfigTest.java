@@ -113,9 +113,16 @@ class FhirApiDisabledSecurityConfigTest {
     assertEquals("SAMEORIGIN", response.getHeader("X-Frame-Options"));
     assertNull(response.getHeader("Content-Security-Policy"));
     when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(true);
-    HttpServletRequest request = mock(HttpServletRequest.class);
-    assertFalse(chain.matches(request));
-    verifyNoInteractions(request);
+    assertFalse(chain.matches(mock(HttpServletRequest.class)));
+    MockHttpServletRequest undecodable = spy(request("GET", "", "/api/fhir/Patient"));
+    doThrow(IllegalStateException.class).when(undecodable).getParameterMap();
+    undecodable.setQueryString("given=Fr");
+    assertFalse(chain.matches(undecodable));
+    doThrow(IllegalStateException.class).doReturn(Map.of()).when(undecodable).getParameterMap();
+    undecodable.setQueryString("given=Fr&fam%0Aily=%C3%28");
+    MockHttpServletResponse invalid = filter(undecodable);
+    assertEquals(400, invalid.getStatus());
+    assertTrue(invalid.getContentAsString().contains("Invalid parameter 'fam%0Aily': value is"));
     when(config.isEnabled(FHIR_API_ENABLED)).thenReturn(false);
     for (String path : List.of("/api/fhir", "/api/fhir/Patient/x/$everything", "/api/fhirX")) {
       MockHttpServletRequest get = request("GET", "", path);
@@ -123,9 +130,7 @@ class FhirApiDisabledSecurityConfigTest {
       assertEquals(!path.equals("/api/fhirX"), guard.matches(get), path);
     }
     for (boolean user : new boolean[] {false, true}) {
-      if (user) {
-        CurrentUserUtil.injectUserInSecurityContext(mock(UserDetails.class));
-      }
+      if (user) CurrentUserUtil.injectUserInSecurityContext(mock(UserDetails.class));
       for (String method : List.of("GET", "HEAD", "OPTIONS", "POST")) {
         MockHttpServletResponse denied = new MockHttpServletResponse();
         assertFalse(guard.preHandle(request(method, "", "/api/fhir/x"), denied, this));

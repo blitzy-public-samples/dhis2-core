@@ -50,6 +50,10 @@ public class FhirCapabilityStatementService {
   public static final String EVERYTHING_OPERATION_NAME = "everything";
   public static final String EVERYTHING_OPERATION_DEFINITION =
       "http://hl7.org/fhir/OperationDefinition/Patient-everything";
+  public static final String SEARCH_PARAMETER_COMBINATION =
+      "http://hl7.org/fhir/StructureDefinition/capabilitystatement-search-parameter-combination";
+  private static final Set<String> REQUIRED_ONE_OF =
+      Set.of(FhirSearchParameters.ID, FhirSearchParameters.PATIENT, FhirSearchParameters.SUBJECT);
   private final FhirResourceMappingService mappingService;
   private final FhirSearchParameters parameters;
 
@@ -93,8 +97,15 @@ public class FhirCapabilityStatementService {
     CapabilityStatementRestResourceComponent resource = rest.addResource().setType(type.fhirType());
     resource.addInteraction().setCode(TypeRestfulInteraction.READ);
     resource.addInteraction().setCode(TypeRestfulInteraction.SEARCHTYPE);
-    for (String name : parameters.supportedParameters(type, mappingsOfType)) {
+    List<String> supported = parameters.supportedParameters(type, mappingsOfType);
+    List<String> optional = supported.stream().filter(p -> !REQUIRED_ONE_OF.contains(p)).toList();
+    for (String name : supported) {
       resource.addSearchParam().setName(name).setType(FhirSearchParameters.typeOf(name));
+      if (type.isEventDerived() && REQUIRED_ONE_OF.contains(name)) {
+        Extension combination = resource.addExtension().setUrl(SEARCH_PARAMETER_COMBINATION);
+        combination.addExtension("required", new StringType(name));
+        optional.forEach(value -> combination.addExtension("optional", new StringType(value)));
+      }
     }
     if (type == FhirResourceType.PATIENT) {
       resource

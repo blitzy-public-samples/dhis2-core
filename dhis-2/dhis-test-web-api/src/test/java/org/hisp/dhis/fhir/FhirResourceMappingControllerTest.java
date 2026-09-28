@@ -310,6 +310,27 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
       assertConflict(PATCH(ENDPOINT + "/" + uid + "?" + option, patch), expected);
       assertStoredAsSent(STORED_PATIENT);
     }
+    List<ErrorMessage> unnamed = List.of(new ErrorMessage(E4000, "name"));
+    String broken = entry(PATIENT_IDENTIFIER, ATTRIBUTE, INTEGER_ATTRIBUTE, "urn:a\\nb");
+    String nameless = patient(0, broken).replace("\"name\": \"" + INVALID_NAME + "\", ", "");
+    var system = new ErrorMessage(E4027, "urn:a b", "fieldMappings[0].system");
+    var dupe = new ErrorMessage(E5003, "resourceType", PATIENT, "(new FhirResourceMapping)", OTHER);
+    assertConflict(POST(ENDPOINT, nameless), List.of(unnamed.get(0), system, dupe));
+    String bypass = "?skipValidation=true&atomicMode=NONE";
+    String blank = FULL_OBSERVATION.replace(OBSERVATION_NAME, "\u00a0 ");
+    assertConflict(POST(ENDPOINT + bypass, blank), unnamed);
+    assertConflict(PUT(STORED_PATH + bypass, STORED_PATIENT.replace(STORED_NAME, "   ")), unnamed);
+    assertConflict(PATCH(STORED_PATH + bypass, RENAME_PATCH.replace(RENAMED, "\\uFEFF")), unnamed);
+    assertStoredAsSent(STORED_PATIENT);
+    switchToNewUser("fhir-private", "F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD");
+    String hidden = "{\"sharing\": {\"public\": \"--------\"}, " + FULL_OBSERVATION.substring(1);
+    assertConflict(POST(ENDPOINT + bypass, hidden.replace(OBSERVATION_NAME, "   ")), unnamed);
+    String bundle = "{\"%s\": [%s]}".formatted(MAPPINGS, hidden.replace(OBSERVATION_NAME, "  "));
+    String query = "/metadata?importStrategy=CREATE&" + bypass.substring(1);
+    String imported = POST(query, bundle).content(CONFLICT).toJson();
+    assertTrue(imported.contains(unnamed.get(0).getMessage()), imported);
+    switchToAdminUser();
+    assertEquals(1, mappingCount());
   }
 
   @Test
@@ -341,32 +362,6 @@ class FhirResourceMappingControllerTest extends H2ControllerIntegrationTestBase 
     switchToAdminUser();
     assertEquals(2, mappingCount());
     assertStoredAsSent(FULL_OBSERVATION);
-  }
-
-  @Test
-  void blankNameIsRejectedWhateverTheRequestOptions() {
-    assertStatus(CREATED, POST(ENDPOINT, STORED_PATIENT));
-    List<ErrorMessage> unnamed = List.of(new ErrorMessage(E4000, "name"));
-    String broken = entry(PATIENT_IDENTIFIER, ATTRIBUTE, INTEGER_ATTRIBUTE, "urn:a\\nb");
-    String nameless = patient(0, broken).replace("\"name\": \"" + INVALID_NAME + "\", ", "");
-    var system = new ErrorMessage(E4027, "urn:a b", "fieldMappings[0].system");
-    var dupe = new ErrorMessage(E5003, "resourceType", PATIENT, "(new FhirResourceMapping)", OTHER);
-    assertConflict(POST(ENDPOINT, nameless), List.of(unnamed.get(0), system, dupe));
-    String bypass = "?skipValidation=true&atomicMode=NONE";
-    String blank = FULL_OBSERVATION.replace(OBSERVATION_NAME, "\u00a0 ");
-    assertConflict(POST(ENDPOINT + bypass, blank), unnamed);
-    assertConflict(PUT(STORED_PATH + bypass, STORED_PATIENT.replace(STORED_NAME, "   ")), unnamed);
-    assertConflict(PATCH(STORED_PATH + bypass, RENAME_PATCH.replace(RENAMED, "\\uFEFF")), unnamed);
-    assertStoredAsSent(STORED_PATIENT);
-    switchToNewUser("fhir-private", "F_FHIR_RESOURCE_MAPPING_PRIVATE_ADD");
-    String hidden = "{\"sharing\": {\"public\": \"--------\"}, " + FULL_OBSERVATION.substring(1);
-    assertConflict(POST(ENDPOINT + bypass, hidden.replace(OBSERVATION_NAME, "   ")), unnamed);
-    String bundle = "{\"%s\": [%s]}".formatted(MAPPINGS, hidden.replace(OBSERVATION_NAME, "  "));
-    String query = "/metadata?importStrategy=CREATE&" + bypass.substring(1);
-    String imported = POST(query, bundle).content(CONFLICT).toJson();
-    assertTrue(imported.contains(unnamed.get(0).getMessage()), imported);
-    switchToAdminUser();
-    assertEquals(1, mappingCount());
   }
 
   /** As a user with the given authorities, creates or changes a mapping with the given access. */

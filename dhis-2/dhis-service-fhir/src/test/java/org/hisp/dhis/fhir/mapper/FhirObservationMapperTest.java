@@ -71,7 +71,6 @@ class FhirObservationMapperTest {
   private static final String DE_TIME = "DeTime00001";
   private static final String DE_TEXT = "DeText00001";
   private static final String DE_BAD_NUMBER = "DeBadNumber";
-  private static final String TEST_SYSTEM = "urn:dhis2:fhir-test:observation";
   private static final String FULL_URL_BASE = "http://localhost/api/fhir/Observation/";
   private final FhirObservationMapper mapper = new FhirObservationMapper(new FhirValueConverter());
 
@@ -229,8 +228,8 @@ class FhirObservationMapperTest {
   }
 
   private static Entry coded(String dataElement, String code) {
-    Entry entry = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement).system(TEST_SYSTEM);
-    return entry.code(code).display("Test " + code);
+    Entry entry = Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, dataElement);
+    return entry.system("urn:dhis2:fhir-test:observation").code(code).display("Test " + code);
   }
 
   private Observation single(EventStatus status, Instant occurredAt, Instant updatedAt) {

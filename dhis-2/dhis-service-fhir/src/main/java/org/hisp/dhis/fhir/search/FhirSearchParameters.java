@@ -74,9 +74,8 @@ public class FhirSearchParameters {
   public static final Set<String> FORMATS =
       Set.of("json", "application/json", "application/fhir+json");
   public static final Set<String> GENDER_CODES = Set.of("male", "female", "other", "unknown");
-
+  private static final String UNREADABLE_QUERY = FhirSearchParameters.class.getName() + ".query";
   private static final int MAX_PATIENT_COUNT = Integer.MAX_VALUE - 1;
-
   private static final Set<String> OR_PARAMETERS = Set.of(ID, GENDER, CODE);
   private static final String FHIR_JSON_FORMAT = "application/fhir+json";
   private static final String FHIR_JSON_FORM_DECODED = "application/fhir json";
@@ -110,7 +109,6 @@ public class FhirSearchParameters {
         FhirResourceType.OBSERVATION, List.of(PATIENT, SUBJECT, ID, CODE, COUNT, PAGE, FORMAT));
 
     @CheckForNull private final FhirResourceType resourceType;
-
     private final List<String> allowed;
 
     public boolean isSearch() {
@@ -141,7 +139,6 @@ public class FhirSearchParameters {
     GENDER(FhirSearchParameters.GENDER, FhirTargetField.PATIENT_GENDER, QueryOperator.EQ);
     private final String parameter;
     private final FhirTargetField target;
-
     private final QueryOperator defaultOperator;
   }
 
@@ -281,12 +278,9 @@ public class FhirSearchParameters {
   }
 
   private static RuntimeException rejectedQuery(
-      Operation operation, @CheckForNull String queryString, RuntimeException failure) {
-    if (queryString == null) {
-      return failure;
-    }
+      @CheckForNull Operation operation, @CheckForNull String query, RuntimeException failure) {
     Set<String> names = new HashSet<>();
-    for (String pair : queryString.split("&")) {
+    for (String pair : Objects.toString(query, "").split("&")) {
       if (pair.isEmpty()) {
         continue;
       }
@@ -297,17 +291,30 @@ public class FhirSearchParameters {
         return FhirApiException.invalidParameter(
             display(rawName), "name is not valid percent-encoded UTF-8");
       }
-      if (!operation.allowed().contains(name)) {
+      if (operation != null && !operation.allowed().contains(name)) {
         return unsupported(operation, name);
       }
       if (separator >= 0 && decodeQueryComponent(pair.substring(separator + 1)) == null) {
-        return FhirApiException.invalidParameter(name, "value is not valid percent-encoded UTF-8");
+        return FhirApiException.invalidParameter(
+            display(name), "value is not valid percent-encoded UTF-8");
       }
       if (!names.add(name)) {
-        return FhirApiException.invalidParameter(name, "must not be repeated");
+        return FhirApiException.invalidParameter(display(name), "must not be repeated");
       }
     }
     return failure;
+  }
+
+  /** Returns, and keeps per request, the 400 naming an undecodable query parameter, or null. */
+  @CheckForNull
+  public static FhirApiException unreadableQuery(HttpServletRequest request) {
+    try {
+      request.getParameterMap();
+    } catch (IllegalStateException | RequestRejectedException e) {
+      RuntimeException rejection = rejectedQuery(null, request.getQueryString(), e);
+      request.setAttribute(UNREADABLE_QUERY, rejection instanceof FhirApiException x ? x : null);
+    }
+    return (FhirApiException) request.getAttribute(UNREADABLE_QUERY);
   }
 
   private static FhirApiException unsupported(Operation operation, String name) {

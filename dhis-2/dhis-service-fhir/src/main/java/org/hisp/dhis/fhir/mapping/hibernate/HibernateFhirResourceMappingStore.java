@@ -31,12 +31,15 @@ package org.hisp.dhis.fhir.mapping.hibernate;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
-import java.util.List;
+import java.util.*;
 import javax.annotation.Nonnull;
+import org.hisp.dhis.common.IdentifiableObject;
 import org.hisp.dhis.common.hibernate.HibernateIdentifiableObjectStore;
 import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.hibernate.JpaQueryParameters;
+import org.hisp.dhis.program.*;
 import org.hisp.dhis.security.acl.AclService;
+import org.hisp.dhis.trackedentity.TrackedEntityType;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -45,6 +48,18 @@ import org.springframework.stereotype.Repository;
 public class HibernateFhirResourceMappingStore
     extends HibernateIdentifiableObjectStore<FhirResourceMapping>
     implements FhirResourceMappingStore {
+  private static final String WITH_ENCOUNTERS =
+      "from FhirResourceMapping m where m.resourceType = :type or (m.resourceType = :encounter and"
+          + " m.programStage in (select s.programStage from FhirResourceMapping s"
+          + " where s.resourceType = :type))";
+  private static final Map<Class<?>, String> MEMBERS =
+      Map.of(
+          TrackedEntityType.class,
+              "trackedEntityTypeAttributes m left join fetch m.trackedEntityAttribute",
+          Program.class, "programAttributes m left join fetch m.attribute",
+          ProgramStage.class, "programStageDataElements m left join fetch m.dataElement");
+  private static final String MEMBERS_HQL = "from %s o left join fetch o.%s where o.uid in (:uids)";
+
   public HibernateFhirResourceMappingStore(
       EntityManager entityManager,
       JdbcTemplate jdbcTemplate,
@@ -61,5 +76,25 @@ public class HibernateFhirResourceMappingStore
         builder,
         new JpaQueryParameters<FhirResourceMapping>()
             .addPredicate(root -> builder.equal(root.get("resourceType"), type)));
+  }
+
+  @Nonnull
+  @Override
+  public List<FhirResourceMapping> getByResourceTypeWithEncountersNoAcl(
+      @Nonnull FhirResourceType type) {
+    return getQuery(WITH_ENCOUNTERS, FhirResourceMapping.class)
+        .setParameter("type", type)
+        .setParameter("encounter", FhirResourceType.ENCOUNTER)
+        .list();
+  }
+
+  @Nonnull
+  @Override
+  public <T extends IdentifiableObject> List<T> getWithMembersNoAcl(
+      @Nonnull Class<T> type, @Nonnull Collection<String> uids) {
+    String hql = MEMBERS_HQL.formatted(type.getName(), Objects.requireNonNull(MEMBERS.get(type)));
+    return uids.isEmpty()
+        ? List.of()
+        : getQuery(hql, type).setParameterList("uids", uids).list().stream().distinct().toList();
   }
 }

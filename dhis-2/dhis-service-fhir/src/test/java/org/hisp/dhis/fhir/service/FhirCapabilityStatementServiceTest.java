@@ -40,6 +40,7 @@ import static org.mockito.Mockito.*;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Stream;
 import org.hisp.dhis.common.QueryOperator;
 import org.hisp.dhis.fhir.FhirR4Validation;
 import org.hisp.dhis.fhir.mapping.*;
@@ -106,10 +107,14 @@ class FhirCapabilityStatementServiceTest {
     var immunization = mapping(IMMUNIZATION, T1, Map.of(), administered, vaccine);
     var full = statementFor(List.of(patient(T1), encounter(T1), immunization, observation(T1)));
     assertEquals("_id:token identifier:token family:string", params(full, "Patient"));
-    assertEquals("_id:token patient:reference subject:reference", params(full, "Encounter"));
-    assertEquals("_id:token patient:reference", params(full, "Immunization"));
-    String observationParams = "_id:token patient:reference subject:reference code:token";
-    assertEquals(observationParams, params(full, "Observation"));
+    String required = " required:_id required:patient";
+    assertEquals("_id:token patient:reference" + required, params(full, "Immunization"));
+    String subject = "_id:token patient:reference subject:reference";
+    assertEquals(subject + required + " required:subject", params(full, "Encounter"));
+    String coded = " code:token required:_id+optional:code required:patient+optional:code";
+    assertEquals(subject + coded + " required:subject+optional:code", params(full, "Observation"));
+    String url = "http://hl7.org/fhir/StructureDefinition/capabilitystatement-search-parameter-";
+    assertEquals(url + "combination", resource(full, "Encounter").getExtension().get(0).getUrl());
     String text = "_id:token identifier:token family:string given:string";
     String all = text + " birthdate:date gender:token";
     var configured = mapping(PATIENT, T1, Map.of(), PATIENT_ENTRIES);
@@ -153,7 +158,9 @@ class FhirCapabilityStatementServiceTest {
   private static String params(CapabilityStatement statement, String type) {
     var search = resource(statement, type).getSearchParam().stream();
     var names = search.map(p -> p.getName() + ":" + p.getTypeElement().getValueAsString());
-    return String.join(" ", names.toList());
+    var combos = resource(statement, type).getExtension().stream().map(Extension::getExtension);
+    var parts = combos.map(c -> c.stream().map(e -> e.getUrl() + ":" + e.getValue()).toList());
+    return String.join(" ", Stream.concat(names, parts.map(p -> String.join("+", p))).toList());
   }
 
   private static ResolvedMapping patient(Instant lastUpdated) {

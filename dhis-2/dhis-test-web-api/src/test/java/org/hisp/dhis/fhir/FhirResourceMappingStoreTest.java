@@ -42,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.parser.StrictErrorHandler;
+import jakarta.persistence.Persistence;
 import java.beans.*;
 import java.io.*;
 import java.lang.reflect.*;
@@ -57,8 +58,10 @@ import org.hisp.dhis.fhir.mapping.*;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
 import org.hisp.dhis.organisationunit.OrganisationUnit;
+import org.hisp.dhis.program.*;
 import org.hisp.dhis.test.config.PostgresDhisConfigurationProvider;
 import org.hisp.dhis.test.webapi.PostgresControllerIntegrationTestBase;
+import org.hisp.dhis.trackedentity.TrackedEntityType;
 import org.hisp.dhis.user.User;
 import org.hisp.dhis.webapi.controller.tracker.TestSetup;
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -165,17 +168,42 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   void getByResourceTypeNoAclIgnoresSharing() {
     String hidden = insertCommitted("PATIENT", null, null, "[]");
     String visible = insertCommitted("OBSERVATION", programId, programStageId, "[]");
+    String encounter = insertCommitted("ENCOUNTER", programId, programStageId, "[]");
+    var other = insertCommitted("ENCOUNTER", programId, idOf("programstage", "NpsdDv6kKS2"), "[]");
     setPublicSharing(hidden, "--------");
     setPublicSharing(visible, "rw------");
     manager.clear();
     switchToNewUser("fhir-plain");
     List<String> sharedWithUser = uidsInTransaction(store::getAll);
+    Function<FhirResourceType, List<String>> withEncounters =
+        type -> uidsInTransaction(() -> store.getByResourceTypeWithEncountersNoAcl(type));
     assertAll(
         () -> assertFalse(sharedWithUser.contains(hidden), "hidden mapping visible"),
         () -> assertTrue(sharedWithUser.contains(visible), "public mapping not visible"),
         () -> assertEquals(List.of(hidden), noAclUids(PATIENT)),
         () -> assertEquals(List.of(visible), noAclUids(OBSERVATION)),
-        () -> assertEquals(List.of(), noAclUids(ENCOUNTER)));
+        () -> assertEquals(List.of(encounter, other), noAclUids(ENCOUNTER)),
+        () -> assertEquals(List.of(visible, encounter), withEncounters.apply(OBSERVATION)),
+        () -> assertEquals(List.of(encounter, other), withEncounters.apply(ENCOUNTER)));
+    Set<String> uids = Set.of(PERSON, PROGRAM, STAGE, nextUid());
+    assertEquals(List.of(), store.getWithMembersNoAcl(Program.class, Set.of()));
+    assertThrows(NullPointerException.class, () -> store.getWithMembersNoAcl(User.class, uids));
+    doInTransaction(
+        () -> {
+          TrackedEntityType type = manager.getNoAcl(TrackedEntityType.class, PERSON);
+          Program program = manager.getNoAcl(Program.class, PROGRAM);
+          ProgramStage stage = manager.getNoAcl(ProgramStage.class, STAGE);
+          List<Collection<?>> members =
+              List.of(
+                  type.getTrackedEntityTypeAttributes(),
+                  program.getProgramAttributes(),
+                  stage.getProgramStageDataElements());
+          assertTrue(members.stream().noneMatch(Persistence.getPersistenceUtil()::isLoaded));
+          assertEquals(List.of(type), store.getWithMembersNoAcl(TrackedEntityType.class, uids));
+          assertEquals(List.of(program), store.getWithMembersNoAcl(Program.class, uids));
+          assertEquals(List.of(stage), store.getWithMembersNoAcl(ProgramStage.class, uids));
+          assertTrue(members.stream().allMatch(Persistence.getPersistenceUtil()::isLoaded));
+        });
   }
 
   @Test
@@ -376,11 +404,6 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
     manager.clear();
   }
 
-  @AfterAll
-  void deleteFixtureMappings() {
-    deleteAllMappings();
-  }
-
   private long idOf(String table, String uid) {
     String sql = "select " + table + "id from " + table + " where uid = ?";
     return Objects.requireNonNull(jdbcTemplate.queryForObject(sql, Long.class, uid), uid);
@@ -446,11 +469,19 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
   interface FhirResponses {
     String SERVER_ORIGIN = "http://localhost";
     String ORIGIN = "https://fhir.example.org";
+    String OTHER_BASE_URL = "https://dhis.example.org/dhis";
     Object[] FORWARDED = {
       Header("X-Forwarded-Proto", "https"),
       Header("X-Forwarded-Host", "fhir.example.org"),
       Header("X-Forwarded-Port", "443")
     };
+
+    /** Sets {@code key} to {@code value} until the returned handle is closed, then restores it. */
+    static AutoCloseable override(
+        DhisConfigurationProvider config, ConfigurationKey key, String value) {
+      Object previous = config.getProperties().put(key.getKey(), value);
+      return () -> config.getProperties().compute(key.getKey(), (name, old) -> previous);
+    }
 
     /** Parses FHIR JSON strictly: unknown elements and invalid values fail the parse. */
     static <T extends IBaseResource> T parse(String body, Class<T> type) {
@@ -627,15 +658,13 @@ class FhirResourceMappingStoreTest extends PostgresControllerIntegrationTestBase
       return List.of(first, second);
     }
 
-    String assertForbidden(String url) {
-      Predicate<String> fixed = FhirApiException.forbidden().getDiagnostics()::equals;
-      return assertOutcome(GET(url), HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, fixed);
-    }
-
     /** Asserts one {@code 403} body for all {@code urls} that contains none of {@code hidden}. */
     String assertSameForbidden(List<String> urls, String... hidden) {
-      String body = assertForbidden(urls.get(0));
-      urls.stream().skip(1).forEach(url -> assertEquals(body, assertForbidden(url), url));
+      Predicate<String> fixed = FhirApiException.forbidden().getDiagnostics()::equals;
+      Function<String, String> forbidden =
+          url -> assertOutcome(GET(url), HttpStatus.FORBIDDEN, IssueType.FORBIDDEN, fixed);
+      String body = forbidden.apply(urls.get(0));
+      urls.stream().skip(1).forEach(url -> assertEquals(body, forbidden.apply(url), url));
       assertOmits(body, hidden);
       return body;
     }

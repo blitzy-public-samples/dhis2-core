@@ -30,12 +30,13 @@
 package org.hisp.dhis.fhir;
 
 import ca.uhn.fhir.context.FhirContext;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Objects;
+import java.util.*;
 import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.hl7.fhir.r4.model.OperationOutcome;
+import org.hl7.fhir.r4.model.*;
 import org.hl7.fhir.r4.model.OperationOutcome.*;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -50,6 +51,14 @@ public class FhirResourceSerializer {
 
   public FhirContext context() {
     return context;
+  }
+
+  /** Encodes an empty instance of each served resource type and a not-found outcome. */
+  @PostConstruct
+  void warmUp() {
+    List.of(new Patient(), new Encounter(), new Immunization(), new Observation(), new Bundle())
+        .forEach(this::encode);
+    List.of(new CapabilityStatement(), outcome(FhirApiException.notFound())).forEach(this::encode);
   }
 
   /** Creates a {@code 200} response with the resource JSON, marked {@code no-store, private}. */

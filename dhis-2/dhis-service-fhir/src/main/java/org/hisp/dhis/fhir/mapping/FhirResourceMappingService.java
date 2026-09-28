@@ -29,10 +29,11 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
+import static org.hisp.dhis.fhir.mapping.FhirResourceMappingValidator.uid;
+
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.*;
-import java.util.Objects;
 import java.util.function.*;
 import java.util.regex.Pattern;
 import java.util.stream.*;
@@ -76,14 +77,19 @@ public class FhirResourceMappingService {
     return guard(store.getAllNoAcl());
   }
 
+  /** Returns the valid, non-conflicting mappings of the type and its stages' ENCOUNTER mappings. */
+  @Transactional(readOnly = true)
+  public List<ResolvedMapping> resolveWithEncounters(FhirResourceType type) {
+    return guard(store.getByResourceTypeWithEncountersNoAcl(type));
+  }
+
   private List<ResolvedMapping> guard(List<FhirResourceMapping> stored) {
     List<FhirResourceMapping> candidates =
         stored.stream()
-            .filter(Objects::nonNull)
+            .filter(mapping -> mapping != null)
             .filter(mapping -> accepted(mapping, validator.validateStructure(mapping)))
             .toList();
-    BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata =
-        metadata(candidates);
+    var metadata = metadata(candidates);
     Map<String, List<FhirResourceMapping>> byKey = new LinkedHashMap<>();
     List<FhirResourceMapping> usable = new ArrayList<>();
     for (FhirResourceMapping mapping : candidates) {
@@ -139,8 +145,7 @@ public class FhirResourceMappingService {
 
   private BiFunction<Class<? extends IdentifiableObject>, String, IdentifiableObject> metadata(
       List<FhirResourceMapping> mappings) {
-    Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded =
-        new HashMap<>();
+    Map<Class<?>, Map<String, IdentifiableObject>> loaded = new HashMap<>();
     load(loaded, TrackedEntityType.class, mappings, FhirResourceMapping::getTrackedEntityType);
     load(loaded, Program.class, mappings, FhirResourceMapping::getProgram);
     load(loaded, ProgramStage.class, mappings, FhirResourceMapping::getProgramStage);
@@ -149,11 +154,11 @@ public class FhirResourceMappingService {
     for (Map<String, IdentifiableObject> owners : loaded.values()) {
       for (IdentifiableObject owner : owners.values()) {
         if (owner instanceof TrackedEntityType t && t.getTrackedEntityTypeAttributes() != null) {
-          putMembers(attributes, t.getTrackedEntityAttributes(), TrackedEntityAttribute::getUid);
+          putMembers(attributes, t.getTrackedEntityAttributes());
         } else if (owner instanceof Program p && p.getProgramAttributes() != null) {
-          putMembers(attributes, p.getTrackedEntityAttributes(), TrackedEntityAttribute::getUid);
+          putMembers(attributes, p.getTrackedEntityAttributes());
         } else if (owner instanceof ProgramStage s && s.getProgramStageDataElements() != null) {
-          putMembers(dataElements, s.getDataElements(), DataElement::getUid);
+          putMembers(dataElements, s.getDataElements());
         }
       }
     }
@@ -161,15 +166,13 @@ public class FhirResourceMappingService {
       if (klass == TrackedEntityAttribute.class || klass == DataElement.class) {
         return (klass == DataElement.class ? dataElements : attributes).get(uid);
       }
-      Map<String, IdentifiableObject> byUid = loaded.get(klass);
-      return byUid != null && byUid.containsKey(uid)
-          ? byUid.get(uid)
-          : manager.getNoAcl(klass, uid);
+      Map<String, IdentifiableObject> byUid = loaded.getOrDefault(klass, Collections.emptyMap());
+      return byUid.containsKey(uid) ? byUid.get(uid) : manager.getNoAcl(klass, uid);
     };
   }
 
   private <T extends IdentifiableObject> void load(
-      Map<Class<? extends IdentifiableObject>, Map<String, IdentifiableObject>> loaded,
+      Map<Class<?>, Map<String, IdentifiableObject>> loaded,
       Class<T> klass,
       List<FhirResourceMapping> mappings,
       Function<FhirResourceMapping, T> reference) {
@@ -179,27 +182,15 @@ public class FhirResourceMappingService {
             .map(FhirResourceMappingValidator::uid)
             .filter(CodeGenerator::isValidUid)
             .collect(Collectors.toSet());
-    if (requested.isEmpty()) {
-      return;
-    }
     Map<String, IdentifiableObject> byUid = new HashMap<>();
     requested.forEach(uid -> byUid.put(uid, null));
-    for (T object : manager.getNoAcl(klass, requested)) {
-      if (object != null) {
-        byUid.put(FhirResourceMappingValidator.uid(object), object);
-      }
-    }
+    store.getWithMembersNoAcl(klass, requested).forEach(owner -> byUid.put(uid(owner), owner));
     loaded.put(klass, byUid);
   }
 
-  private static <T extends IdentifiableObject> void putMembers(
-      Map<String, IdentifiableObject> byUid, Collection<T> members, Function<T, String> uidOf) {
-    for (T member : members) {
-      String uid = member == null ? null : uidOf.apply(member);
-      if (uid != null) {
-        byUid.put(uid, member);
-      }
-    }
+  private static void putMembers(
+      Map<String, IdentifiableObject> byUid, Collection<? extends IdentifiableObject> members) {
+    members.stream().filter(m -> uid(m) != null).forEach(m -> byUid.put(uid(m), m));
   }
 
   private ResolvedMapping toResolved(
@@ -226,15 +217,12 @@ public class FhirResourceMappingService {
         putValueType(valueTypes, source, dataElement.getValueType());
       }
     }
-    TrackedEntityType trackedEntityType = mapping.getTrackedEntityType();
-    Program program = mapping.getProgram();
-    ProgramStage programStage = mapping.getProgramStage();
     return new ResolvedMapping(
         mapping.getUid(),
         mapping.getResourceType(),
-        trackedEntityType == null ? null : trackedEntityType.getUid(),
-        program == null ? null : program.getUid(),
-        programStage == null ? null : programStage.getUid(),
+        uid(mapping.getTrackedEntityType()),
+        uid(mapping.getProgram()),
+        uid(mapping.getProgramStage()),
         mapping.getFieldMappings(),
         valueTypes,
         blockedSearchOperators,
@@ -249,7 +237,7 @@ public class FhirResourceMappingService {
     }
   }
 
-  /** An unmodifiable snapshot with UID references; only resolve and resolveAll validate it. */
+  /** An unmodifiable snapshot with UID references; only the resolve methods validate it. */
   public record ResolvedMapping(
       String uid,
       FhirResourceType resourceType,

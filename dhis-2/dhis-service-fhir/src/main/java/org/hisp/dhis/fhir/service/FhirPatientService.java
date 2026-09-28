@@ -34,6 +34,7 @@ import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 import javax.annotation.*;
+import lombok.RequiredArgsConstructor;
 import org.hisp.dhis.common.UID;
 import org.hisp.dhis.fhir.FhirApiException;
 import org.hisp.dhis.fhir.mapper.FhirPatientMapper;
@@ -49,32 +50,17 @@ import org.springframework.stereotype.Service;
 
 /** Serves the FHIR {@code Patient} read, search-type and {@code $everything} operations. */
 @Service
+@RequiredArgsConstructor
 public class FhirPatientService {
   private static final String NO_USABLE_MAPPING = "No usable mapping is configured for ";
-  private static final String PATH_SEPARATOR = "/";
+  private static final String PATIENT_PATH = PATIENT.fhirType() + "/";
   private static final String EVERYTHING = "/$everything";
-  private final FhirResourceMappingService mappingService;
-  private final FhirSearchParameters parameters;
-  private final FhirSearchTranslator translator;
-  private final FhirTrackerReader reader;
-  private final FhirPatientMapper patientMapper;
-  private final FhirEventResourceService eventResourceService;
-
-  public FhirPatientService(
-      FhirResourceMappingService mappingService,
-      FhirSearchParameters parameters,
-      FhirSearchTranslator translator,
-      FhirTrackerReader reader,
-      FhirPatientMapper patientMapper,
-      FhirEventResourceService eventResourceService) {
-    this.mappingService = Objects.requireNonNull(mappingService, "mappingService");
-    this.parameters = Objects.requireNonNull(parameters, "parameters");
-    this.translator = Objects.requireNonNull(translator, "translator");
-    this.reader = Objects.requireNonNull(reader, "reader");
-    this.patientMapper = Objects.requireNonNull(patientMapper, "patientMapper");
-    this.eventResourceService =
-        Objects.requireNonNull(eventResourceService, "eventResourceService");
-  }
+  @Nonnull private final FhirResourceMappingService mappingService;
+  @Nonnull private final FhirSearchParameters parameters;
+  @Nonnull private final FhirSearchTranslator translator;
+  @Nonnull private final FhirTrackerReader reader;
+  @Nonnull private final FhirPatientMapper patientMapper;
+  @Nonnull private final FhirEventResourceService eventResourceService;
 
   /** Reads one {@code Patient} by its tracked entity UID under the operation's deadline, if any. */
   @Nonnull
@@ -142,23 +128,18 @@ public class FhirPatientService {
     Bundle bundle = FhirEventResourceService.searchset();
     eventResourceService.addEntries(bundle, request, resources, reader::checkpoint);
     bundle.setTotal(bundle.getEntry().size());
-    eventResourceService.addSelfLink(
-        bundle, request, PATIENT.fhirType() + PATH_SEPARATOR + id + EVERYTHING);
+    eventResourceService.addSelfLink(bundle, request, PATIENT_PATH + id + EVERYTHING);
     reader.checkpoint();
     return bundle;
   }
 
   private ResolvedMapping patientMapping(@CheckForNull List<ResolvedMapping> mappings) {
     ResolvedMapping mapping =
-        mappings == null
-            ? null
-            : mappings.stream()
-                .filter(m -> m != null && m.resourceType() == PATIENT)
-                .findFirst()
-                .orElse(null);
-    if (mapping == null) {
-      throw FhirApiException.notSupported(NO_USABLE_MAPPING + PATIENT.fhirType());
-    }
+        Objects.requireNonNullElse(mappings, List.<ResolvedMapping>of()).stream()
+            .filter(m -> m != null && m.resourceType() == PATIENT)
+            .findFirst()
+            .orElseThrow(
+                () -> FhirApiException.notSupported(NO_USABLE_MAPPING + PATIENT.fhirType()));
     reader.checkpoint();
     return mapping;
   }
@@ -177,11 +158,7 @@ public class FhirPatientService {
             translator.patientReadParams(id, mapping), request, FhirSearchOrigin.empty());
     TrackedEntity trackedEntity =
         itemsOf(page).stream()
-            .filter(
-                item ->
-                    item != null
-                        && item.getTrackedEntity() != null
-                        && id.equals(item.getTrackedEntity().getValue()))
+            .filter(item -> item != null && UID.of(id).equals(item.getTrackedEntity()))
             .findFirst()
             .orElseThrow(FhirApiException::notFound);
     Patient patient = patientMapper.map(trackedEntity, mapping);

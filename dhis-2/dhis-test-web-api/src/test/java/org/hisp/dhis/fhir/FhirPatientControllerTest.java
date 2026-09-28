@@ -38,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
 import java.util.stream.Stream;
+import org.hisp.dhis.external.conf.*;
 import org.hisp.dhis.fhir.FhirResourceMappingStoreTest.FhirPostgresControllerTestBase;
 import org.hisp.dhis.http.HttpStatus;
 import org.hisp.dhis.jsontree.*;
@@ -65,17 +66,25 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
-  void readPatientWithProgramScopedMapping() {
+  void readPatientWithProgramScopedMapping() throws Exception {
     String typeScoped = fhirBody(GET(PATIENT_PATH + "/" + FRANK), HttpStatus.OK);
     String mappingProgram = MAPPING + "?fields=program[id]";
-    try {
-      patch(MAPPING, "[{'op':'add','path':'/program','value':{'id':'" + PROGRAM + "'}}]");
+    String program = "/programs/" + PROGRAM;
+    String limit =
+        GET(program + "?fields=maxTeiCountToReturn").content().get("maxTeiCountToReturn").toJson();
+    String replace = "[{'op':'replace','path':'/maxTeiCountToReturn','value':%s}]";
+    String scope = "[{'op':'add','path':'/program','value':{'id':'" + PROGRAM + "'}}]";
+    User user = userWithScope(OTHER_ORG_UNIT, ROOT_ORG_UNIT);
+    try (var scoped = patched(MAPPING, scope, "[{'op':'remove','path':'/program'}]")) {
       assertEquals(PROGRAM, GET(mappingProgram).content().getString("program.id").string());
       String programScoped = fhirBody(GET(PATIENT_PATH + "/" + FRANK), HttpStatus.OK);
       assertFrankPatient(parse(programScoped, Patient.class));
       assertEquals(typeScoped, programScoped);
-    } finally {
-      patch(MAPPING, "[{'op':'remove','path':'/program'}]");
+      String one = PATIENT_PATH + "?_id=" + SUMMER;
+      try (var limited = patched(program, replace.formatted("1"), replace.formatted(limit))) {
+        asUser(user, () -> assertEquals(List.of(SUMMER), entryIds(assertPatientSearchset(one))));
+        asUser(user, () -> assertInvalid(PATIENT_PATH + "?_id=" + SUMMER + "," + FRANK, "_id"));
+      }
     }
     assertTrue(GET(mappingProgram).content().get("program").isUndefined());
   }
@@ -128,10 +137,13 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
-  void searchUrlsIgnoreForwardedHeaders() {
+  void searchUrlsIgnoreForwardedHeaders() throws Exception {
     String url = PATIENT_PATH + "?_id=" + SUMMER + "," + FRANK + "&_count=1";
     Set<String> ids = new HashSet<>();
-    forwardedPages(url, PATIENT_PATH).forEach(page -> ids.addAll(entryIds(page)));
+    var config = webApplicationContext.getBean(DhisConfigurationProvider.class);
+    try (var baseUrl = override(config, ConfigurationKey.SERVER_BASE_URL, OTHER_BASE_URL)) {
+      forwardedPages(url, PATIENT_PATH).forEach(page -> ids.addAll(entryIds(page)));
+    }
     assertEquals(Set.of(SUMMER, FRANK), ids);
   }
 
@@ -193,57 +205,34 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
-  void searchWithNonSearchableAttributeOutsideCaptureScopeReturnsInvalid() {
+  void searchWithNonSearchableAttributeOutsideCaptureScopeReturnsInvalid() throws Exception {
     User user = userWithScope(OTHER_ORG_UNIT, ROOT_ORG_UNIT);
     String query = PATIENT_PATH + "?family=summer";
     assertTrue(entryIds(assertPatientSearchset(query)).contains(SUMMER), query);
     asUser(user, () -> assertFalse(entryIds(assertPatientSearchset(query)).isEmpty()));
-    try {
-      setTypeAttributeSearchable(FAMILY_ATTRIBUTE, false);
+    try (var notSearchable = unsearchable(FAMILY_ATTRIBUTE)) {
       asUser(user, () -> assertInvalid(query, "family"));
-    } finally {
-      setTypeAttributeSearchable(FAMILY_ATTRIBUTE, true);
     }
     String entries = GET(MAPPING + "?fields=fieldMappings").content().get("fieldMappings").toJson();
     String replace = "[{'op':'replace','path':'/fieldMappings','value':%s}]";
-    try {
-      patch(MAPPING, replace.formatted("[]"));
+    String byId = PATIENT_PATH + "?_id=" + SUMMER;
+    try (var unmapped = patched(MAPPING, replace.formatted("[]"), replace.formatted(entries))) {
       asUser(user, () -> assertInvalid(PATIENT_PATH + "?_count=5", "_id"));
-      String byId = PATIENT_PATH + "?_id=" + SUMMER;
       asUser(user, () -> assertEquals(List.of(SUMMER), entryIds(assertPatientSearchset(byId))));
-    } finally {
-      patch(MAPPING, replace.formatted(entries));
     }
     assertFrankPatient(read(Patient.class, FRANK));
   }
 
   @Test
-  void searchAboveProgramMaxCountOutsideCaptureScopeReturnsInvalid() {
-    String program = "/programs/" + PROGRAM;
-    String limit =
-        GET(program + "?fields=maxTeiCountToReturn").content().get("maxTeiCountToReturn").toJson();
-    String replace = "[{'op':'replace','path':'/maxTeiCountToReturn','value':%s}]";
-    User user = userWithScope(OTHER_ORG_UNIT, ROOT_ORG_UNIT);
-    try {
-      patch(MAPPING, "[{'op':'add','path':'/program','value':{'id':'" + PROGRAM + "'}}]");
-      patch(program, replace.formatted("1"));
-      String one = PATIENT_PATH + "?_id=" + SUMMER;
-      asUser(user, () -> assertEquals(List.of(SUMMER), entryIds(assertPatientSearchset(one))));
-      asUser(user, () -> assertInvalid(PATIENT_PATH + "?_id=" + SUMMER + "," + FRANK, "_id"));
-    } finally {
-      patch(program, replace.formatted(limit));
-      patch(MAPPING, "[{'op':'remove','path':'/program'}]");
-    }
-  }
-
-  @Test
-  void searchRejectsAttributeConstraintViolations() {
+  void searchRejectsAttributeConstraintViolations() throws Exception {
     String search = PATIENT_PATH + "?family=rain&";
     assertInvalid(search + "identifier=" + IDENTIFIER_SYSTEM + "|abc", "identifier");
-    Runnable givenTooShort = () -> assertInvalid(search + "given=Fr", "given");
-    withAttributeSetting(GIVEN_ATTRIBUTE, "minCharactersToSearch", "3", givenTooShort);
-    Runnable familyBlocked = () -> assertInvalid(search + "given=Fra", "family");
-    withAttributeSetting(FAMILY_ATTRIBUTE, "blockedSearchOperators", "['SW']", familyBlocked);
+    try (var minimum = attributeSetting(GIVEN_ATTRIBUTE, "minCharactersToSearch", "3")) {
+      assertInvalid(search + "given=Fr", "given");
+    }
+    try (var blocked = attributeSetting(FAMILY_ATTRIBUTE, "blockedSearchOperators", "['SW']")) {
+      assertInvalid(search + "given=Fra", "family");
+    }
     assertFalse(entryIds(assertPatientSearchset(search + "given=Fra")).isEmpty());
   }
 
@@ -345,20 +334,21 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     manager.clear();
   }
 
-  private void withAttributeSetting(String attribute, String property, String json, Runnable test) {
+  /** Applies {@code jsonPatch} to {@code url}; closing the returned handle applies restore. */
+  private AutoCloseable patched(String url, String jsonPatch, String restore) {
+    patch(url, jsonPatch);
+    return () -> patch(url, restore);
+  }
+
+  private AutoCloseable attributeSetting(String attribute, String property, String json) {
     String url = "/trackedEntityAttributes/" + attribute;
     String add = "[{'op':'add','path':'/" + property + "','value':%s}]";
     JsonValue previous = GET(url + "?fields=" + property).content().get(property);
     assertFalse(previous.isUndefined(), () -> url + " has no " + property);
-    patch(url, add.formatted(json));
-    try {
-      test.run();
-    } finally {
-      patch(url, add.formatted(previous.toJson()));
-    }
+    return patched(url, add.formatted(json), add.formatted(previous.toJson()));
   }
 
-  private void setTypeAttributeSearchable(String attribute, boolean searchable) {
+  private AutoCloseable unsearchable(String attribute) {
     String type = "/trackedEntityTypes/" + PERSON;
     String fields = "?fields=trackedEntityTypeAttributes[trackedEntityAttribute[id]]";
     List<String> attributes =
@@ -368,6 +358,7 @@ class FhirPatientControllerTest extends FhirPostgresControllerTestBase {
     int index = attributes.indexOf(attribute);
     assertTrue(index >= 0, attributes::toString);
     String path = "/trackedEntityTypeAttributes/" + index + "/searchable";
-    patch(type, "[{'op':'replace','path':'" + path + "','value':" + searchable + "}]");
+    String searchable = "[{'op':'replace','path':'" + path + "','value':%s}]";
+    return patched(type, searchable.formatted(false), searchable.formatted(true));
   }
 }

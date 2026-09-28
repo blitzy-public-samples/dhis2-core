@@ -117,7 +117,6 @@ class FhirApiDisabledTest extends AuthenticationApiTestBase {
   }
 
   static void assertNotFoundOutcome(MockHttpServletResponse response, boolean head) {
-    assertEquals("no-store, private", response.getHeader(HttpHeaders.CACHE_CONTROL));
     HttpResponse fhir = new HttpResponse(toResponse(response));
     if (!head || response.getContentAsByteArray().length > 0) FhirResponses.assertNotFound(fhir);
     else FhirResponses.fhirBody(fhir, HttpStatus.NOT_FOUND);

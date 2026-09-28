@@ -29,11 +29,20 @@
  */
 package org.hisp.dhis.fhir.mapping;
 
-import java.util.List;
+import java.util.*;
 import javax.annotation.Nonnull;
-import org.hisp.dhis.common.IdentifiableObjectStore;
+import org.hisp.dhis.common.*;
 
 public interface FhirResourceMappingStore extends IdentifiableObjectStore<FhirResourceMapping> {
   @Nonnull
   List<FhirResourceMapping> getByResourceTypeNoAcl(@Nonnull FhirResourceType type);
+
+  /** Returns the mappings of the type plus the ENCOUNTER mappings of the stages they use. */
+  @Nonnull
+  List<FhirResourceMapping> getByResourceTypeWithEncountersNoAcl(@Nonnull FhirResourceType type);
+
+  /** Returns tracked entity types, programs or program stages with their members loaded. */
+  @Nonnull
+  <T extends IdentifiableObject> List<T> getWithMembersNoAcl(
+      @Nonnull Class<T> type, @Nonnull Collection<String> uids);
 }

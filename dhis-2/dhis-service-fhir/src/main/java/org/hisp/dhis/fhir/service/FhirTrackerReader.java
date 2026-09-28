@@ -31,6 +31,7 @@ package org.hisp.dhis.fhir.service;
 
 import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.springframework.transaction.support.TransactionOperations.withoutTransaction;
+import static org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
@@ -63,6 +64,7 @@ import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.*;
+import org.springframework.web.context.request.*;
 
 /** Reads Tracker data for the FHIR API, translating export-path errors into FHIR errors. */
 @Slf4j
@@ -83,6 +85,7 @@ public class FhirTrackerReader {
       "The search matches more tracked entities than can be returned outside the capture scope";
   static final String SCOPE_REJECTED = "The search is not accepted for the user's search scope";
   private static final Pattern MIN_ATTRIBUTES = Pattern.compile("At least (\\d+) attributes");
+  private static final Pattern ROUTE = Pattern.compile("/fhir/(\\w+)(/\\{\\w+}(?:/(\\$\\w+))?)?$");
   private static final List<Class<? extends Exception>> QUERY_TIMEOUTS =
       List.of(
           jakarta.persistence.QueryTimeoutException.class,
@@ -103,20 +106,6 @@ public class FhirTrackerReader {
       FhirEnrollmentExportAdapter enrollmentAdapter,
       TrackerExportTimeout timeout) {
     this(trackedEntityAdapter, enrollmentAdapter, timeout, withoutTransaction(), null);
-  }
-
-  /** Creates a reader whose operations each run in a read-only transaction when none is active. */
-  public FhirTrackerReader(
-      FhirTrackedEntityExportAdapter trackedEntityAdapter,
-      FhirEnrollmentExportAdapter enrollmentAdapter,
-      TrackerExportTimeout timeout,
-      PlatformTransactionManager transactionManager) {
-    this(
-        trackedEntityAdapter,
-        enrollmentAdapter,
-        timeout,
-        readOnlyTransaction(transactionManager),
-        null);
   }
 
   /** Creates a transactional reader whose deadline bounds the network timeout of its connection. */
@@ -163,7 +152,11 @@ public class FhirTrackerReader {
     try {
       return inOperationTransaction(operation, scope);
     } catch (RuntimeException e) {
-      throw asDeadlineExceeded(e);
+      RuntimeException thrown = asDeadlineExceeded(e);
+      if (thrown instanceof DeadlineExceededException) {
+        log.warn("FHIR {} timed out: {}", interaction(), thrown.getMessage());
+      }
+      throw thrown;
     } finally {
       scope.restore();
       OPERATION.remove();
@@ -176,10 +169,7 @@ public class FhirTrackerReader {
   /** Throws {@code DeadlineExceededException} once expired, else re-bounds the network timeout. */
   public void checkpoint() {
     DeadlineHolder.checkNotExpired();
-    OperationScope scope = OPERATION.get();
-    if (scope != null) {
-      scope.refresh();
-    }
+    Optional.ofNullable(OPERATION.get()).ifPresent(OperationScope::refresh);
   }
 
   /** Finds tracked entities after a checkpoint; the export path sees no forwarding headers. */
@@ -281,7 +271,7 @@ public class FhirTrackerReader {
     }
     scope.bound(holder.getConnection(), deadline);
     if (newTransaction
-        && scope.isBound()
+        && scope.connection != null
         && TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(scope);
     }
@@ -322,6 +312,19 @@ public class FhirTrackerReader {
     }
     log.debug("A FHIR operation query timed out under its deadline ({})", exceptionName(exception));
     return new DeadlineExceededException(deadline.budget(), exception);
+  }
+
+  private static String interaction() {
+    Matcher route =
+        ROUTE.matcher(
+            RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes current
+                ? String.valueOf(current.getRequest().getAttribute(BEST_MATCHING_PATTERN_ATTRIBUTE))
+                : "");
+    if (!route.find()) {
+      return "operation";
+    }
+    String byId = route.group(2) == null ? "search-type" : "read";
+    return route.group(1) + " " + Objects.requireNonNullElse(route.group(3), byId);
   }
 
   private static boolean isOrIsCausedBy(
@@ -474,10 +477,6 @@ public class FhirTrackerReader {
       } catch (SQLException e) {
         networkTimeoutUnchanged(e);
       }
-    }
-
-    boolean isBound() {
-      return connection != null;
     }
 
     void refresh() {

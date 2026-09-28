@@ -55,8 +55,6 @@ class FhirResourceMappingValidatorTest {
   private static final String SYSTEM = "urn:test:id";
   private static final String LDAP = "ldap://directory.example.org/ids";
   private static final Map<String, String> GENDER_MAP = Map.of("M", "male", "F", "female");
-  private static final Set<ErrorCode> VALIDATOR_CODES =
-      EnumSet.of(E4000, E4010, E4014, E4027, E5002, E5003);
   private static final Map<FhirTargetField, Set<ValueType>> ACCEPTED =
       new EnumMap<>(FhirTargetField.class);
 
@@ -128,23 +126,6 @@ class FhirResourceMappingValidatorTest {
     assertOnly(reports, E5003, property, value, describe(mapping), OTHER_MAPPING);
     String message = reports.get(0).getMessage();
     assertFalse(message.contains(other.getUid()) || message.contains(other.getName()), message);
-  }
-
-  @ParameterizedTest
-  @CsvSource({
-    "PATIENT_FAMILY_NAME, fieldMappings", "PATIENT_FAMILY_NAME, target",
-    "PATIENT_FAMILY_NAME, sourceType", "PATIENT_FAMILY_NAME, source",
-    "PATIENT_IDENTIFIER, system", "ENCOUNTER_CLASS, code",
-    "OBSERVATION_VALUE, code", "PATIENT_FAMILY_NAME, resourceType",
-    "ENCOUNTER_CLASS, resourceType", "PATIENT_FAMILY_NAME, trackedEntityType",
-    "ENCOUNTER_CLASS, trackedEntityType", "ENCOUNTER_CLASS, program",
-    "IMMUNIZATION_VACCINE_CODE, program", "OBSERVATION_VALUE, program",
-    "ENCOUNTER_CLASS, programStage", "IMMUNIZATION_VACCINE_CODE, programStage",
-    "OBSERVATION_VALUE, programStage"
-  })
-  void entryWithoutPropertyIsMissingRequiredProperty(FhirTargetField target, String property) {
-    var mapping = withValue(target, property, property.equals("system") ? " " : null);
-    assertOnly(validate(mapping), E4000, at(mapping, target, property));
   }
 
   @Test
@@ -337,26 +318,37 @@ class FhirResourceMappingValidatorTest {
 
   @ParameterizedTest
   @CsvSource({
-    "OBSERVATION_VALUE, code, '8302-2 ', false", "PATIENT_IDENTIFIER, system, " + LDAP + ", true",
-    "PATIENT_IDENTIFIER, system, urn:oid:1.02.3, false", "ENCOUNTER_CLASS, code, 'a  b', false",
-    "ENCOUNTER_CLASS, system, http:foo, true", "OBSERVATION_VALUE, system, " + LDAP + ", true",
-    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c, true", "ENCOUNTER_CLASS, code, \u00e4, true",
-    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3, true", "OBSERVATION_VALUE, code, a b, true",
-    "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', false", "OBSERVATION_VALUE, code, 'a\u00a0b', false",
-    "ENCOUNTER_TYPE, system, 'urn:bad uri', false", "ENCOUNTER_TYPE, system, codes/local, false"
+    "OBSERVATION_VALUE, code, '8302-2 ', E4027", "PATIENT_IDENTIFIER, system, " + LDAP + ",",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.02.3, E4027", "ENCOUNTER_CLASS, code, 'a  b', E4027",
+    "ENCOUNTER_CLASS, system, http:foo,", "OBSERVATION_VALUE, system, " + LDAP + ",",
+    "IMMUNIZATION_VACCINE_CODE, system, mailto:a@b.c,", "ENCOUNTER_CLASS, code, \u00e4,",
+    "PATIENT_IDENTIFIER, system, urn:oid:1.2.3,", "OBSERVATION_VALUE, code, a b,",
+    "IMMUNIZATION_VACCINE_CODE, code, 'a\tb', E4027", "OBSERVATION_VALUE, code, 'a\u00a0b', E4027",
+    "ENCOUNTER_TYPE, system, 'urn:bad uri', E4027", "ENCOUNTER_TYPE, system, codes/local, E4027",
+    "PATIENT_FAMILY_NAME, fieldMappings,, E4000", "PATIENT_FAMILY_NAME, target,, E4000",
+    "PATIENT_FAMILY_NAME, sourceType,, E4000", "PATIENT_FAMILY_NAME, source,, E4000",
+    "PATIENT_IDENTIFIER, system, ' ', E4000", "ENCOUNTER_CLASS, code,, E4000",
+    "OBSERVATION_VALUE, code,, E4000", "PATIENT_FAMILY_NAME, resourceType,, E4000",
+    "ENCOUNTER_CLASS, resourceType,, E4000", "PATIENT_FAMILY_NAME, trackedEntityType,, E4000",
+    "ENCOUNTER_CLASS, trackedEntityType,, E4000", "ENCOUNTER_CLASS, program,, E4000",
+    "IMMUNIZATION_VACCINE_CODE, program,, E4000", "OBSERVATION_VALUE, program,, E4000",
+    "ENCOUNTER_CLASS, programStage,, E4000", "IMMUNIZATION_VACCINE_CODE, programStage,, E4000",
+    "OBSERVATION_VALUE, programStage,, E4000"
   })
-  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, false")
-  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53fefa32-fcbb-4ff8-8a92-55ee120877b7, true")
-  @CsvSource("PATIENT_IDENTIFIER, system, ftp://fhir.example.org/codes, true")
-  @CsvSource("ENCOUNTER_TYPE, system, https://fhir.example.org:8443/x, true")
-  @CsvSource("PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1, true")
-  void codeOrSystemFollowsR4CodeAndUriRules(
-      FhirTargetField target, String property, String value, boolean valid) {
+  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53FEFA32-FCBB-4FF8-8A92-55EE120877B7, E4027")
+  @CsvSource("OBSERVATION_VALUE, system, urn:uuid:53fefa32-fcbb-4ff8-8a92-55ee120877b7,")
+  @CsvSource("PATIENT_IDENTIFIER, system, ftp://fhir.example.org/codes,")
+  @CsvSource("ENCOUNTER_TYPE, system, https://fhir.example.org:8443/x,")
+  @CsvSource("PATIENT_IDENTIFIER, system, urn:oid:2.16.840.1.113883.6.1,")
+  void requiredPropertyCodeAndSystemFollowR4Rules(
+      FhirTargetField target, String property, String value, ErrorCode code) {
     FhirResourceMapping mapping = withValue(target, property, value);
-    if (valid) {
+    if (code == null) {
       assertEquals(List.of(), validate(mapping));
+    } else if (code == E4000) {
+      assertOnly(validate(mapping), code, at(mapping, target, property));
     } else {
-      assertOnly(validate(mapping), E4027, value, at(mapping, target, property));
+      assertOnly(validate(mapping), code, value, at(mapping, target, property));
     }
   }
 
@@ -544,8 +536,9 @@ class FhirResourceMappingValidatorTest {
   private List<ErrorReport> validate(FhirResourceMapping mapping, FhirResourceMapping... others) {
     var lookup = lookup(metadata.toArray(IdentifiableObject[]::new));
     List<ErrorReport> reports = validator.validate(mapping, List.of(others), lookup);
+    var validatorCodes = EnumSet.of(E4000, E4010, E4014, E4027, E5002, E5003);
     for (ErrorReport report : reports) {
-      assertTrue(VALIDATOR_CODES.contains(report.getErrorCode()), report::toString);
+      assertTrue(validatorCodes.contains(report.getErrorCode()), report::toString);
       assertEquals(FhirResourceMapping.class, report.getMainKlass(), report::toString);
     }
     return reports;

@@ -94,7 +94,7 @@ class FhirResourceMappingServiceTest {
     service = spy(new FhirResourceMappingService(store, validator, schemaService, manager));
     lenient().when(validator.validate(any(), anyCollection(), any())).thenReturn(List.of());
     lenient()
-        .when(manager.getNoAcl(any(), anyCollection()))
+        .when(store.getWithMembersNoAcl(any(), anyCollection()))
         .thenAnswer(
             call -> metadata.stream().filter(call.<Class<?>>getArgument(0)::isInstance).toList());
   }
@@ -108,24 +108,24 @@ class FhirResourceMappingServiceTest {
     rejects(forged);
     when(store.getByResourceTypeNoAcl(ENCOUNTER)).thenReturn(List.of(invalid, valid, forged));
     assertEquals(List.of(valid.getUid()), uids(service.resolve(ENCOUNTER)));
-    verify(service).logIgnored(List.of(invalid.getUid()), List.of(ErrorCode.E4000));
+    FhirResourceMapping obs = observation(uid(), stageA);
+    when(store.getByResourceTypeWithEncountersNoAcl(OBSERVATION))
+        .thenReturn(List.of(obs, invalid, valid));
+    var both = Stream.of(obs, valid).map(FhirResourceMapping::getUid).sorted().toList();
+    assertEquals(both, uids(service.resolveWithEncounters(OBSERVATION)));
+    verify(service, times(2)).logIgnored(List.of(invalid.getUid()), List.of(ErrorCode.E4000));
     verify(service).logIgnored(List.of("forged\\u000D\\u000AWARN line"), List.of(ErrorCode.E4000));
     assertNull(escapeControlCharacters(null));
     assertEquals("\\u0085\\u2029", escapeControlCharacters("\u0085\u2029"));
     assertEquals("\\\\u000A", escapeControlCharacters("\\u000A"));
-  }
-
-  @Test
-  void duplicateStoredMappingsAreAllIgnored() {
-    FhirResourceMapping first = encounter(uid(), stageA);
-    FhirResourceMapping second = encounter("second\u2028", stageA);
-    FhirResourceMapping single = encounter(uid(), stageB);
-    assertEquals(uniquenessKey(first), uniquenessKey(second));
-    when(store.getByResourceTypeNoAcl(ENCOUNTER)).thenReturn(List.of(first, single, second));
-    assertEquals(List.of(single.getUid()), uids(service.resolve(ENCOUNTER)));
-    verify(service).logIgnored(List.of(first.getUid(), "second\\u2028"), List.of(ErrorCode.E5003));
-    when(store.getByResourceTypeNoAcl(PATIENT)).thenReturn(List.of(patient(uid()), patient(uid())));
-    assertEquals(List.of(), service.resolve(PATIENT));
+    var realValidator = new FhirResourceMappingValidator(manager);
+    service = spy(new FhirResourceMappingService(store, realValidator, schemaService, manager));
+    FhirResourceMapping blank = encounter(uid(), stageA);
+    blank.setName("\u00a0 ");
+    FhirResourceMapping named = encounter(uid(), stageB);
+    when(store.getByResourceTypeNoAcl(ENCOUNTER)).thenReturn(List.of(blank, named));
+    assertEquals(List.of(named.getUid()), uids(service.resolve(ENCOUNTER)));
+    verify(service).logIgnored(List.of(blank.getUid()), List.of(ErrorCode.E4000));
   }
 
   @Test
@@ -248,12 +248,11 @@ class FhirResourceMappingServiceTest {
     var kept = Stream.of(ldap, obs, vaccineA, vaccineB).map(FhirResourceMapping::getUid).sorted();
     assertEquals(kept.toList(), uids(resolvedAll));
     verify(store, never()).getByResourceTypeNoAcl(any());
-    verify(manager).getNoAcl(TrackedEntityType.class, Set.of(person.getUid()));
-    verify(manager).getNoAcl(Program.class, Set.of(program.getUid()));
-    verify(manager).getNoAcl(ProgramStage.class, Set.of(stageA.getUid(), stageB.getUid()));
-    verify(manager, never()).getNoAcl(eq(TrackedEntityAttribute.class), anyCollection());
-    verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
-    verify(manager, never()).getNoAcl(any(), anyString());
+    verify(store, times(3)).getWithMembersNoAcl(any(), anyCollection());
+    verify(store).getWithMembersNoAcl(TrackedEntityType.class, Set.of(person.getUid()));
+    verify(store).getWithMembersNoAcl(Program.class, Set.of(program.getUid()));
+    verify(store).getWithMembersNoAcl(ProgramStage.class, Set.of(stageA.getUid(), stageB.getUid()));
+    verifyNoInteractions(manager);
     service = spy(new FhirResourceMappingService(store, realValidator, schemaService, manager));
     FhirResourceMapping broken = encounter(uid(), programStage(uid(), program));
     broken.getFieldMappings().get(0).setTarget(null);
@@ -268,13 +267,23 @@ class FhirResourceMappingServiceTest {
     assertEquals(List.of(), service.resolve(OBSERVATION));
     verify(service).logIgnored(List.of(broken.getUid()), List.of(ErrorCode.E4000, ErrorCode.E4000));
     verify(service, times(2)).logIgnored(List.of(oversized.getUid()), List.of(ErrorCode.E4027));
-    verify(manager).getNoAcl(ProgramStage.class, Set.of(stageA.getUid()));
-    verify(manager, never()).getNoAcl(eq(DataElement.class), anyCollection());
-    verify(manager, never()).getNoAcl(any(), anyString());
+    verify(store).getWithMembersNoAcl(ProgramStage.class, Set.of(stageA.getUid()));
+    verify(store, never()).getWithMembersNoAcl(eq(DataElement.class), anyCollection());
+    verify(store, never()).getByResourceTypeWithEncountersNoAcl(any());
+    verifyNoInteractions(manager);
   }
 
   @Test
-  void bundleHookForgetsOtherHoldersOfNameAndCodeForEveryUserAndComparesThem() {
+  void duplicateStoredMappingsAreAllIgnored() {
+    FhirResourceMapping first = encounter(uid(), stageA);
+    FhirResourceMapping second = encounter("second\u2028", stageA);
+    FhirResourceMapping single = encounter(uid(), stageB);
+    assertEquals(uniquenessKey(first), uniquenessKey(second));
+    when(store.getByResourceTypeNoAcl(ENCOUNTER)).thenReturn(List.of(first, single, second));
+    assertEquals(List.of(single.getUid()), uids(service.resolve(ENCOUNTER)));
+    verify(service).logIgnored(List.of(first.getUid(), "second\\u2028"), List.of(ErrorCode.E5003));
+    when(store.getByResourceTypeNoAcl(PATIENT)).thenReturn(List.of(patient(uid()), patient(uid())));
+    assertEquals(List.of(), service.resolve(PATIENT));
     var hook = new FhirResourceMappingObjectBundleHook(store, validator);
     FhirResourceMapping storedPatient = patient(uid());
     FhirResourceMapping storedEncounter = encounter(uid(), stageA);
@@ -346,18 +355,6 @@ class FhirResourceMappingServiceTest {
     assertEquals(List.of(stored), othersOf(renamed));
     assertEquals(List.of(stored), othersOf(recoded));
     verify(validator, never()).validate(same(denied), anyCollection(), any());
-  }
-
-  @Test
-  void blankNamedStoredMappingIsIgnored() {
-    var realValidator = new FhirResourceMappingValidator(manager);
-    service = spy(new FhirResourceMappingService(store, realValidator, schemaService, manager));
-    FhirResourceMapping blank = encounter(uid(), stageA);
-    blank.setName("\u00a0 ");
-    FhirResourceMapping named = encounter(uid(), stageB);
-    when(store.getByResourceTypeNoAcl(ENCOUNTER)).thenReturn(List.of(blank, named));
-    assertEquals(List.of(named.getUid()), uids(service.resolve(ENCOUNTER)));
-    verify(service).logIgnored(List.of(blank.getUid()), List.of(ErrorCode.E4000));
   }
 
   private <T extends IdentifiableObject> T register(T object) {

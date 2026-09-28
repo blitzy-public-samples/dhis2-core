@@ -94,6 +94,10 @@ class FhirApiEnabledSecurityTest extends AuthenticationApiTestBase {
       CapabilityStatement statement = parseOk(response, CapabilityStatement.class);
       assertEquals(Enumerations.FHIRVersion._4_0_1, statement.getFhirVersion(), path);
     }
+    for (String path :
+        List.of("/api/fhir/metadata.json", "/api/fhir/metadata/", "/api/44/fhir/Patient.xml")) {
+      assertNotFoundOutcome(get(path, basic), false);
+    }
   }
 
   private MockHttpServletResponse get(String path, Map<String, String> headers) throws Exception {

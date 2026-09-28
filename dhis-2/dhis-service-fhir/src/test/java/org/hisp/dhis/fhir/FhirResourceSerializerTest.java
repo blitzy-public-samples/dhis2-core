@@ -54,6 +54,9 @@ class FhirResourceSerializerTest {
 
   @Test
   void everyFactoryProducesSpecifiedStatusAndCode() throws Exception {
+    Method warmUp = FhirResourceSerializer.class.getDeclaredMethod("warmUp");
+    assertTrue(warmUp.isAnnotationPresent(jakarta.annotation.PostConstruct.class));
+    serializer.warmUp();
     assertError(notFound(), 404, NOTFOUND, d -> !d.isBlank());
     String forbidden = "Access to the requested resource is not permitted";
     assertError(forbidden(), 403, FORBIDDEN, forbidden::equals);

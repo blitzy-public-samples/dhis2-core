@@ -102,6 +102,7 @@ class FhirSearchTranslatorTest {
           Entry.field(OBSERVATION_VALUE, DATA_ELEMENT, DE_2).system(LOINC_SYSTEM).code(WEIGHT));
   private static final Map<String, ValueType> VALUE_TYPES =
       Map.of(TEA_IDENT, TEXT, TEA_FAMILY, TEXT, TEA_GIVEN, TEXT, TEA_BIRTH, DATE, TEA_GENDER, TEXT);
+  private static final Entry FAMILY_NAME = Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY);
   private static final ResolvedMapping FULL_MAPPING = patientMapping(null, Map.of(), Map.of());
   private static final Fields EXPECTED_PATIENT_FIELDS =
       FieldsParser.parse("trackedEntity,trackedEntityType,updatedAt,attributes");
@@ -185,12 +186,8 @@ class FhirSearchTranslatorTest {
 
   private Map<UID, List<QueryFilter>> patientFilters(ResolvedMapping mapping, String query)
       throws BadRequestException {
-    return filters(translatePatient(mapping, query).trackedEntityParams());
-  }
-
-  private static Map<UID, List<QueryFilter>> filters(TrackedEntityRequestParams params)
-      throws BadRequestException {
-    return FilterParser.parseFilters(params.getFilter());
+    return FilterParser.parseFilters(
+        translatePatient(mapping, query).trackedEntityParams().getFilter());
   }
 
   private static String assertInvalid(String parameter, Executable call, String... others) {
@@ -277,8 +274,7 @@ class FhirSearchTranslatorTest {
     var twoIdentifiers = patientWith(Map.of(TEA_IDENT, TEXT, TEA_IDENT_2, TEXT), urnA, urnB);
     assertAllInvalid(q -> translatePatient(twoIdentifiers, q), "identifier=1");
     assertFilter(patientFilters(twoIdentifiers, "identifier=urn:b|1"), TEA_IDENT_2, EQ, "1");
-    var familyName = Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY);
-    var familyOnly = patientWith(Map.of(TEA_FAMILY, TEXT), familyName);
+    var familyOnly = patientWith(Map.of(TEA_FAMILY, TEXT), FAMILY_NAME);
     String unmapped = "given=Fra identifier=x birthdate=2000-01-01 gender=male";
     assertAllInvalid(q -> translatePatient(familyOnly, q), unmapped);
     Executable noMapping = () -> parameters.parse(PATIENT_SEARCH, request("family=rain"), null);
@@ -463,9 +459,9 @@ class FhirSearchTranslatorTest {
     assertFilter(patientFilters(FULL_MAPPING, "gender=other"), TEA_GENDER, IN, "o", "x");
     assertFilter(patientFilters(FULL_MAPPING, "gender=male,female"), TEA_GENDER, IN, "m", "f");
     assertFalse(translatePatient(FULL_MAPPING, "gender=male").empty());
-    TranslatedSearch unmapped = translatePatient(FULL_MAPPING, "gender=unknown&family=rain");
-    assertTrue(unmapped.empty());
-    assertEquals(Set.of(UID.of(TEA_FAMILY)), filters(unmapped.trackedEntityParams()).keySet());
+    String unmapped = "gender=unknown&family=rain";
+    assertTrue(translatePatient(FULL_MAPPING, unmapped).empty());
+    assertEquals(Set.of(UID.of(TEA_FAMILY)), patientFilters(FULL_MAPPING, unmapped).keySet());
     ResolvedMapping blank = genderMapping(Map.of("", "male"));
     assertThrows(IllegalArgumentException.class, () -> translatePatient(blank, "gender=male"));
     ResolvedMapping separator = genderMapping(Map.of("A;B", "male"));
@@ -503,7 +499,7 @@ class FhirSearchTranslatorTest {
     }
     var params = translatePatient(FULL_MAPPING, "family=a/b:c").trackedEntityParams();
     assertEquals(TEA_FAMILY + ":SW:a//b/:c", params.getFilter());
-    assertFilter(filters(params), TEA_FAMILY, SW, "a/b:c");
+    assertFilter(patientFilters(FULL_MAPPING, "family=a/b:c"), TEA_FAMILY, SW, "a/b:c");
     var comma = translatePatient(FULL_MAPPING, "family=a\\,b").trackedEntityParams();
     assertEquals(TEA_FAMILY + ":SW:a/,b", comma.getFilter());
     String token = FhirSearchTranslator.escape("a/,b:c");
@@ -557,8 +553,7 @@ class FhirSearchTranslatorTest {
     assertOnlyNamed("given", "family=rain&given=Fr", q -> translatePatient(shortGiven, q));
     assertFilter(patientFilters(shortGiven, "given=Fra"), TEA_GIVEN, SW, "Fra");
     var intId = Entry.field(PATIENT_IDENTIFIER, ATTRIBUTE, TEA_INTEGER).system("urn:test:int");
-    var familyName = Entry.field(PATIENT_FAMILY_NAME, ATTRIBUTE, TEA_FAMILY);
-    var integer = patientWith(Map.of(TEA_INTEGER, INTEGER, TEA_FAMILY, TEXT), intId, familyName);
+    var integer = patientWith(Map.of(TEA_INTEGER, INTEGER, TEA_FAMILY, TEXT), intId, FAMILY_NAME);
     String query = "identifier=urn:test:int|abc&family=rain";
     assertOnlyNamed("identifier", query, q -> translatePatient(integer, q));
     assertFilter(patientFilters(integer, "identifier=urn:test:int|42"), TEA_INTEGER, EQ, "42");

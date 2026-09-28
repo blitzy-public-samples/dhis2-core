@@ -153,8 +153,7 @@ class FhirEncounterMapperTest {
   }
 
   private List<String> typeCodes(String typeValue) {
-    DataValue type = dataValue(DE_TYPE, typeValue);
-    Encounter typed = map(stageEvent(null, OCCURRED, null, type), fullMapping());
+    var typed = map(stageEvent(null, OCCURRED, null, dataValue(DE_TYPE, typeValue)), fullMapping());
     assertValid(typed);
     return typed.getType().stream().map(t -> t.getCodingFirstRep().getCode()).toList();
   }

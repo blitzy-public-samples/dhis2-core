@@ -217,16 +217,12 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
             })
         .when(serializer)
         .ok(any());
-    try {
-      for (String path : FHIR_REQUESTS) {
-        for (MockMvc chain : List.of(withFilter, withoutFilter)) {
-          states.clear();
-          fhirBody(perform(chain, path), HttpStatus.OK);
-          assertEquals(List.of(List.of(chain == withFilter, false)), states, path);
-        }
+    for (String path : FHIR_REQUESTS) {
+      for (MockMvc chain : List.of(withFilter, withoutFilter)) {
+        states.clear();
+        fhirBody(perform(chain, path), HttpStatus.OK);
+        assertEquals(List.of(List.of(chain == withFilter, false)), states, path);
       }
-    } finally {
-      reset(serializer);
     }
   }
 
@@ -273,7 +269,7 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
   }
 
   @Test
-  void expiredDeadlineAnswersPlatformTimeoutBehindOpenEntityManagerInView() throws Exception {
+  void expiredDeadlineAnswersPlatformTimeoutBehindOpenEntityManagerInView() throws Throwable {
     int baseline = activeConnections();
     DeadlineHolder.set(Deadline.in(Duration.ZERO));
     try {
@@ -282,26 +278,6 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
       DeadlineHolder.clear();
     }
     assertConnectionsReturnTo(baseline, EVERYTHING);
-  }
-
-  @Test
-  void disabledRouteReturnsNotFoundBehindOpenEntityManagerInView() throws Exception {
-    Filter security = webApplicationContext.getBean("springSecurityFilterChain", Filter.class);
-    MockMvc disabledChain = chain(openInViewFilter, security, requestIdFilter, apiVersionFilter);
-    int baseline = activeConnections();
-    String flag = ConfigurationKey.FHIR_API_ENABLED.getKey();
-    config.getProperties().setProperty(flag, "false");
-    try {
-      assertNotFound(perform(disabledChain, PATIENT_READ));
-    } finally {
-      config.getProperties().setProperty(flag, "true");
-    }
-    assertConnectionsReturnTo(baseline, PATIENT_READ);
-  }
-
-  @Test
-  void unresponsiveDatabaseAnswersPlatformTimeoutInBoundedTime() throws Throwable {
-    int baseline = activeConnections();
     ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
       doAnswer(i -> Deadline.in(Duration.ofSeconds(1))).when(trackerExportTimeout).newDeadline();
@@ -334,6 +310,17 @@ class FhirRequestLifecycleTest extends FhirPostgresControllerTestBase {
     assertTrue(executor.awaitTermination(1, TimeUnit.MINUTES), "request thread ends");
     assertConnectionsReturnTo(baseline, "unresponsive database");
     assertTrue(fhirBody(perform(withFilter, PATIENT_READ), HttpStatus.OK).contains(FRANK));
+  }
+
+  @Test
+  void disabledRouteReturnsNotFoundBehindOpenEntityManagerInView() throws Exception {
+    Filter security = webApplicationContext.getBean("springSecurityFilterChain", Filter.class);
+    MockMvc disabledChain = chain(openInViewFilter, security, requestIdFilter, apiVersionFilter);
+    int baseline = activeConnections();
+    try (var disabled = override(config, ConfigurationKey.FHIR_API_ENABLED, "false")) {
+      assertNotFound(perform(disabledChain, PATIENT_READ));
+    }
+    assertConnectionsReturnTo(baseline, PATIENT_READ);
   }
 
   private void withMappingTableLocked(ThrowingConsumer<Statement> test) throws Throwable {

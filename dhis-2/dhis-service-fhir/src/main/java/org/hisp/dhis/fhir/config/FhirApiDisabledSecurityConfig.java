@@ -29,7 +29,9 @@
  */
 package org.hisp.dhis.fhir.config;
 
+import static org.hisp.dhis.fhir.search.FhirSearchParameters.unreadableQuery;
 import static org.hisp.dhis.webapi.filter.CspFilter.*;
+import static org.springframework.web.util.ServletRequestPathUtils.*;
 
 import jakarta.servlet.Filter;
 import jakarta.servlet.http.*;
@@ -51,18 +53,21 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.handler.MappedInterceptor;
 import org.springframework.web.util.UrlPathHelper;
 
-/** Answers FHIR requests with 404 while {@code fhir.api.enabled} is off, before authentication. */
+/** Answers FHIR requests before authentication (chain) and after handler lookup (guard). */
 @Configuration
 public class FhirApiDisabledSecurityConfig {
   static final Pattern FHIR_PATH = Pattern.compile("^/api/(?:\\d+/)?fhir(?:/.*)?$");
 
-  /** Creates the highest-precedence chain matching {@link #FHIR_PATH}, as sent or URL-decoded. */
+  /** Matches {@link #FHIR_PATH} (sent or decoded): 404 while off, 400 for an undecodable query. */
   @Bean
   @Order(Ordered.HIGHEST_PRECEDENCE)
   public SecurityFilterChain fhirApiDisabledFilterChain(
       DhisConfigurationProvider config, FhirResourceSerializer serializer) {
     RequestMatcher matcher =
-        request -> !config.isEnabled(ConfigurationKey.FHIR_API_ENABLED) && isFhirPath(request);
+        request ->
+            isFhirPath(request)
+                && (!config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)
+                    || unreadableQuery(request) != null);
     StaticHeadersWriter frame =
         config.isEnabled(ConfigurationKey.CSP_ENABLED)
             ? new StaticHeadersWriter(
@@ -75,13 +80,17 @@ public class FhirApiDisabledSecurityConfig {
                 new XContentTypeOptionsHeaderWriter(),
                 new XXssProtectionHeaderWriter(),
                 new HstsHeaderWriter()));
-    Filter notFound =
+    Filter reject =
         (request, response, chain) ->
-            serializer.writeError((HttpServletResponse) response, FhirApiException.notFound());
-    return new DefaultSecurityFilterChain(matcher, headers, notFound);
+            serializer.writeError(
+                (HttpServletResponse) response,
+                config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)
+                    ? unreadableQuery((HttpServletRequest) request)
+                    : FhirApiException.notFound());
+    return new DefaultSecurityFilterChain(matcher, headers, reject);
   }
 
-  /** Guards FHIR handlers: 404 while off, the entry point's response while on without a user. */
+  /** Guards FHIR handlers: entry point without a user; 404 while off or on a stripped GET/HEAD. */
   @Bean
   public MappedInterceptor fhirApiRequestGuard(
       DhisConfigurationProvider config,
@@ -93,29 +102,32 @@ public class FhirApiDisabledSecurityConfig {
           public boolean preHandle(
               HttpServletRequest request, HttpServletResponse response, Object handler)
               throws Exception {
-            if (!config.isEnabled(ConfigurationKey.FHIR_API_ENABLED)) {
-              serializer.writeError(response, FhirApiException.notFound());
+            boolean enabled = config.isEnabled(ConfigurationKey.FHIR_API_ENABLED);
+            if (enabled && !CurrentUserUtil.hasCurrentUser()) {
+              entryPoint.commence(
+                  request,
+                  response,
+                  new InsufficientAuthenticationException(
+                      "Full authentication is required to access this resource"));
               return false;
             }
-            if (CurrentUserUtil.hasCurrentUser()) {
-              return true;
-            }
-            entryPoint.commence(
-                request,
-                response,
-                new InsufficientAuthenticationException(
-                    "Full authentication is required to access this resource"));
+            if (enabled && !isStripped(request)) return true;
+            serializer.writeError(response, FhirApiException.notFound());
             return false;
           }
         };
     return new MappedInterceptor(new String[] {"/api/fhir", "/api/fhir/**"}, null, guard);
   }
 
+  private static boolean isStripped(HttpServletRequest request) {
+    return Set.of("GET", "HEAD").contains(request.getMethod())
+        && hasParsedRequestPath(request)
+        && !getParsedRequestPath(request).value().equals(request.getRequestURI());
+  }
+
   private static boolean isFhirPath(HttpServletRequest request) {
     String uri = request.getRequestURI();
-    if (uri == null) {
-      return false;
-    }
+    if (uri == null) return false;
     String context = Objects.toString(request.getContextPath(), "");
     if (uri.startsWith(context) && FHIR_PATH.matcher(uri.substring(context.length())).matches()) {
       return true;

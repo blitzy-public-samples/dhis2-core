@@ -34,7 +34,6 @@ import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
-import java.util.regex.Pattern;
 import org.hisp.dhis.fhir.mapping.FhirResourceType;
 import org.junit.jupiter.api.Test;
 
@@ -45,7 +44,6 @@ class FhirLogicalIdTest {
   private static final String[] MALFORMED_SEGMENTS =
       ",1xP7UnKhomJ,nxP7UnKhom,nxP7UnKhomJx,nxP7Un_homJ,nxP7Un.homJ,nxP7Un homJ,nxP7Un\u00fchomJ"
           .split(",");
-  private static final Pattern R4_ID = Pattern.compile("[A-Za-z0-9\\-\\.]{1,64}");
 
   @Test
   void composesAndParsesEncounterAndPerDataElementIds() {
@@ -54,7 +52,7 @@ class FhirLogicalIdTest {
     for (FhirLogicalId id : List.of(encounter, perDataElement)) {
       assertEquals(ENR, id.enrollment());
       assertEquals(EVT, id.event());
-      assertTrue(R4_ID.matcher(id.compose()).matches(), id::compose);
+      assertTrue(id.compose().matches("[A-Za-z0-9\\-\\.]{1,64}"), id::compose);
     }
     assertNull(encounter.dataElement());
     assertEquals(ENCOUNTER_ID, encounter.compose());

@@ -34,6 +34,7 @@ import static org.hisp.dhis.fhir.mapping.FhirResourceType.*;
 import static org.hisp.dhis.fhir.service.FhirTrackerReader.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE;
 
 import jakarta.persistence.PersistenceException;
 import jakarta.servlet.ServletRequestWrapper;
@@ -70,6 +71,7 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.*;
+import org.springframework.web.context.request.*;
 
 @ExtendWith(MockitoExtension.class)
 class FhirTrackerReaderTest {
@@ -82,6 +84,7 @@ class FhirTrackerReaderTest {
   @Mock private FhirEnrollmentExportAdapter enrollmentAdapter;
   @Mock private TrackerExportTimeout timeout;
   @Mock private PlatformTransactionManager transactionManager;
+  @Mock private DataSource dataSource;
   private final MockHttpServletRequest request = new MockHttpServletRequest();
   private final List<Deadline> seen = new ArrayList<>();
   private long nanos = TimeUnit.SECONDS.toNanos(1_000);
@@ -93,7 +96,8 @@ class FhirTrackerReaderTest {
   void setUp() {
     reader = new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout);
     transactional =
-        new FhirTrackerReader(trackedEntityAdapter, enrollmentAdapter, timeout, transactionManager);
+        new FhirTrackerReader(
+            trackedEntityAdapter, enrollmentAdapter, timeout, transactionManager, dataSource);
     Map<String, String> attributeToParameter = new LinkedHashMap<>();
     attributeToParameter.put(FAMILY_TEA, "family");
     attributeToParameter.put(GIVEN_TEA, "given");
@@ -106,6 +110,7 @@ class FhirTrackerReaderTest {
   @AfterEach
   void clearDeadline() {
     DeadlineHolder.clear();
+    RequestContextHolder.resetRequestAttributes();
   }
 
   @Test
@@ -133,10 +138,6 @@ class FhirTrackerReaderTest {
     }
     doThrow(expired).when(enrollmentAdapter).find(eq(enrollmentParams), exported());
     assertRethrown(expired, () -> reader.findEnrollments(enrollmentParams, request, ENCOUNTER));
-  }
-
-  @Test
-  void forwardingHeadersAreHiddenFromTheExportPath() throws Exception {
     Map<String, String> forwarding = new LinkedHashMap<>();
     forwarding.put("X-Forwarded-Host", "evil\"example");
     forwarding.put("X-Forwarded-Proto", "https");
@@ -436,6 +437,31 @@ class FhirTrackerReaderTest {
     verify(closed, times(2)).close();
   }
 
+  @Test
+  void deadlineExpiryIsLoggedOnceWithFhirContext() throws Throwable {
+    request.setRequestURI("/api/fhir/Patient/" + TE + "/$everything");
+    request.setQueryString("family=" + SURNAME);
+    var expired = new DeadlineExceededException(Duration.ofSeconds(1), queryTimeouts().get(0));
+    RuntimeException absent = FhirApiException.notFound();
+    Executable fails = () -> reader.withinDeadline(throwing(absent));
+    Executable nested = () -> reader.withinDeadline(() -> reader.withinDeadline(throwing(expired)));
+    Executable failures =
+        () -> assertAll(() -> assertRethrown(absent, fails), () -> assertRethrown(expired, nested));
+    String timedOut = " timed out: Request exceeded its time budget of 1s";
+    assertEquals("WARN FHIR operation" + timedOut, loggedOnceWithoutSurname(failures));
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    request.setAttribute(BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/fhir/Patient/{id}");
+    assertEquals("WARN FHIR Patient read" + timedOut, loggedOnceWithoutSurname(failures));
+    request.setAttribute(BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/fhir/Encounter");
+    assertEquals("WARN FHIR Encounter search-type" + timedOut, loggedOnceWithoutSurname(failures));
+    request.setAttribute(BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/fhir/Patient/{id}/$everything");
+    DeadlineHolder.set(deadlineIn(Duration.ofSeconds(1)));
+    Executable converted = () -> reader.withinDeadline(throwing(queryTimeouts().get(1)));
+    Executable convertedOnce = () -> assertThrows(DeadlineExceededException.class, converted);
+    String everything = loggedOnceWithoutSurname(convertedOnce, Level.WARN);
+    assertEquals("WARN FHIR Patient $everything" + timedOut, everything);
+  }
+
   private FhirTrackerReader bounded(Connection connection) throws SQLException {
     DataSource dataSource = mock(DataSource.class);
     when(dataSource.getConnection()).thenReturn(connection);
@@ -526,7 +552,7 @@ class FhirTrackerReaderTest {
     assertSame(expected, assertThrows(expected.getClass(), executable));
   }
 
-  private static String loggedOnceWithoutSurname(Executable call) throws Throwable {
+  private static String loggedOnceWithoutSurname(Executable call, Level... level) throws Throwable {
     List<LogEvent> events = new CopyOnWriteArrayList<>();
     var appender =
         new AbstractAppender("readerLog", null, null, true, Property.EMPTY_ARRAY) {
@@ -536,7 +562,7 @@ class FhirTrackerReaderTest {
           }
         };
     String name = FhirTrackerReader.class.getName();
-    LoggerConfig capture = new LoggerConfig(name, Level.ALL, false);
+    LoggerConfig capture = new LoggerConfig(name, level.length == 0 ? Level.ALL : level[0], false);
     capture.addAppender(appender, Level.ALL, null);
     var configuration = LoggerContext.getContext(false).getConfiguration();
     synchronized (configuration) {

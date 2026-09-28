@@ -87,10 +87,9 @@ class FhirPatientMapperTest {
     Patient patient = mapFullPatient();
     assertEquals(TE, patient.getIdElement().getIdPart());
     assertEquals(UPDATED, patient.getMeta().getLastUpdated().toInstant());
-    assertEquals(
-        List.of(
-            IDENTIFIER_SYSTEM + "|" + NATIONAL_ID, INTEGER_IDENTIFIER_SYSTEM + "|" + INTEGER_ID),
-        patient.getIdentifier().stream().map(id -> id.getSystem() + "|" + id.getValue()).toList());
+    var ids = patient.getIdentifier().stream().map(i -> i.getSystem() + "|" + i.getValue());
+    String nationalId = IDENTIFIER_SYSTEM + "|" + NATIONAL_ID;
+    assertEquals(List.of(nationalId, INTEGER_IDENTIFIER_SYSTEM + "|" + INTEGER_ID), ids.toList());
     assertEquals(List.of(FAMILY + "|" + GIVEN), names(patient));
     assertEquals(FEMALE, patient.getGender());
     assertEquals(BIRTH_DATE, patient.getBirthDateElement().getValueAsString());

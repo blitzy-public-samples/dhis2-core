@@ -187,9 +187,7 @@ public final class FhirTestFixtures {
     stage.setProgram(program);
     var members = Arrays.stream(elements).map(e -> new ProgramStageDataElement(stage, e));
     stage.setProgramStageDataElements(new HashSet<>(members.toList()));
-    if (program != null) {
-      program.getProgramStages().add(stage);
-    }
+    Optional.ofNullable(program).ifPresent(p -> p.getProgramStages().add(stage));
     return stage;
   }
 
@@ -205,17 +203,9 @@ public final class FhirTestFixtures {
       IdentifiableObject... objects) {
     List<IdentifiableObject> registered = new ArrayList<>(Arrays.asList(objects));
     return (klass, uid) -> {
-      var ofClass = registered.stream().filter(o -> klass != null && klass.isInstance(o));
-      return ofClass.filter(o -> uid != null && uid.equals(uidValue(o))).findFirst().orElse(null);
+      var found = registered.stream().filter(o -> klass != null && klass.isInstance(o));
+      return found.filter(o -> UID.isValid(uid) && uid.equals(o.getUid())).findFirst().orElse(null);
     };
-  }
-
-  private static String uidValue(IdentifiableObject object) {
-    try {
-      return object.getUID().getValue();
-    } catch (IllegalArgumentException e) {
-      return null;
-    }
   }
 
   public static final class Entry {
