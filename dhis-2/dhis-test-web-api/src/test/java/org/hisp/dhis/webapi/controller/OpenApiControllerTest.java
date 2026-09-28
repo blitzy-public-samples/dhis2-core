@@ -304,6 +304,18 @@ class OpenApiControllerTest extends H2ControllerIntegrationTestBase {
             AT.find(JsonNodeType.BOOLEAN, n -> n.path().segment().contentEquals("readOnly"))));
   }
 
+  /** The FHIR mapping controller leaves these existing request bodies without input variants. */
+  @Test
+  void testGetOpenApiDocument_FhirControllersAddNoSharedInputSchemas() {
+    JsonObject doc = GET("/openapi/openapi.json").content();
+    assertTrue(doc.getObject("paths").has("/api/fhirResourceMappings/{uid}/metadata"));
+    assertEquals(
+        List.of(),
+        List.of("UserRole", "DataEntryForm", "IndicatorType", "AnalyticsPeriodBoundary").stream()
+            .filter(name -> doc.getObject("components.schemas").has(name + "Params"))
+            .toList());
+  }
+
   @Test
   void testGetOpenApiDocument_CodeGeneration() throws IOException {
     JsonObject doc = GET("/openapi/openapi.json?failOnNameClash=true").content();

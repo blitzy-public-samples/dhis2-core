@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FHIR resource mappings</title>
+    <style>
+      :root { --fhir-text: #212934; --fhir-border: #6c7a89; --fhir-surface: #f3f5f7; --fhir-accent: #0d5ea6; --fhir-error: #b3261e; --fhir-gap: 0.5rem; }
+      *, *::before, *::after { box-sizing: border-box; } main { max-width: 80rem; margin: 0 auto; } h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; margin-block: 2rem 0.75rem; } h3 { font-size: 1rem; margin-block: 1.25rem 0.5rem; }
+      body { margin: 0; padding: 1.5rem; color: var(--fhir-text); font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+      .notice:not(:empty) { padding: var(--fhir-gap); margin-block-end: 1rem; border: 1px solid var(--fhir-border); background: var(--fhir-surface); overflow-wrap: break-word; }
+      .table-wrap { overflow-x: auto; } table { border-collapse: separate; border-spacing: 0; width: 100%; } caption { text-align: start; font-weight: 600; padding-block-end: var(--fhir-gap); }
+      th, td { border: 0 solid var(--fhir-border); border-inline-start-width: 1px; border-block-end-width: 1px; padding: 0.25rem 0.375rem; text-align: start; vertical-align: baseline; overflow-wrap: break-word; } thead th { border-block-start-width: 1px; } th:last-child, td:last-child { border-inline-end-width: 1px; }
+      tbody th, #fhir-editing { overflow-wrap: anywhere; } tbody th { min-width: 8rem; } thead th:last-child, tbody td:last-child:not([colspan]) { position: sticky; inset-inline-end: 0; background: Canvas; }
+      .editor { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; } .editor > form { flex: 1 1 100%; min-width: 0; }
+      .editor > .notice { flex: 1 1 100%; min-width: 0; position: sticky; inset-block-start: 1rem; } .editor > .notice:focus { outline: 3px solid var(--fhir-accent); outline-offset: 2px; }
+      .field { display: flex; flex-direction: column; gap: 0.25rem; margin-block-end: 0.75rem; } fieldset { border: 1px solid var(--fhir-border); margin: 0 0 0.75rem; min-width: 0; } fieldset.plain { border: 0; padding: 0; margin: 0; }
+      .pair, .actions { display: flex; flex-wrap: wrap; gap: var(--fhir-gap) 1rem; align-items: flex-end; } .mapping-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); gap: var(--fhir-gap) 1rem; align-items: end; }
+      .mapping-row > .field, .pair > .field { min-width: 0; margin: 0; } .pair > .field { flex: 1 1 12rem; } .field > :is(input, select) { width: 100%; } .mapping-row > :is(.value-map, button), .mapping-row > .field:first-of-type { grid-column: 1 / -1; margin: 0; } .mapping-row > button { justify-self: start; }
+      .pairs { display: flex; flex-direction: column; gap: var(--fhir-gap); margin-block-end: var(--fhir-gap); }
+      :root { --fhir-control: #ffffff; --fhir-hover: #bcd3ea; --fhir-pressed: #9fbfe0; --fhir-control-pressed: #e3edf7; --fhir-accent-hover: #083b69; --fhir-accent-pressed: #052744; --fhir-touch: 2.75rem; }
+      input, select, button { font: inherit; min-height: var(--fhir-touch); max-width: 100%; padding: 0.25rem var(--fhir-gap); border: 1px solid var(--fhir-border); color: var(--fhir-text); background-color: var(--fhir-control); }
+      button { min-width: var(--fhir-touch); cursor: pointer; } button[type="submit"] { background-color: var(--fhir-accent); border-color: var(--fhir-accent); color: #ffffff; }
+      :is(input, select, button):hover:not(:disabled):not([aria-invalid="true"]) { border-color: var(--fhir-accent); box-shadow: inset 0 0 0 1px var(--fhir-accent); } button:hover:not(:disabled) { background-color: var(--fhir-hover); } button:active:not(:disabled) { background-color: var(--fhir-pressed); }
+      :is(input, select):active:not(:disabled) { background-color: var(--fhir-control-pressed); } button[type="submit"]:hover:not(:disabled) { background-color: var(--fhir-accent-hover); border-color: var(--fhir-accent-hover); box-shadow: none; } button[type="submit"]:active:not(:disabled) { background-color: var(--fhir-accent-pressed); }
+      :is(input, select, button):disabled { opacity: 0.6; cursor: not-allowed; } [aria-invalid="true"] { border: 2px solid var(--fhir-error); padding: calc(0.25rem - 1px) calc(var(--fhir-gap) - 1px); }
+      :focus-visible { outline: 3px solid var(--fhir-accent); outline-offset: 2px; } button[type="submit"]:focus-visible { outline-color: var(--fhir-text); } [hidden] { display: none; }
+      .table-wrap:hover:not(:focus-visible) { outline: 1px solid var(--fhir-accent); outline-offset: 2px; } .table-wrap:active:not(:focus-visible) { outline: 2px solid var(--fhir-accent); outline-offset: 2px; }
+      #fhir-messages:not(:empty) { position: fixed; inset-inline: 1rem; inset-block-end: 1rem; z-index: 2; max-width: 50rem; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--fhir-gap) 1rem; box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.25); } @media (min-width: 46rem) { .editor > form { flex: 3 1 26rem; } .editor > .notice { flex: 2 1 14rem; } #fhir-messages:not(:empty) { inset-inline: auto calc((100% - min(80rem, 100% - 3rem)) / 2); width: calc(0.4 * min(80rem, 100% - 3rem) - 2.6rem); margin: 0; } }
+      #fhir-messages > p { margin: 0; flex: 1 1 12rem; } html { scroll-padding-block-end: calc(var(--fhir-message-space, 0px) + var(--fhir-gap)); } body { padding-block-end: calc(1.5rem + var(--fhir-message-space, 0px)); } .skip-link { position: absolute; inset-block-start: 0.25rem; inset-inline-start: 0.25rem; z-index: 3; padding: var(--fhir-gap); background: var(--fhir-surface); color: var(--fhir-text); border: 1px solid var(--fhir-border); }
+      .skip-link:not(:focus) { width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } .table-wrap { block-size: min(24rem, 60vh); overflow-y: auto; } thead th { position: sticky; inset-block-start: -1px; z-index: 1; background: #ffffff; } #fhir-live { min-block-size: 1.5em; }
+      table:has(> tbody > tr > th) thead th::after { content: ""; position: absolute; inset-inline: 0; inset-block-end: -1px; block-size: 1px; background: var(--fhir-border); } button[aria-disabled="true"], button[aria-disabled="true"]:is(:hover, :active) { opacity: 0.6; cursor: not-allowed; filter: none; border-color: var(--fhir-border); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="skip-link" href="#fhir-editor-heading">Skip to editor</a>
+      <h1>FHIR resource mappings</h1>
+      <p id="fhir-status" class="notice" aria-live="polite">Checking FHIR API status</p>
+      <div id="fhir-messages" class="notice" aria-live="polite"></div>
+      <p id="fhir-live" role="status">Loading…</p>
+      <section aria-labelledby="fhir-mappings-heading">
+        <h2 id="fhir-mappings-heading">Mappings</h2>
+        <div class="table-wrap" role="region" aria-labelledby="fhir-mappings-caption" tabindex="0">
+          <table aria-busy="true">
+            <caption id="fhir-mappings-caption">Stored FHIR resource mappings</caption>
+            <thead><tr><th scope="col">Name</th><th scope="col">Resource type</th><th scope="col">Tracked entity type</th><th scope="col">Program</th><th scope="col">Program stage</th><th scope="col">Field mappings</th><th scope="col">Actions</th></tr></thead>
+            <tbody id="fhir-mapping-rows"><tr><td colspan="7">Loading mappings…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+      <section aria-labelledby="fhir-editor-heading">
+        <h2 id="fhir-editor-heading">Editor</h2>
+        <p id="fhir-editing">New mapping</p>
+        <div class="editor">
+          <form id="fhir-mapping-form" autocomplete="off" aria-busy="true">
+            <fieldset id="fhir-form-body" class="plain" aria-labelledby="fhir-editing" aria-busy="false" disabled>
+              <div class="field"><label for="fhir-name">Name (required)</label><input type="text" id="fhir-name" required aria-invalid="false"></div>
+              <div class="field"><label for="fhir-resource-type">Resource type</label><select id="fhir-resource-type"><option selected>PATIENT</option><option>ENCOUNTER</option><option>IMMUNIZATION</option><option>OBSERVATION</option></select></div>
+              <div class="field"><label for="fhir-tracked-entity-type">Tracked entity type (required)</label><select id="fhir-tracked-entity-type" required disabled aria-invalid="false"><option value="">Loading tracked entity types…</option></select></div>
+              <div class="field"><label for="fhir-program">Program<span id="fhir-program-required"></span></label><select id="fhir-program" aria-invalid="false"><option value="">(none)</option></select></div>
+              <div class="field" id="fhir-program-stage-field" hidden><label for="fhir-program-stage">Program stage (required)</label><select id="fhir-program-stage" aria-invalid="false"><option value="">Select a program first</option></select></div>
+              <h3>Field mappings</h3>
+              <div id="fhir-field-mappings"></div>
+              <div class="actions">
+                <button type="button" id="fhir-add-row">Add field mapping</button>
+                <button type="submit" disabled>Save</button>
+                <button type="button" id="fhir-cancel-edit" hidden>Cancel edit</button>
+                <button type="button" id="fhir-clear-form">Clear form</button>
+              </div>
+            </fieldset>
+          </form>
+          <div id="fhir-form-errors" class="notice" aria-live="polite" tabindex="-1"></div>
+        </div>
+      </section>
+    </main>
+    <script type="module">
+      const API = location.pathname.replace(/fhirResourceMappings\/settings\/?$/, '');
+      const CHUNK_SIZE = 200, READ_TIMEOUT_MS = 60000, SAVE_COOLDOWN_MS = 500;
+      const TEXTUAL = ['TEXT', 'LONG_TEXT', 'LETTER'], INTEGERS = ['INTEGER', 'INTEGER_POSITIVE', 'INTEGER_NEGATIVE', 'INTEGER_ZERO_OR_POSITIVE'];
+      const QUANTITY = ['NUMBER', ...INTEGERS, 'PERCENTAGE', 'UNIT_INTERVAL'], CODING = ['system', 'code', 'display'];
+      const TARGETS = {
+        PATIENT_IDENTIFIER: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {ATTRIBUTE: ['system']}, requiredInputs: ['system'],
+          valueTypes: [...TEXTUAL, 'USERNAME', 'EMAIL', 'PHONE_NUMBER', 'URL', ...INTEGERS]},
+        PATIENT_FAMILY_NAME: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_GIVEN_NAME: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_GENDER: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {ATTRIBUTE: ['valueMap']}, requiredInputs: [], valueTypes: TEXTUAL},
+        PATIENT_BIRTH_DATE: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['DATE', 'AGE']},
+        PATIENT_PHONE: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['PHONE_NUMBER', 'TEXT']},
+        PATIENT_EMAIL: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: ['EMAIL', 'TEXT']},
+        PATIENT_ADDRESS_TEXT: {resource: 'PATIENT', sources: ['ATTRIBUTE'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        ENCOUNTER_CLASS: {resource: 'ENCOUNTER', sources: ['CONSTANT'], required: true, inputs: {CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: []},
+        ENCOUNTER_TYPE: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT', 'CONSTANT'], required: false,
+          inputs: {DATA_ELEMENT: ['system'], CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: TEXTUAL},
+        ENCOUNTER_REASON: {resource: 'ENCOUNTER', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        IMMUNIZATION_ADMINISTERED: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: true, inputs: {}, requiredInputs: [], valueTypes: ['BOOLEAN', 'TRUE_ONLY', 'TEXT']},
+        IMMUNIZATION_VACCINE_CODE: {resource: 'IMMUNIZATION', sources: ['CONSTANT'], required: true, inputs: {CONSTANT: CODING}, requiredInputs: ['code'], valueTypes: []},
+        IMMUNIZATION_LOT_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: TEXTUAL},
+        IMMUNIZATION_DOSE_NUMBER: {resource: 'IMMUNIZATION', sources: ['DATA_ELEMENT'], required: false, inputs: {}, requiredInputs: [], valueTypes: [...INTEGERS, 'TEXT']},
+        OBSERVATION_VALUE: {resource: 'OBSERVATION', sources: ['DATA_ELEMENT'], required: true, inputs: {DATA_ELEMENT: ['system', 'code', 'display', 'unit']},
+          requiredInputs: ['code'], valueTypes: ['TEXT', 'LONG_TEXT', 'MULTI_TEXT', 'LETTER', 'PHONE_NUMBER', 'EMAIL', 'BOOLEAN', 'TRUE_ONLY', 'DATE',
+            'DATETIME', 'TIME', 'NUMBER', 'UNIT_INTERVAL', 'PERCENTAGE', ...INTEGERS, 'USERNAME', 'AGE', 'URL']}
+      };
+      const TEXT_INPUTS = {system: 'System', code: 'Code', display: 'Display', unit: 'Unit'}, WITH_SOURCE = ['ATTRIBUTE', 'DATA_ELEMENT'], GENDERS = ['male', 'female', 'other', 'unknown'];
+      const byId = (id) => document.getElementById(id);
+      const form = byId('fhir-mapping-form'), formBody = byId('fhir-form-body'), nameInput = byId('fhir-name'), resourceSelect = byId('fhir-resource-type');
+      const typeSelect = byId('fhir-tracked-entity-type'), programSelect = byId('fhir-program'), stageField = byId('fhir-program-stage-field'), stageSelect = byId('fhir-program-stage');
+      const rowsBox = byId('fhir-field-mappings'), cancelButton = byId('fhir-cancel-edit'), saveButton = form.querySelector('button[type="submit"]'), messages = byId('fhir-messages');
+      const formErrors = byId('fhir-form-errors'), tableBody = byId('fhir-mapping-rows'), live = byId('fhir-live'), clearButton = byId('fhir-clear-form');
+      const state = {editing: null, saving: false, editPending: false, resourceType: resourceSelect.value, types: new Map(), programs: [], programsFor: '', programsPending: false, typesLoading: true, programLoad: 0, editLoad: 0, listLoad: 0, rows: [], rowCount: 0, pairCount: 0};
+      const runtime = {typesReady: Promise.resolve(), programCache: new Map(), saveReadyAt: 0};
+      const mappingTable = tableBody.closest('table'), saveLabel = saveButton.textContent;
+      const text = (value) => (value === null || value === undefined ? '' : String(value));
+      const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const list = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
+      const count = (size, one, many) => size + ' ' + (size === 1 ? one : many);
+      const announce = (message, append) => { live.textContent = append && live.textContent ? live.textContent + ' ' + message : message; };
+      const clearedNotice = (cleared, reason) => (cleared.length === 0 ? '' : 'Cleared ' + cleared.map((label) => '"' + label + '"').join(', ') + ': the previous ' + (cleared.length === 1 ? 'choice is' : 'choices are') + ' not available for the selected ' + reason + '.');
+      const announceCleared = (cleared, reason, append) => { if (cleared.length > 0 || !append) announce(clearedNotice(cleared, reason), append); };
+      function el(tag, attributes, content) {
+        const node = document.createElement(tag);
+        Object.entries(attributes || {}).forEach(([name, value]) => node.setAttribute(name, value));
+        if (content !== undefined) node.textContent = content;
+        return node;
+      }
+      function field(id, labelText, control) {
+        const wrapper = el('div', {class: 'field'}), label = wrapper.appendChild(el('label', {for: id}, labelText));
+        wrapper.appendChild(control);
+        return {wrapper, label};
+      }
+      function fillSelect(select, placeholder, items) {
+        const options = document.createDocumentFragment();
+        if (placeholder !== null) options.appendChild(el('option', {value: ''}, placeholder));
+        items.forEach(([value, label]) => options.appendChild(el('option', {value}, label)));
+        select.replaceChildren(options);
+        unflag(select);
+      }
+      function labelOf(control) {
+        const row = control.closest('.mapping-row');
+        return (row ? row.firstChild.textContent + ', ' : '') + text(control.labels[0] && control.labels[0].textContent).replace(' (required)', '');
+      }
+      function setValue(select, value, warnings) {
+        const wanted = text(value), known = Array.from(select.options).some((option) => option.value === wanted);
+        const kept = !known && wanted && warnings && !select.closest('[hidden]');
+        if (kept) select.appendChild(el('option', {value: wanted}, 'Unavailable: ' + wanted));
+        select.value = known || kept ? wanted : '';
+        if (kept) warnings.push(labelOf(select) + ': "' + wanted + '"');
+        return Boolean(wanted) && select.value !== wanted;
+      }
+      const dropped = (select, lost) => (lost && !select.closest('[hidden]') ? [labelOf(select)] : []);
+      function csrfToken() {
+        const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='));
+        return cookie ? decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)) : '';
+      }
+      const parseJson = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch (error) { return null; } };
+      async function api(method, path, body) {
+        const headers = {Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(body === undefined ? {} : {'Content-Type': 'application/json'})};
+        const token = method === 'GET' ? '' : csrfToken();
+        if (token) headers['X-XSRF-TOKEN'] = token;
+        const init = {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body),
+          signal: method === 'GET' ? AbortSignal.timeout(READ_TIMEOUT_MS) : undefined};
+        try {
+          const response = await fetch(API + path, init);
+          const json = (response.headers.get('Content-Type') || '').includes('json') ? parseJson(await response.text()) : null;
+          return {status: response.status, ok: response.ok && !response.redirected, json};
+        } catch (error) {
+          return {status: 0, ok: false, json: null, timedOut: Boolean(error && error.name === 'TimeoutError')};
+        }
+      }
+      const succeeded = (result) => result.ok && isObject(result.json) && result.json.status === 'OK';
+      function errorText(result, retry = 'try again') {
+        const json = isObject(result.json) ? result.json : {};
+        const reports = isObject(json.response) ? json.response.errorReports : undefined;
+        if (result.status === 401) return ['Your session has expired or you are not logged in. Log in again in another browser tab, then return to this tab and ' + retry + '. Reloading this page discards unsaved changes in the editor.'];
+        if (Array.isArray(reports) && reports.length > 0) return reports.map((report) => text(report && report.message));
+        if (json.message) return text(json.message).split('\n');
+        if (result.timedOut) return ['The server did not respond within ' + READ_TIMEOUT_MS / 1000 + ' seconds. Try again.'];
+        if (result.status === 0) return ['The server could not be reached. Check the connection and try again.'];
+        return [(result.status >= 200 && result.status < 300 ? 'Unexpected response' : 'Request failed') + ' (HTTP ' + result.status + ')'];
+      }
+      function showMessage(message) {
+        const at = new Date(), note = el('p'), dismiss = el('button', {type: 'button'}, 'Dismiss');
+        note.append(el('time', {datetime: at.toISOString()}, at.toLocaleTimeString()), ' ' + message);
+        dismiss.addEventListener('click', ({detail}) => { clearMessage(); if (!detail) focusNear(tableBody.closest('.table-wrap'), byId('fhir-mappings-heading')); });
+        messages.replaceChildren(note, dismiss);
+      }
+      const clearMessage = () => messages.replaceChildren();
+      const focusNear = (control, area = control) => { control.focus({preventScroll: true}); area.scrollIntoView({block: 'nearest', inline: 'nearest'}); };
+      function restoreFocus() {
+        const {control, row, top, left} = state.origin || {}, wrap = tableBody.closest('.table-wrap');
+        const kept = control && control.isConnected && !control.matches(':disabled');
+        const index = kept || row === undefined ? -1 : Math.min(row, tableBody.rows.length - 1), near = tableBody.rows[index];
+        const target = kept ? control : row === undefined ? saveButton : (near && near.querySelector('button')) || wrap;
+        if (row !== undefined) wrap.scrollLeft = left;
+        const anchor = (near || target.closest('tr') || target).getBoundingClientRect();
+        if (top !== undefined) scrollBy(0, anchor.top - (near && index < row ? top - anchor.height : top));
+        focusNear(target);
+      }
+      const showError = (result, action) => showMessage('Error: ' + (action ? action + ' failed: ' : '') + errorText(result).join('; '));
+      const failed = async (result, action) => { showError(result, action); if (result.status === 404) await loadMappings(); if (document.activeElement === document.body) restoreFocus(); };
+      function showFormErrors(problems, heading = 'Error:') {
+        formErrors.replaceChildren(el('p', {}, heading), el('ul'));
+        problems.forEach((message) => formErrors.lastChild.appendChild(el('li', {}, message)));
+      }
+      const guard = (handler) => async (...args) => {
+        try { await handler(...args); } catch (error) { showMessage('Error: ' + text(error && error.message ? error.message : error)); }
+      };
+      function collection(result, key) {
+        const json = result.ok && isObject(result.json) ? result.json : null;
+        if (json && Array.isArray(json[key])) return list(json[key]);
+        if (json) showMessage('Error: Malformed response: "' + key + '" is not a list.');
+        else showError(result);
+        return null;
+      }
+      async function loadStatus() {
+        const result = await api('GET', 'fhir/metadata');
+        const enabled = result.status === 200 && isObject(result.json) && result.json.resourceType === 'CapabilityStatement';
+        byId('fhir-status').textContent = enabled ? 'FHIR API enabled'
+          : result.status === 404 ? 'FHIR API disabled (fhir.api.enabled)' : 'FHIR API status unknown (HTTP ' + result.status + ')';
+        if (!enabled && result.status !== 404) showError(result);
+      }
+      async function loadTrackedEntityTypes() {
+        try {
+          const result = await api('GET', 'trackedEntityTypes?fields=id,displayName,trackedEntityTypeAttributes[trackedEntityAttribute[id,displayName,valueType]]&paging=false');
+          const types = collection(result, 'trackedEntityTypes');
+          state.types = new Map((types || []).map((type) => [text(type.id), type]));
+          const placeholder = !types ? 'Tracked entity types could not be loaded' : types.length ? 'Select a tracked entity type' : 'No tracked entity types available';
+          fillSelect(typeSelect, placeholder, (types || []).map((type) => [text(type.id), text(type.displayName)]));
+        } finally {
+          typeSelect.disabled = saveButton.disabled = state.typesLoading = false;
+          formBody.disabled = state.saving;
+          form.removeAttribute('aria-busy');
+        }
+      }
+      function setProgramsPending(pending) {
+        state.programsPending = programSelect.disabled = stageSelect.disabled = pending;
+        if (pending) saveButton.setAttribute('aria-disabled', 'true'); else saveButton.removeAttribute('aria-disabled');
+      }
+      async function loadPrograms(typeId) {
+        const token = ++state.programLoad;
+        let programs = typeId ? runtime.programCache.get(typeId) : [];
+        Object.assign(state, {programs: [], programsFor: ''});
+        if (!programs) {
+          fillSelect(programSelect, 'Loading programs…', []);
+          fillStages();
+          setProgramsPending(true);
+          announce('Loading programs…');
+          const result = await api('GET', 'programs?filter=programType:eq:WITH_REGISTRATION&filter=trackedEntityType.id:eq:' + encodeURIComponent(typeId) + '&fields=id,displayName,programTrackedEntityAttributes[trackedEntityAttribute[id,displayName,valueType]],programStages[id,displayName,programStageDataElements[dataElement[id,displayName,valueType]]]&paging=false');
+          if (token !== state.programLoad) return;
+          programs = collection(result, 'programs');
+          if (programs) runtime.programCache.set(typeId, programs);
+        }
+        if (typeId) announce(programs ? count(programs.length, 'program', 'programs') + ' available.' : 'Programs could not be loaded.');
+        setProgramsPending(false);
+        state.programs = programs || [];
+        state.programsFor = typeId;
+        const placeholder = !programs ? '(none: programs could not be loaded)' : typeId && !programs.length ? '(none: no program with registration for this type)' : '(none)';
+        fillSelect(programSelect, placeholder, state.programs.map((program) => [text(program.id), text(program.displayName)]));
+        fillStages();
+      }
+      const currentProgram = () => state.programs.find((program) => program.id === programSelect.value);
+      const currentStage = () => list((currentProgram() || {}).programStages).find((stage) => stage.id === stageSelect.value);
+      function fillStages() {
+        const program = currentProgram(), selected = stageSelect.value;
+        const stages = program ? list(program.programStages) : [];
+        fillSelect(stageSelect, !program ? 'Select a program first' : stages.length ? 'Select a program stage' : 'This program has no stages',
+          stages.map((stage) => [text(stage.id), text(stage.displayName)]));
+        return dropped(stageSelect, setValue(stageSelect, selected));
+      }
+      function applyResourceType() {
+        const eventDerived = resourceSelect.value !== 'PATIENT';
+        programSelect.required = stageSelect.required = eventDerived;
+        if (!eventDerived) [programSelect, stageSelect].forEach(unflag);
+        byId('fhir-program-required').textContent = eventDerived ? ' (required)' : '';
+        stageField.hidden = !eventDerived; state.resourceType = resourceSelect.value;
+      }
+      function sourceItems(sourceType) {
+        if (sourceType === 'ATTRIBUTE') {
+          const items = new Map();
+          const type = state.types.get(typeSelect.value);
+          const program = currentProgram();
+          [...list(type && type.trackedEntityTypeAttributes), ...list(program && program.programTrackedEntityAttributes)]
+            .map((link) => link.trackedEntityAttribute)
+            .filter((attribute) => isObject(attribute) && !items.has(attribute.id))
+            .forEach((attribute) => items.set(attribute.id, attribute));
+          return Array.from(items.values());
+        }
+        const stage = sourceType === 'DATA_ELEMENT' ? currentStage() : undefined;
+        return list(stage && stage.programStageDataElements).map((link) => link.dataElement).filter(isObject);
+      }
+      function rowInputs(row) {
+        const inputs = TARGETS[row.target.value] ? TARGETS[row.target.value].inputs[row.sourceType.value] || [] : [];
+        const source = inputs.includes('unit') ? sourceItems(row.sourceType.value).find((item) => item.id === row.source.value) : undefined;
+        return source && QUANTITY.includes(source.valueType) ? inputs : inputs.filter((key) => key !== 'unit');
+      }
+      function noSourceText(sourceType) {
+        const program = currentProgram(), some = sourceItems(sourceType).length > 0;
+        if (sourceType === 'ATTRIBUTE') return !state.types.has(typeSelect.value) ? 'Select a tracked entity type first' : some ? 'No attribute has a value type this target accepts'
+          : program ? 'The tracked entity type and program have no attributes' : 'This tracked entity type has no attributes';
+        if (sourceType !== 'DATA_ELEMENT') return 'Select a source type first';
+        if (!program || !currentStage()) return !program ? 'Select a program first' : list(program.programStages).length ? 'Select a program stage first' : 'This program has no stages';
+        return some ? 'No data element has a value type this target accepts' : 'This program stage has no data elements';
+      }
+      function rebuildSources(row) {
+        const target = TARGETS[row.target.value];
+        const selected = row.source.value;
+        const items = target ? sourceItems(row.sourceType.value).filter((item) => target.valueTypes.includes(item.valueType)) : [];
+        const placeholder = !target ? 'Select a target first' : items.length ? 'Select a source' : noSourceText(row.sourceType.value);
+        fillSelect(row.source, placeholder, items.map((item) => [text(item.id), text(item.displayName)]));
+        return dropped(row.source, setValue(row.source, selected));
+      }
+      const rebuildAllSources = () => state.rows.flatMap((row) => { const cleared = rebuildSources(row); applyInputs(row); return cleared; });
+      function applyInputs(row) {
+        const target = TARGETS[row.target.value];
+        const inputs = rowInputs(row);
+        Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
+          const control = row.inputs[key];
+          const required = inputs.includes(key) && target.requiredInputs.includes(key);
+          control.wrapper.hidden = !inputs.includes(key);
+          control.input.required = required;
+          if (!required) unflag(control.input);
+          control.label.textContent = labelText + (required ? ' (required)' : '');
+        });
+        row.valueMap.hidden = !inputs.includes('valueMap');
+      }
+      function updateRow(row) {
+        row.sourceField.hidden = !WITH_SOURCE.includes(row.sourceType.value);
+        row.sourceType.required = Boolean(TARGETS[row.target.value]);
+        row.source.required = !row.sourceField.hidden;
+        const cleared = rebuildSources(row); applyInputs(row); return cleared;
+      }
+      function changeTarget(row) {
+        const target = TARGETS[row.target.value];
+        const sources = target ? target.sources : [], previous = row.sourceType.value;
+        fillSelect(row.sourceType, 'Select a source type', sources.map((sourceType) => [sourceType, sourceType]));
+        if (sources.length === 1) row.sourceType.value = sources[0];
+        return [...(sources.length === 1 ? [] : dropped(row.sourceType, setValue(row.sourceType, previous))), ...updateRow(row)];
+      }
+      function addPair(row, key, value, warnings) {
+        const id = row.id + '-vm' + ++state.pairCount;
+        const pair = {node: el('div', {class: 'pair'}), key: el('input', {type: 'text', id: id + '-value', 'aria-invalid': 'false'}), code: el('select', {id: id + '-code', required: ''}),
+          remove: el('button', {type: 'button'}, 'Remove value')};
+        pair.key.value = text(key);
+        fillSelect(pair.code, 'Select a FHIR gender', GENDERS.map((gender) => [gender, gender]));
+        pair.remove.addEventListener('click', guard(() => {
+          const next = row.pairList[row.pairList.indexOf(pair) + 1];
+          row.pairList = row.pairList.filter((other) => other !== pair);
+          pair.node.remove();
+          renumberPairs(row); duplicateKeys();
+          focusNear(next ? next.key : row.addPair);
+        }));
+        pair.node.append(field(id + '-value', 'DHIS2 value', pair.key).wrapper, field(id + '-code', 'FHIR gender (required)', pair.code).wrapper, pair.remove);
+        row.pairList.push(pair);
+        row.pairs.appendChild(pair.node);
+        if (value !== undefined) setValue(pair.code, value, warnings);
+        renumberPairs(row); return pair;
+      }
+      const renumberPairs = (row) => row.pairList.forEach((pair, index) => pair.remove.setAttribute('aria-label', 'Remove value ' + (index + 1)));
+      function renumberRows() {
+        state.rows.forEach((row, index) => {
+          row.legend.textContent = 'Field mapping ' + (index + 1);
+          row.remove.setAttribute('aria-label', 'Remove field mapping ' + (index + 1));
+        });
+      }
+      const removeRows = () => { state.rows = []; rowsBox.replaceChildren(); };
+      function addRow(entry, warnings) {
+        const id = 'fm' + ++state.rowCount;
+        const row = {id, inputs: {}, pairList: [], fieldset: el('fieldset', {class: 'mapping-row'}), legend: el('legend'),
+          target: el('select', {id: id + '-target', required: ''}), sourceType: el('select', {id: id + '-source-type'}),
+          source: el('select', {id: id + '-source'}), valueMap: el('fieldset', {class: 'value-map'}),
+          pairs: el('div', {class: 'pairs'}), remove: el('button', {type: 'button'}, 'Remove'), addPair: el('button', {type: 'button'}, 'Add value')};
+        fillSelect(row.target, 'Select a target', Object.entries(TARGETS).filter(([, target]) => target.resource === resourceSelect.value)
+          .map(([name, target]) => [name, name.slice(target.resource.length + 1) + (target.required ? ' (required)' : '')]));
+        row.sourceField = field(id + '-source', 'Source (required)', row.source).wrapper;
+        row.fieldset.append(row.legend, field(id + '-target', 'Target (required)', row.target).wrapper,
+          field(id + '-source-type', 'Source type (required)', row.sourceType).wrapper, row.sourceField);
+        Object.entries(TEXT_INPUTS).forEach(([key, labelText]) => {
+          const input = el('input', {type: 'text', id: id + '-' + key, 'aria-invalid': 'false'});
+          row.inputs[key] = {input, ...field(id + '-' + key, labelText, input)};
+          row.fieldset.appendChild(row.inputs[key].wrapper);
+        });
+        row.valueMap.append(el('legend', {}, 'Gender value map'), row.pairs, row.addPair);
+        row.fieldset.append(row.valueMap, row.remove);
+        row.addPair.addEventListener('click', guard(() => { const pair = addPair(row, '', undefined); focusNear(pair.key, pair.node); announce('Value ' + row.pairList.length + ' added.'); }));
+        row.target.addEventListener('change', guard(() => announceCleared(changeTarget(row), 'target')));
+        row.sourceType.addEventListener('change', guard(() => announceCleared(updateRow(row), 'source type')));
+        row.source.addEventListener('change', guard(() => applyInputs(row)));
+        row.remove.addEventListener('click', guard(() => {
+          const next = state.rows[state.rows.indexOf(row) + 1];
+          state.rows = state.rows.filter((other) => other !== row);
+          row.fieldset.remove();
+          renumberRows();
+          focusNear(next ? next.target : byId('fhir-add-row'));
+        }));
+        state.rows.push(row);
+        rowsBox.appendChild(row.fieldset);
+        renumberRows();
+        setValue(row.target, entry.target, warnings);
+        changeTarget(row);
+        if (entry.sourceType) {
+          setValue(row.sourceType, entry.sourceType, warnings);
+          updateRow(row);
+        }
+        setValue(row.source, entry.source, warnings);
+        applyInputs(row);
+        Object.entries(row.inputs).forEach(([key, control]) => { control.input.value = text(entry[key]); });
+        Object.entries(isObject(entry.valueMap) ? entry.valueMap : {}).forEach(([key, value]) => addPair(row, key, value, warnings));
+      }
+      function entryOf(row) {
+        const entry = {};
+        const inputs = rowInputs(row);
+        if (row.target.value) entry.target = row.target.value;
+        if (row.sourceType.value) entry.sourceType = row.sourceType.value;
+        if (WITH_SOURCE.includes(row.sourceType.value) && row.source.value) entry.source = row.source.value;
+        Object.keys(TEXT_INPUTS).filter((key) => inputs.includes(key) && row.inputs[key].input.value.trim()).forEach((key) => { entry[key] = row.inputs[key].input.value.trim(); });
+        if (inputs.includes('valueMap') && row.pairList.length > 0) entry.valueMap = Object.fromEntries(row.pairList.map((pair) => [pair.key.value, pair.code.value]));
+        return entry;
+      }
+      const flag = (control) => { control.setAttribute('aria-invalid', 'true'); control.setAttribute('aria-describedby', 'fhir-form-errors'); };
+      const unflag = (control) => { control.setAttribute('aria-invalid', 'false'); control.removeAttribute('aria-describedby'); };
+      const unflagAll = () => form.querySelectorAll('[aria-invalid="true"]').forEach(unflag);
+      const MAPPING_CONTROLS = new Map([['name', nameInput], ['resourceType', resourceSelect], ['trackedEntityType', typeSelect], ['program', programSelect], ['programStage', stageSelect]]);
+      function controlsOf(property, value) {
+        if (MAPPING_CONTROLS.has(property)) return [MAPPING_CONTROLS.get(property)];
+        const path = /^fieldMappings\[(\d+)\](?:\.(\w+))?/.exec(property), key = path ? path[2] || 'target' : 'source';
+        const rows = path ? [state.rows[Number(path[1])]].filter(Boolean) : state.rows.filter((row) => Object.hasOwn(TARGETS, property) && row.target.value === property);
+        return rows.flatMap((row) => key === 'valueMap' ? row.pairList.map((pair) => pair.key).filter((input) => value === undefined || input.value.toLowerCase() === value.toLowerCase()) : [['target', 'sourceType', 'source'].includes(key) ? row[key] : row.inputs[key] && row.inputs[key].input].filter(Boolean));
+      }
+      function serverProblem(message, property) {
+        const entries = [...message.matchAll(/object (fieldMappings\[\d+\])/g)].map((match) => match[1]), value = (/(?:with value|^Value) `([^`]*)`/.exec(message) || [])[1];
+        const properties = property ? [property] : [...message.matchAll(/(?:property|association) `([^`]+)`/gi)].flatMap((match) => match[1].split(', '));
+        const paths = properties.flatMap((name) => entries.length && !MAPPING_CONTROLS.has(name) && !name.includes('[') ? entries.map((entry) => entry + '.' + name) : [name]);
+        const controls = [...new Set(paths.flatMap((name) => controlsOf(name, value)))]; controls.forEach(flag);
+        const labels = [...new Set(controls.map((control) => labelOf(control) + (control.tagName === 'SELECT' && control.value ? ' "' + control.selectedOptions[0].text + '"' : '')))];
+        return (labels.length ? labels.join(' and ') + ': ' : '') + message;
+      }
+      const problem = (key, message, controls = []) => ({key, message, controls});
+      const markProblems = (problems) => { unflagAll(); problems.forEach(({controls}) => controls.forEach(flag)); };
+      function duplicatePairs() {
+        const problems = [];
+        state.rows.filter((row) => rowInputs(row).includes('valueMap')).forEach((row) => {
+          const byKey = new Map();
+          row.pairList.filter((pair) => pair.key.value.trim()).forEach((pair) => byKey.set(pair.key.value, [...(byKey.get(pair.key.value) || []), pair.key]));
+          byKey.forEach((inputs, key) => {
+            if (inputs.length > 1) problems.push(problem('duplicate:' + row.id + ':' + key, row.legend.textContent + ': DHIS2 value "' + key + '" is entered more than once.', inputs));
+          });
+        });
+        return problems;
+      }
+      function duplicateKeys() {
+        rowsBox.querySelectorAll('.pair input[aria-invalid]').forEach(unflag);
+        const problems = duplicatePairs();
+        problems.forEach(({controls}) => controls.forEach(flag));
+        return problems.map(({message}) => message);
+      }
+      function controlProblem(control) {
+        if (!control.willValidate || control.closest('[hidden]')) return null;
+        if (!control.validity.valid) return problem(control.id, labelOf(control) + ': ' + control.validationMessage, [control]);
+        return control === nameInput && !control.value.trim() ? problem(control.id, 'Name must not be blank.', [control]) : null;
+      }
+      const missingTargets = () => Object.entries(TARGETS)
+        .filter(([name, target]) => target.required && target.resource === resourceSelect.value && !state.rows.some((row) => row.target.value === name))
+        .map(([name]) => problem('missing:' + name, resourceSelect.value + ' mappings need a field mapping with target ' + name + '.'));
+      function mappingBody() {
+        const body = {name: nameInput.value.trim(), resourceType: resourceSelect.value, trackedEntityType: {id: typeSelect.value}};
+        if (programSelect.value) body.program = {id: programSelect.value};
+        if (resourceSelect.value !== 'PATIENT' && stageSelect.value) body.programStage = {id: stageSelect.value};
+        body.fieldMappings = state.rows.map(entryOf);
+        if (state.editing) ['code', 'sharing', 'translations', 'attributeValues'].forEach((key) => { if (state.editing[key] !== null && state.editing[key] !== undefined) body[key] = state.editing[key]; });
+        return body;
+      }
+      function formProblems() {
+        const problems = [];
+        if (state.typesLoading) problems.push(problem('loading:types', 'Tracked entity types are still loading; wait for them before saving.'));
+        if (state.programsPending) problems.push(problem('loading:programs', 'Programs for the selected tracked entity type are still loading; wait for them before saving.'));
+        form.querySelectorAll('input, select').forEach((control) => { const found = controlProblem(control); if (found) problems.push(found); });
+        return [...problems, ...duplicatePairs(), ...missingTargets()];
+      }
+      function recheck() {
+        if (state.checked && formErrors.contains(state.checked.list)) {
+          const problems = formProblems().filter(({key}) => state.checked.keys.has(key));
+          markProblems(problems);
+          state.checked.keys = new Set(problems.map(({key}) => key));
+          if (problems.length === 0) return formErrors.replaceChildren();
+          const messages = problems.map(({message}) => message);
+          if (messages.join('\n') !== Array.from(state.checked.list.children, (item) => item.textContent).join('\n')) state.checked.list.replaceChildren(...messages.map((message) => el('li', {}, message)));
+        } else if (formErrors.hasChildNodes() && !formErrors.contains(state.staleNote)) {
+          state.staleNote = el('p', {}, 'The form has changed since these messages were shown; they may no longer apply. Save again to check the current values.');
+          formErrors.prepend(state.staleNote);
+        }
+      }
+      const setEditPending = (pending) => { state.editPending = pending; formBody.disabled = state.saving || pending; formBody.setAttribute('aria-busy', String(pending)); };
+      function setSaving(saving) {
+        state.saving = saving; formBody.disabled = saving || state.editPending || state.typesLoading;
+        tableBody.querySelectorAll('button').forEach((button) => { button.disabled = saving; });
+        if (!saving && document.activeElement === document.body) restoreFocus();
+      }
+      async function save(event) {
+        event.preventDefault();
+        if (state.saving || performance.now() < runtime.saveReadyAt) return;
+        formErrors.replaceChildren();
+        const name = nameInput.value.trim();
+        const problems = formProblems();
+        markProblems(problems);
+        if (problems.length > 0) {
+          showFormErrors(problems.map(({message}) => message));
+          state.checked = {list: formErrors.querySelector('ul'), keys: new Set(problems.map(({key}) => key))};
+          const missing = problems.some(({key}) => key.startsWith('missing:'));
+          return (form.querySelector('[aria-invalid="true"]') || (missing ? byId('fhir-add-row') : null))?.focus();
+        }
+        state.editLoad++;
+        try {
+          setSaving(true);
+          saveButton.textContent = 'Saving…';
+          form.setAttribute('aria-busy', 'true');
+          announce('Saving…');
+          const result = state.editing
+            ? await api('PUT', 'fhirResourceMappings/' + encodeURIComponent(state.editing.id), mappingBody())
+            : await api('POST', 'fhirResourceMappings', mappingBody());
+          if (succeeded(result)) {
+            showMessage('Saved mapping "' + name + '".');
+            await loadMappings();
+            resetForm();
+          } else {
+            const reports = result.status !== 401 && isObject(result.json) && isObject(result.json.response) ? result.json.response.errorReports : undefined;
+            const problems = errorText(result, 'select Save again').map((message, index) => serverProblem(message, Array.isArray(reports) && isObject(reports[index]) ? text(reports[index].errorProperty) : ''));
+            const gone = result.status === 404 && state.editing !== null;
+            if (gone) problems.push('The mapping no longer exists, so the form has left edit mode. Saving again creates a new mapping with these values.');
+            if (gone) [state.editing, byId('fhir-editing').textContent, cancelButton.hidden, clearButton.hidden] = [null, 'New mapping', true, false];
+            showFormErrors(problems, 'Error: saving failed at ' + new Date().toLocaleTimeString() + '.'); formErrors.focus();
+            if (gone) await loadMappings();
+          }
+        } finally {
+          saveButton.textContent = saveLabel;
+          form.removeAttribute('aria-busy');
+          runtime.saveReadyAt = performance.now() + SAVE_COOLDOWN_MS;
+          setSaving(false);
+          if (live.textContent === 'Saving…') announce('The mapping was not saved.');
+        }
+      }
+      const messageRow = (message) => { const row = el('tr'); row.appendChild(el('td', {colspan: '7'}, message)); return row; };
+      function mappingRow(mapping) {
+        const name = text(mapping.displayName);
+        const reference = (object) => text(object && object.displayName);
+        const row = el('tr');
+        const actions = el('div', {class: 'actions'});
+        const edit = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Edit ' + name}, 'Edit'));
+        const remove = actions.appendChild(el('button', {type: 'button', 'aria-label': 'Delete ' + name}, 'Delete'));
+        edit.disabled = remove.disabled = state.saving;
+        edit.addEventListener('click', guard(async () => { await runtime.typesReady; if (state.editPending || !unsaved() || window.confirm('Discard the unsaved changes in the editor and edit the mapping "' + name + '"?')) return editMapping(mapping.id); }));
+        remove.addEventListener('click', guard(() => deleteMapping(mapping.id, name)));
+        row.appendChild(el('th', {scope: 'row'}, name));
+        [text(mapping.resourceType), reference(mapping.trackedEntityType), reference(mapping.program), reference(mapping.programStage),
+          Array.isArray(mapping.fieldMappings) ? String(mapping.fieldMappings.length) : '0'].forEach((value) => row.appendChild(el('td', {}, value)));
+        row.appendChild(el('td')).appendChild(actions);
+        return row;
+      }
+      async function loadMappings() {
+        const token = ++state.listLoad;
+        mappingTable.setAttribute('aria-busy', 'true');
+        announce('Loading mappings…');
+        try {
+          const result = await api('GET', 'fhirResourceMappings?fields=id,displayName,resourceType,trackedEntityType[displayName],program[displayName],programStage[displayName],fieldMappings&paging=false');
+          if (token !== state.listLoad) return;
+          const mappings = collection(result, 'fhirResourceMappings');
+          if (!mappings) {
+            tableBody.replaceChildren(messageRow('Mappings could not be loaded.'));
+            return announce('Mappings could not be loaded.');
+          }
+          const rows = document.createDocumentFragment();
+          if (mappings.length === 0) rows.appendChild(messageRow('No mappings are stored yet.'));
+          for (let start = 0; start < mappings.length; start += CHUNK_SIZE) {
+            if (start > 0) await new Promise((resolve) => setTimeout(resolve));
+            if (token !== state.listLoad) return;
+            mappings.slice(start, start + CHUNK_SIZE).forEach((mapping) => rows.appendChild(mappingRow(mapping)));
+          }
+          tableBody.replaceChildren(rows);
+          tableBody.querySelectorAll('button').forEach((button) => { button.disabled = state.saving; });
+          announce(count(mappings.length, 'mapping', 'mappings') + ' loaded.');
+        } finally {
+          if (token === state.listLoad) mappingTable.removeAttribute('aria-busy');
+        }
+      }
+      async function editMapping(id) {
+        if (state.saving) return;
+        const token = ++state.editLoad, warnings = [];
+        setEditPending(true); announce('Loading mapping…');
+        try {
+          const result = await api('GET', 'fhirResourceMappings/' + encodeURIComponent(id) + '?fields=id,name,code,resourceType,trackedEntityType[id],program[id],programStage[id],fieldMappings,sharing,translations,attributeValues');
+          if (token !== state.editLoad) return;
+          announce('');
+          if (!result.ok || !isObject(result.json)) return failed(result, 'Opening the mapping for editing');
+          const mapping = result.json;
+          if (!Array.isArray(mapping.fieldMappings)) return showMessage('Error: Malformed response: "fieldMappings" is not a list.');
+          clearForm();
+          state.editing = {id: mapping.id, code: mapping.code, sharing: mapping.sharing, translations: mapping.translations, attributeValues: mapping.attributeValues};
+          nameInput.value = text(mapping.name);
+          setValue(resourceSelect, mapping.resourceType, warnings);
+          applyResourceType();
+          byId('fhir-editing').textContent = 'Editing: ' + text(mapping.name);
+          cancelButton.hidden = false; clearButton.hidden = true;
+          setValue(typeSelect, mapping.trackedEntityType && mapping.trackedEntityType.id, warnings);
+          await loadPrograms(typeSelect.value);
+          if (token !== state.editLoad) return;
+          setValue(programSelect, mapping.program && mapping.program.id, warnings);
+          fillStages();
+          setValue(stageSelect, mapping.programStage && mapping.programStage.id, warnings);
+          mapping.fieldMappings.forEach((entry) => addRow(isObject(entry) ? entry : {}, warnings)); state.pristine = snapshot();
+        } finally { if (token === state.editLoad) setEditPending(false); }
+        if (warnings.length > 0) showFormErrors(warnings, 'Warning: these stored values are not among the available choices and are kept as stored, marked Unavailable. Saving sends them unchanged and the server decides whether the mapping is accepted.');
+        byId('fhir-editor-heading').scrollIntoView({block: 'start'}); nameInput.focus({preventScroll: true}); announce(byId('fhir-editing').textContent);
+      }
+      async function deleteMapping(id, name) {
+        if (state.saving || !window.confirm('Delete the FHIR resource mapping "' + name + '"?')) return;
+        setSaving(true);
+        try {
+          const result = await api('DELETE', 'fhirResourceMappings/' + encodeURIComponent(id));
+          if (state.editing && state.editing.id === id && (succeeded(result) || result.status === 404)) resetForm();
+          if (!succeeded(result)) return await failed(result, 'Deleting mapping "' + name + '"');
+          showMessage('Deleted mapping "' + name + '".');
+          await loadMappings();
+        } finally { setSaving(false); }
+      }
+      function clearForm() {
+        state.editing = null;
+        unflagAll();
+        nameInput.value = '';
+        resourceSelect.value = 'PATIENT';
+        applyResourceType();
+        typeSelect.value = '';
+        loadPrograms('');
+        removeRows();
+        formErrors.replaceChildren();
+        byId('fhir-editing').textContent = 'New mapping';
+        cancelButton.hidden = true; clearButton.hidden = false; state.pristine = snapshot();
+      }
+      const resetForm = (notice) => { state.editLoad++; setEditPending(false); clearForm(); if (notice) announce(notice); }, snapshot = () => JSON.stringify(mappingBody()), unsaved = () => snapshot() !== state.pristine;
+      resourceSelect.addEventListener('change', guard(() => {
+        const previous = state.resourceType, rows = state.rows.length, removed = count(rows, 'field mapping', 'field mappings');
+        const kept = rows > 0 && !window.confirm('Change the resource type from ' + previous + ' to ' + resourceSelect.value + '? This removes ' + removed + ', because field mapping targets belong to one resource type.');
+        if (kept) { resourceSelect.value = previous; return; }
+        applyResourceType(); removeRows();
+        announce('Resource type changed to ' + resourceSelect.value + (rows > 0 ? ': removed ' + removed : '') + '.');
+      }));
+      typeSelect.addEventListener('change', guard(async () => {
+        const chosen = [programSelect, stageSelect].filter((select) => select.value && !select.closest('[hidden]'));
+        await loadPrograms(typeSelect.value);
+        announceCleared([...chosen.filter((select) => !select.value).map(labelOf), ...rebuildAllSources()], 'tracked entity type', Boolean(typeSelect.value)); recheck();
+      }));
+      programSelect.addEventListener('change', guard(() => {
+        if (programSelect.value && !state.programsPending && state.programsFor) setValue(typeSelect, state.programsFor);
+        announceCleared([...fillStages(), ...rebuildAllSources()], 'program');
+      }));
+      stageSelect.addEventListener('change', guard(() => announceCleared(rebuildAllSources(), 'program stage')));
+      byId('fhir-add-row').addEventListener('click', guard(() => {
+        addRow({});
+        const row = state.rows[state.rows.length - 1];
+        focusNear(row.target, row.fieldset); announce(row.legend.textContent + ' added.');
+      }));
+      document.addEventListener('click', ({target}) => {
+        const button = target instanceof Element ? target.closest('button') : null, row = button && button.closest('#fhir-mapping-rows > tr');
+        if (!button || messages.contains(button)) return;
+        clearMessage();
+        state.origin = {control: button, row: row ? row.sectionRowIndex : undefined, top: (row || button).getBoundingClientRect().top, left: tableBody.closest('.table-wrap').scrollLeft};
+      }, true);
+      document.addEventListener('change', ({target}) => { if (target instanceof HTMLSelectElement) clearMessage(); }, true);
+      new ResizeObserver(() => {
+        if (!messages.childElementCount) return;
+        const toast = messages.getBoundingClientRect(), active = document.activeElement, height = document.documentElement.clientHeight;
+        document.documentElement.style.setProperty('--fhir-message-space', (height - toast.top) + 'px');
+        const box = active && active !== document.body && !messages.contains(active) ? active.getBoundingClientRect() : null;
+        if (box && box.bottom > toast.top && box.top < height && box.right > toast.left && box.left < toast.right) active.scrollIntoView({block: 'nearest', inline: 'nearest'});
+      }).observe(messages);
+      cancelButton.addEventListener('click', guard(() => { resetForm('Edit cancelled. The editor is ready for a new mapping.'); nameInput.focus(); }));
+      clearButton.addEventListener('click', guard(() => { resetForm('Form cleared. The editor is ready for a new mapping.'); nameInput.focus(); }));
+      window.addEventListener('pageshow', guard((event) => { if (event.persisted) resetForm('The editor was reset for a new mapping.'); }));
+      form.noValidate = true;
+      form.addEventListener('input', guard(({target}) => { unflag(target); if (target.tagName !== 'SELECT') recheck(); }));
+      form.addEventListener('change', guard(recheck));
+      form.addEventListener('click', guard(({target}) => { if (target.closest('button[type="button"]')) recheck(); }));
+      form.addEventListener('submit', guard(save));
+      saveButton.addEventListener('click', guard((event) => {
+        if (state.programsPending) return save(event);
+        if (performance.now() < runtime.saveReadyAt) event.preventDefault();
+      }));
+      applyResourceType(); state.pristine = snapshot();
+      guard(loadStatus)();
+      runtime.typesReady = guard(loadTrackedEntityTypes)();
+      guard(loadMappings)();
+    </script>
+  </body>
+</html>

@@ -753,6 +753,9 @@ public enum ConfigurationKey {
   /** Event hooks for system events. Enable or disable the feature. */
   EVENT_HOOKS_ENABLED("event_hooks.enabled", Constants.OFF, false),
 
+  /** FHIR R4 read-only API. Enable or disable the feature. */
+  FHIR_API_ENABLED("fhir.api.enabled", "false", false),
+
   /** Linked accounts via OpenID mapping. Enable or disable the feature. */
   LINKED_ACCOUNTS_ENABLED("linked_accounts.enabled", Constants.OFF, false),
 

@@ -1,0 +1,425 @@
+/*
+ * Copyright (c) 2004-2025, University of Oslo
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors 
+ * may be used to endorse or promote products derived from this software without
+ * specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package org.hisp.dhis.fhir.service;
+
+import static org.springframework.web.servlet.support.ServletUriComponentsBuilder.fromContextPath;
+
+import jakarta.servlet.http.HttpServletRequest;
+import java.time.Instant;
+import java.util.*;
+import java.util.function.*;
+import javax.annotation.*;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.hisp.dhis.common.UID;
+import org.hisp.dhis.fhir.FhirApiException;
+import org.hisp.dhis.fhir.mapper.*;
+import org.hisp.dhis.fhir.mapping.*;
+import org.hisp.dhis.fhir.mapping.FhirResourceMappingService.ResolvedMapping;
+import org.hisp.dhis.fhir.search.*;
+import org.hisp.dhis.fhir.search.FhirSearchParameters.*;
+import org.hisp.dhis.fhir.search.FhirSearchTranslator.TranslatedSearch;
+import org.hisp.dhis.fhir.service.FhirTrackerReader.EnrollmentResult;
+import org.hisp.dhis.webapi.controller.tracker.view.*;
+import org.hl7.fhir.r4.model.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.util.UriComponentsBuilder;
+
+/** Serves Encounter, Immunization and Observation reads, searches and Patient/$everything data. */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class FhirEventResourceService {
+  private static final String FHIR_BASE_PATH = "/api/fhir";
+  private static final String PATH_SEPARATOR = "/";
+  private static final List<FhirResourceType> EVENT_TYPES =
+      List.of(
+          FhirResourceType.ENCOUNTER, FhirResourceType.IMMUNIZATION, FhirResourceType.OBSERVATION);
+  private static final Comparator<Event> EVENT_ORDER =
+      Comparator.comparing(
+              Event::getOccurredAt, Comparator.nullsLast(Comparator.<Instant>naturalOrder()))
+          .thenComparing(event -> event.getEvent().getValue());
+  @Nonnull private final FhirResourceMappingService mappingService;
+  @Nonnull private final FhirSearchParameters parameters;
+  @Nonnull private final FhirSearchTranslator translator;
+  @Nonnull private final FhirTrackerReader reader;
+  @Nonnull private final FhirEncounterMapper encounterMapper;
+  @Nonnull private final FhirImmunizationMapper immunizationMapper;
+  @Nonnull private final FhirObservationMapper observationMapper;
+
+  /** Reads one event-derived resource by logical id under the operation's deadline, if any. */
+  @Nonnull
+  public Resource read(
+      @Nonnull FhirResourceType type,
+      @CheckForNull String id,
+      @Nonnull HttpServletRequest request) {
+    requireEventDerived(type, request);
+    return reader.withinDeadline(() -> readWithinDeadline(type, id, request));
+  }
+
+  /** Searches one event-derived type into a paged searchset under one deadline, if any. */
+  @Nonnull
+  public Bundle search(@Nonnull FhirResourceType type, @Nonnull HttpServletRequest request) {
+    requireEventDerived(type, request);
+    return reader.withinDeadline(() -> searchWithinDeadline(type, request));
+  }
+
+  /** Returns the event-derived resources of one tracked entity, omitting forbidden programs. */
+  @Nonnull
+  public List<Resource> forPatient(
+      @Nonnull String trackedEntity,
+      @Nonnull String trackedEntityType,
+      @Nonnull List<ResolvedMapping> mappings,
+      @Nonnull HttpServletRequest request) {
+    Objects.requireNonNull(trackedEntity, "trackedEntity");
+    Objects.requireNonNull(trackedEntityType, "trackedEntityType");
+    Objects.requireNonNull(mappings, "mappings");
+    Objects.requireNonNull(request, "request");
+    Predicate<ResolvedMapping> sameType = m -> trackedEntityType.equals(m.trackedEntityType());
+    Set<String> encounterStages = stagesOf(ofType(mappings, FhirResourceType.ENCOUNTER));
+    SortedSet<String> programs = new TreeSet<>();
+    byType(mappings, sameType)
+        .values()
+        .forEach(typed -> programs.addAll(distinctValues(typed, ResolvedMapping::program)));
+    List<Resource> resources = new ArrayList<>();
+    for (String program : programs) {
+      var programMappings = byType(mappings, sameType.and(m -> program.equals(m.program())));
+      FhirResourceType firstType =
+          EVENT_TYPES.stream()
+              .filter(type -> !programMappings.get(type).isEmpty())
+              .findFirst()
+              .orElseThrow();
+      EnrollmentResult result =
+          reader.findEnrollments(
+              translator.everythingParams(trackedEntity, program), request, firstType);
+      if (result.forbidden()) {
+        log.debug("Omitting a forbidden program from the event resources of a Patient");
+        continue;
+      }
+      flatten(result.enrollments(), programMappings, encounterStages, event -> true)
+          .forEach(flattened -> resources.add(flattened.resource()));
+    }
+    return Collections.unmodifiableList(resources);
+  }
+
+  static String fhirBase(HttpServletRequest request) {
+    return fromContextPath(request).path(FHIR_BASE_PATH).build().toUriString();
+  }
+
+  static Bundle searchset() {
+    return new Bundle().setType(Bundle.BundleType.SEARCHSET);
+  }
+
+  void addEntries(
+      Bundle bundle,
+      HttpServletRequest request,
+      List<? extends Resource> resources,
+      Runnable checkpoint) {
+    String base = fhirBase(request) + PATH_SEPARATOR;
+    for (Resource resource : resources) {
+      bundle
+          .addEntry()
+          .setFullUrl(base + resource.fhirType() + PATH_SEPARATOR + idOf(resource))
+          .setResource(resource)
+          .getSearch()
+          .setMode(Bundle.SearchEntryMode.MATCH);
+      checkpoint.run();
+    }
+  }
+
+  UriComponentsBuilder addSelfLink(Bundle bundle, HttpServletRequest request, String path) {
+    UriComponentsBuilder relative =
+        UriComponentsBuilder.fromPath(PATH_SEPARATOR + path).query(request.getQueryString());
+    bundle
+        .addLink()
+        .setRelation(Bundle.LINK_SELF)
+        .setUrl(fhirBase(request) + relative.build().toUriString());
+    return relative;
+  }
+
+  void addPagingLinks(
+      Bundle bundle, HttpServletRequest request, String resourceType, int page, boolean hasNext) {
+    UriComponentsBuilder relative = addSelfLink(bundle, request, resourceType);
+    String base = fhirBase(request);
+    if (hasNext) {
+      bundle.addLink().setRelation(Bundle.LINK_NEXT).setUrl(pageUrl(base, relative, page + 1));
+    }
+    if (page > 1) {
+      bundle.addLink().setRelation(Bundle.LINK_PREV).setUrl(pageUrl(base, relative, page - 1));
+    }
+  }
+
+  private static String pageUrl(String base, UriComponentsBuilder relative, int page) {
+    return base
+        + relative
+            .cloneBuilder()
+            .replaceQueryParam(FhirSearchParameters.PAGE, page)
+            .build()
+            .toUriString();
+  }
+
+  private Resource readWithinDeadline(
+      FhirResourceType type, @CheckForNull String id, HttpServletRequest request) {
+    OperationMappings resolved = requireMappings(type);
+    reader.checkpoint();
+    parameters.checkFormatOnly(Operation.READ, request);
+    FhirLogicalId logicalId = FhirLogicalId.parse(type, id).orElseThrow(FhirApiException::notFound);
+    List<String> programs = distinctValues(resolved.mappings(), ResolvedMapping::program);
+    int forbidden = 0;
+    for (String program : programs) {
+      EnrollmentResult result =
+          reader.findEnrollments(
+              translator.eventReadParams(logicalId.enrollment(), program), request, type);
+      if (result.forbidden()) {
+        forbidden++;
+        continue;
+      }
+      List<Enrollment> enrollments =
+          result.enrollments().stream()
+              .filter(e -> e != null && logicalId.enrollment().equals(value(e.getEnrollment())))
+              .toList();
+      for (FlattenedResource flattened :
+          flatten(
+              enrollments,
+              Map.of(type, mappingsOfProgram(resolved.mappings(), program)),
+              resolved.encounterStages(),
+              event -> Objects.equals(logicalId.event(), value(event.getEvent())))) {
+        if (id.equals(idOf(flattened.resource()))) {
+          reader.checkpoint();
+          return flattened.resource();
+        }
+      }
+    }
+    reader.checkpoint();
+    if (!programs.isEmpty() && forbidden == programs.size()) {
+      throw FhirApiException.forbidden();
+    }
+    throw FhirApiException.notFound();
+  }
+
+  private Bundle searchWithinDeadline(FhirResourceType type, HttpServletRequest request) {
+    OperationMappings resolved = requireMappings(type);
+    Set<String> encounterStages = resolved.encounterStages();
+    reader.checkpoint();
+    ParsedSearch parsed = parameters.parse(Operation.search(type), request, null);
+    Set<String> requestedEvents = new HashSet<>();
+    parsed.logicalIds().forEach(logicalId -> requestedEvents.add(logicalId.event()));
+    Predicate<Event> eventFilter =
+        event -> requestedEvents.isEmpty() || requestedEvents.contains(value(event.getEvent()));
+    List<String> programs = distinctValues(resolved.mappings(), ResolvedMapping::program);
+    List<Resource> resources = new ArrayList<>();
+    int forbidden = 0;
+    for (String program : programs) {
+      List<ResolvedMapping> programMappings = mappingsOfProgram(resolved.mappings(), program);
+      TranslatedSearch translated = translator.toEnrollmentParams(parsed, program);
+      var result = reader.findEnrollments(translated.enrollmentParams(), request, type);
+      if (result.forbidden()) {
+        forbidden++;
+        continue;
+      }
+      for (FlattenedResource flattened :
+          flatten(
+              result.enrollments(), Map.of(type, programMappings), encounterStages, eventFilter)) {
+        if (isSelected(type, flattened, translated)) {
+          resources.add(flattened.resource());
+        }
+      }
+    }
+    reader.checkpoint();
+    if (forbidden > 0 && forbidden == programs.size()) {
+      throw FhirApiException.forbidden();
+    }
+    int size = resources.size();
+    long first = (long) (parsed.page() - 1) * parsed.count();
+    int from = (int) Math.min(first, size);
+    int to = (int) Math.min(first + parsed.count(), size);
+    Bundle bundle = searchset().setTotal(size);
+    addEntries(bundle, request, resources.subList(from, to), reader::checkpoint);
+    addPagingLinks(bundle, request, type.fhirType(), parsed.page(), to < size);
+    reader.checkpoint();
+    return bundle;
+  }
+
+  private static boolean isSelected(
+      FhirResourceType type, FlattenedResource flattened, TranslatedSearch translated) {
+    String id = idOf(flattened.resource());
+    if (!translated.matchesId(id)) {
+      return false;
+    }
+    if (type != FhirResourceType.OBSERVATION || translated.codes().isEmpty()) {
+      return true;
+    }
+    return translated.matchesCode(observationEntry(flattened.mapping(), id));
+  }
+
+  @CheckForNull
+  private static FhirFieldMapping observationEntry(ResolvedMapping mapping, String id) {
+    return FhirLogicalId.parse(FhirResourceType.OBSERVATION, id)
+        .map(FhirLogicalId::dataElement)
+        .flatMap(
+            dataElement ->
+                mapping.entries(FhirTargetField.OBSERVATION_VALUE).stream()
+                    .filter(entry -> dataElement.equals(entry.getSource()))
+                    .findFirst())
+        .orElse(null);
+  }
+
+  private List<FlattenedResource> flatten(
+      List<Enrollment> enrollments,
+      Map<FhirResourceType, List<ResolvedMapping>> mappingsByType,
+      Set<String> encounterStages,
+      Predicate<Event> eventFilter) {
+    Map<String, Map<FhirResourceType, List<ResolvedMapping>>> mappingsByStage = new HashMap<>();
+    mappingsByType.forEach(
+        (type, mappings) -> {
+          for (ResolvedMapping mapping : mappings) {
+            if (mapping.programStage() != null) {
+              mappingsByStage
+                  .computeIfAbsent(
+                      mapping.programStage(), stage -> new EnumMap<>(FhirResourceType.class))
+                  .computeIfAbsent(type, t -> new ArrayList<>())
+                  .add(mapping);
+            }
+          }
+        });
+    List<FlattenedResource> resources = new ArrayList<>();
+    for (Enrollment enrollment : enrollments) {
+      if (enrollment == null
+          || enrollment.getEnrollment() == null
+          || enrollment.getTrackedEntity() == null
+          || enrollment.getEvents() == null) {
+        continue;
+      }
+      List<Event> events =
+          enrollment.getEvents().stream()
+              .filter(
+                  event ->
+                      event != null
+                          && event.getEvent() != null
+                          && event.getProgramStage() != null
+                          && mappingsByStage.containsKey(event.getProgramStage()))
+              .filter(eventFilter)
+              .sorted(EVENT_ORDER)
+              .toList();
+      for (Event event : events) {
+        mapEvent(enrollment, event, mappingsByStage, encounterStages, resources);
+        reader.checkpoint();
+      }
+    }
+    return resources;
+  }
+
+  private void mapEvent(
+      Enrollment enrollment,
+      Event event,
+      Map<String, Map<FhirResourceType, List<ResolvedMapping>>> mappingsByStage,
+      Set<String> encounterStages,
+      List<FlattenedResource> resources) {
+    var stageMappings = mappingsByStage.get(event.getProgramStage());
+    boolean encounterMapped = encounterStages.contains(event.getProgramStage());
+    for (FhirResourceType type : EVENT_TYPES) {
+      for (ResolvedMapping mapping : stageMappings.getOrDefault(type, List.of())) {
+        switch (type) {
+          case ENCOUNTER ->
+              resources.add(
+                  new FlattenedResource(encounterMapper.map(enrollment, event, mapping), mapping));
+          case IMMUNIZATION ->
+              immunizationMapper
+                  .map(enrollment, event, mapping, encounterMapped)
+                  .ifPresent(resource -> resources.add(new FlattenedResource(resource, mapping)));
+          case OBSERVATION ->
+              observationMapper
+                  .map(enrollment, event, mapping, encounterMapped)
+                  .forEach(resource -> resources.add(new FlattenedResource(resource, mapping)));
+          case PATIENT ->
+              throw new IllegalStateException("Patient is not an event-derived resource type");
+        }
+      }
+    }
+  }
+
+  private OperationMappings requireMappings(FhirResourceType type) {
+    List<ResolvedMapping> resolved = mappingService.resolveWithEncounters(type);
+    List<ResolvedMapping> mappings = ofType(resolved, type);
+    if (mappings.isEmpty()) {
+      throw FhirApiException.notSupported("No usable mapping is configured for " + type.fhirType());
+    }
+    return new OperationMappings(mappings, stagesOf(ofType(resolved, FhirResourceType.ENCOUNTER)));
+  }
+
+  private static List<String> distinctValues(
+      List<ResolvedMapping> mappings, Function<ResolvedMapping, String> key) {
+    return mappings.stream().map(key).filter(Objects::nonNull).distinct().toList();
+  }
+
+  private static List<ResolvedMapping> ofType(
+      List<ResolvedMapping> mappings, FhirResourceType type) {
+    return mappings.stream().filter(m -> m != null && m.resourceType() == type).toList();
+  }
+
+  private static List<ResolvedMapping> mappingsOfProgram(
+      List<ResolvedMapping> mappings, String program) {
+    return mappings.stream().filter(mapping -> program.equals(mapping.program())).toList();
+  }
+
+  private static Map<FhirResourceType, List<ResolvedMapping>> byType(
+      List<ResolvedMapping> mappings, Predicate<ResolvedMapping> filter) {
+    Map<FhirResourceType, List<ResolvedMapping>> byType = new EnumMap<>(FhirResourceType.class);
+    for (FhirResourceType type : EVENT_TYPES) {
+      byType.put(type, ofType(mappings, type).stream().filter(filter).toList());
+    }
+    return byType;
+  }
+
+  private static Set<String> stagesOf(List<ResolvedMapping> mappings) {
+    return new LinkedHashSet<>(distinctValues(mappings, ResolvedMapping::programStage));
+  }
+
+  private static void requireEventDerived(FhirResourceType type, HttpServletRequest request) {
+    Objects.requireNonNull(type, "type");
+    if (!type.isEventDerived()) {
+      throw new IllegalArgumentException(type.fhirType() + " is not event-derived");
+    }
+    Objects.requireNonNull(request, "request");
+  }
+
+  private static String idOf(Resource resource) {
+    return resource.getIdElement().getIdPart();
+  }
+
+  @CheckForNull
+  private static String value(@CheckForNull UID uid) {
+    return uid == null ? null : uid.getValue();
+  }
+
+  private record FlattenedResource(Resource resource, ResolvedMapping mapping) {}
+
+  private record OperationMappings(List<ResolvedMapping> mappings, Set<String> encounterStages) {}
+}
